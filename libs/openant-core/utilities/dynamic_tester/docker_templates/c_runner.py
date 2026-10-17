@@ -44,8 +44,16 @@ _CONFIG_ERRORS = (
 
 
 def _result(status: str, details: str, *outputs: str) -> dict:
+    def bounded_output(text):
+        # This runner is copied into Docker as a standalone file. Preserve
+        # compiler errors at the end of long logs before the collector applies
+        # its own prompt/report budget. Verdict evidence retains its old bound.
+        if status == "ERROR" and len(text) > 12000:
+            return text[:5900] + "\n[... diagnostic truncated ...]\n" + text[-5900:]
+        return text[:12000]
+
     return {"status": status, "details": details, "evidence": [
-        {"type": "command_output", "content": text[:12000]}
+        {"type": "command_output", "content": bounded_output(text)}
         for text in outputs if text
     ]}
 

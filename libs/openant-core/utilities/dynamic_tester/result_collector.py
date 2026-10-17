@@ -12,6 +12,7 @@ import json
 
 from utilities.dynamic_tester.models import DynamicTestResult, TestEvidence, VALID_STATUSES
 from utilities.dynamic_tester.docker_executor import DockerExecutionResult
+from utilities.dynamic_tester.diagnostics import bounded_diagnostic
 
 
 def collect_result(
@@ -63,7 +64,7 @@ def collect_result(
     if getattr(execution, "execution_error", None):
         return DynamicTestResult(
             finding_id=finding_id, identity_key=identity_key, status="ERROR",
-            details=execution.execution_error,
+            details=bounded_diagnostic(execution.execution_error, 2000),
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -76,7 +77,7 @@ def collect_result(
             finding_id=finding_id,
             identity_key=identity_key,
             status="ERROR",
-            details=f"Docker 构建失败： {execution.build_error[:2000]}",
+            details=f"Docker 构建失败： {bounded_diagnostic(execution.build_error, 2000)}",
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -108,8 +109,8 @@ def collect_result(
             status="ERROR",
             details=f"容器未输出有效 JSON 结果。"
                     f"退出码：{execution.exit_code}。"
-                    f"标准错误：{execution.stderr[:300]}",
-            evidence=[TestEvidence(type="command_output", content=execution.stdout[:2000])],
+                    f"标准错误：{bounded_diagnostic(execution.stderr, 300)}",
+            evidence=[TestEvidence(type="command_output", content=bounded_diagnostic(execution.stdout, 5000))],
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -126,12 +127,16 @@ def collect_result(
         # A stale/synthetic JSON line printed before a crash is not a successful
         # test. The trusted C runner exits 0 only after capturing sanitizer proof.
         status = "ERROR"
-        details = f"容器异常退出（退出码 {execution.exit_code}），不能采信其结果。{execution.stderr[:300]}"
+        details = f"容器异常退出（退出码 {execution.exit_code}），不能采信其结果。{bounded_diagnostic(execution.stderr, 300)}"
+
+    if status == "ERROR":
+        details = bounded_diagnostic(details, 2000)
 
     evidence = []
     for e in (parsed.get("evidence") or []):
         if isinstance(e, dict) and isinstance(e.get("type"), str) and isinstance(e.get("content"), str):
-            evidence.append(TestEvidence(type=e["type"], content=str(e["content"])[:5000]))
+            evidence.append(TestEvidence(type=e["type"], content=(bounded_diagnostic(e["content"], 5000)
+                if status == "ERROR" else e["content"][:5000])))
 
     if status == "CONFIRMED" and not any(e.type.strip() and e.content.strip() for e in evidence):
         status = "INCONCLUSIVE"

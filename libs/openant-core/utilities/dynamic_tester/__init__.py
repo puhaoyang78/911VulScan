@@ -19,6 +19,9 @@ from utilities.dynamic_tester.test_generator import generate_test, regenerate_te
 from utilities.dynamic_tester.docker_executor import run_single_container
 from utilities.dynamic_tester.result_collector import collect_result
 from utilities.dynamic_tester.reporter import generate_report
+from utilities.dynamic_tester.diagnostics import (
+    bounded_diagnostic, error_feedback, failed_attempt_key,
+)
 from utilities.llm_client import (get_global_tracker,
                                   unpriced_kinds_from)
 from utilities.llm import (
@@ -446,7 +449,7 @@ def run_dynamic_tests(
         except Exception as gen_exc:
             generation = None
             print(f"  测试生成发生异常：{type(gen_exc).__name__}", file=sys.stderr)
-            _gen_exc_message = str(gen_exc)
+            _gen_exc_message = bounded_diagnostic(str(gen_exc), 2000)
             _gen_exc_raised = True
         else:
             _gen_exc_raised = False
@@ -510,41 +513,57 @@ def run_dynamic_tests(
                                          source_file=source_file)
         result = collect_result(finding, generation, execution, generation_cost)
         retry_count = 0
+        failed_attempts: set[str] = set()
 
         while result.status == "ERROR" and retry_count < max_retries:
             if getattr(execution, "infrastructure_error", False) or getattr(execution, "execution_error", None):
                 print("  Docker 环境或测试配置不可用，不再请求模型重试。", file=sys.stderr)
                 break
-            # Extract error message: build error > stderr > application-level details
-            if execution.build_error:
-                error_msg = execution.build_error
-                error_type = "构建"
-            elif execution.exit_code != 0 and execution.stderr:
-                error_msg = execution.stderr
-                error_type = "运行时"
-            else:
-                error_msg = result.details
-                error_type = "应用"
-
             if execution.timed_out:
-                print(f"  执行超时，不再重试。", file=sys.stderr)
+                print("  执行超时，不再重试。", file=sys.stderr)
                 break
+
+            attempt_key = failed_attempt_key(generation, execution)
+            if attempt_key in failed_attempts:
+                # A changed test is allowed even for the same error. An exact
+                # duplicate gets one execution (transient errors may clear),
+                # but must not consume the rest of the model retry budget.
+                result.details += " 同一测试配置重复出现相同错误，已停止自动重试；未完成验证。"
+                print("  测试配置和错误均未变化，停止重复重试。", file=sys.stderr)
+                break
+            failed_attempts.add(attempt_key)
+            error_msg = error_feedback(result, execution)
+            error_type = ("构建" if execution.build_error or _error_category(result.details) == "build"
+                          else "运行时" if execution.exit_code != 0 else "应用")
 
             retry_count += 1
             print(f"  {error_type}出错，正在第 {retry_count}/{max_retries} 次重试，"
                   f"已附带错误反馈……", file=sys.stderr)
 
-            retry_gen = regenerate_test(
-                finding, repo_info, generation,
-                error_msg, dynamic_test_binding, tracker,
-            )
+            retry_failure = ""
+            try:
+                retry_gen = regenerate_test(
+                    finding, repo_info, generation,
+                    error_msg, dynamic_test_binding, tracker,
+                )
+            except Exception as retry_exc:
+                # Match initial-generation isolation: one provider failure must
+                # not abort later findings or leave the current unit unsaved.
+                retry_gen = None
+                retry_failure = (f"测试生成异常（重试）：{type(retry_exc).__name__}: "
+                                 f"{bounded_diagnostic(str(retry_exc), 2000)}")
+                print(f"  重试生成发生异常：{type(retry_exc).__name__}", file=sys.stderr)
             # Refresh unit usage after retry (tracker accumulates across calls
             # on the same thread).
             unit_usage = tracker.get_unit_usage()
             generation_cost = unit_usage["cost_usd"]
 
             if retry_gen is None:
-                print(f"  重试生成失败。", file=sys.stderr)
+                # Preserve the last executed artifacts/evidence and ERROR;
+                # expose the generation failure separately in the details.
+                result.details = (retry_failure or "测试生成失败（重试）：模型未返回有效测试代码。") + (
+                    " 上一执行错误：" + bounded_diagnostic(result.details, 2000))
+                print("  重试生成失败。", file=sys.stderr)
                 break
 
             generation = retry_gen
@@ -555,6 +574,9 @@ def run_dynamic_tests(
                   f"(${generation_cost:.4f})", file=sys.stderr)
 
         result.retry_count = retry_count
+        # Failed/raised regeneration still spends tokens; no new collect_result
+        # call occurs on those paths, so refresh the cost on the retained result.
+        result.generation_cost_usd = generation_cost
         result.generation_input_tokens = unit_usage["input_tokens"]
         result.generation_output_tokens = unit_usage["output_tokens"]
         # #598 + #626: persist the generation spend's unpriced ids, BOTH
