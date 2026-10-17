@@ -92,6 +92,9 @@ def collect_result(
             identity_key=identity_key,
             status="INCONCLUSIVE",
             details="容器执行超时",
+            evidence=[TestEvidence(type="command_output", content=bounded_diagnostic(
+                "\n".join(part for part in (execution.stdout, execution.stderr) if part), 5000))]
+                if execution.stdout or execution.stderr else [],
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),

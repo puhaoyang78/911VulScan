@@ -257,6 +257,18 @@ def _write_test_files(work_dir: str, generation: dict, source_file: str | None =
         _write_native_test_files(work_dir, generation, source_file)
         return
 
+    # Validate all flat staging names before writing anything. A harness or
+    # dependency manifest must never overwrite the target it is meant to test.
+    test_filename = _safe_leaf(generation.get("test_filename"), "test_exploit.py")
+    req_filename = (_safe_leaf(generation.get("requirements_filename"), "requirements.txt")
+                    if generation.get("requirements") else None)
+    source_name = os.path.basename(source_file) if source_file else None
+    reserved = {"Dockerfile", "docker-compose.yml", "attacker-server"}
+    if source_name and (source_name in reserved or source_name in {test_filename, req_filename}):
+        raise ValueError("目标源文件名与测试或依赖文件冲突；请为测试/依赖选择不同文件名")
+    if req_filename == test_filename:
+        raise ValueError("测试文件与依赖文件同名；请使用不同文件名")
+
     # Pre-stage the vulnerable source file so `COPY <basename> .` just works.
     if source_file and os.path.isfile(source_file):
         shutil.copy2(source_file, os.path.join(work_dir, os.path.basename(source_file)))
@@ -405,8 +417,12 @@ def _run_command(cmd: list[str], timeout: int, cwd: str = None) -> tuple[str, st
             env=_scrubbed_subprocess_env(),
         )
         return result.stdout, result.stderr, result.returncode, False
-    except subprocess.TimeoutExpired:
-        return "", "命令执行超时", -1, True
+    except subprocess.TimeoutExpired as exc:
+        # TimeoutExpired can carry bytes even when text=True. Retain compiler /
+        # dependency diagnostics rather than spending a retry on an empty error.
+        def decoded(value):
+            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else (value or "")
+        return decoded(exc.stdout), decoded(exc.stderr) + "\n命令执行超时", -1, True
     except OSError as exc:
         return "", f"无法启动命令 {cmd[0]}：{exc}", 127, False
 
@@ -493,7 +509,10 @@ def _run_single(
         cwd=work_dir,
     )
     if code != 0 or timed_out:
-        result.build_error = (stderr or stdout or f"Docker 构建退出码：{code}") if not timed_out else "Docker 构建超时"
+        diagnostic = "\n".join(part for part in (stdout, stderr) if part)
+        result.build_error = (("Docker 构建超时\n" + diagnostic) if timed_out
+                              else diagnostic or f"Docker 构建退出码：{code}")
+        result.stdout = stdout
         result.infrastructure_error = code == 127
         result.stderr = stderr
         result.timed_out = timed_out
@@ -571,7 +590,10 @@ def _run_compose(
         cwd=work_dir,
     )
     if code != 0 or timed_out:
-        result.build_error = (stderr or stdout or f"Docker Compose 构建退出码：{code}") if not timed_out else "Docker Compose 构建超时"
+        diagnostic = "\n".join(part for part in (stdout, stderr) if part)
+        result.build_error = (("Docker Compose 构建超时\n" + diagnostic) if timed_out
+                              else diagnostic or f"Docker Compose 构建退出码：{code}")
+        result.stdout = stdout
         result.infrastructure_error = code == 127
         result.stderr = stderr
         result.timed_out = timed_out

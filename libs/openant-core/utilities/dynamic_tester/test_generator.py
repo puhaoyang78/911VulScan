@@ -72,19 +72,15 @@ RULES:
 DEPENDENCY INSTALLATION:
 - Do NOT pin exact versions unless the vulnerability is version-specific. Use >= or no version pin.
 - For Python: put ALL dependencies in requirements.txt, use `pip install --no-cache-dir -r requirements.txt`.
-- For Node.js: put ALL dependencies in package.json.
-- For Go: do NOT write go.mod or go.sum yourself. Instead, the Dockerfile MUST initialize
-  the module inside the container using `RUN go mod init <name> && go mod tidy`. This works
-  whether the test uses stdlib only or third-party packages. Use golang:1.27-alpine as the
-  base image (the fallback when the target's declared Go version is unknown — matches
-  docker_templates/go.Dockerfile) to support modern k8s and cloud-native packages.
-  Example Dockerfile for Go:
-      FROM golang:1.27-alpine
-      WORKDIR /test
-      COPY test_exploit.go .
-      RUN go mod init openant-test && go mod tidy
-      RUN go build -o test_exploit test_exploit.go
-      CMD ["./test_exploit"]
+- For Node.js: put ALL runtime and build dependencies in package.json. Install them
+  at image build time, including devDependencies needed to compile TypeScript.
+- For Go: do NOT write go.mod or go.sum yourself. Initialize the isolated module at
+  image build time with `go mod init openant-test`, then run `go mod tidy` and `go build`.
+  Use golang:1.26-alpine as the verified stable fallback when no target runtime is
+  declared (matches docker_templates/go.Dockerfile). Set GOTOOLCHAIN=local so dependency
+  resolution cannot silently upgrade the declared compiler. Do not hide failures with
+  `|| true`. When a finding requires an exact vulnerable dependency version, use
+  `go mod edit -require=<module>@<version>` before tidy; never silently test a newer fix.
 - BASE IMAGE RUNTIME POLICY (all languages): prefer a base image matching the
   scanned target's DECLARED runtime — the `Declared runtime:` lines in the
   finding prompt below (mechanically derived from the target's go.mod /
@@ -93,20 +89,30 @@ DEPENDENCY INSTALLATION:
   A wrong runtime can hide version-dependent exploit behavior or break the
   repro outright (the exploit may not compile/run on a different major).
   Only when no declaration is visible, fall back to the current stable
-  release of the language. The Go example above is that fallback, not an
+  supported baseline documented by the per-language template. The Go tag above is a fallback, not an
   override of a declared version. If a build fails because a dependency
   requires a newer toolchain than the declared runtime, the RETRY may use
   the current stable release instead — and MUST state the deviation in the
   test's output/details.
-- The Dockerfile MUST install dependencies from the requirements/package file, NOT inline in RUN commands.
+- For Python/Node, the Dockerfile MUST install dependencies from requirements.txt or
+  package.json, NOT invent inline dependency lists in RUN commands.
+- Complete dependency installation and compilation at image BUILD time. At runtime the
+  container has no Internet access and its root filesystem is read-only. Never run
+  pip install, npm install, npx downloads, go run or go mod tidy in CMD/ENTRYPOINT.
+- Missing project files, unavailable dependencies, compiler errors, module/package
+  mismatches and import failures are setup failures, never evidence of a vulnerability.
+- Call the real target code. Do not copy/rewrite its logic, remove access checks, replace
+  missing project dependencies with permissive stubs, or fabricate a successful verdict.
 - If a package has many transitive dependencies, only install the specific sub-package you need
   (e.g., `langchain-core` instead of `langchain`).
 
 CONTAINER FILESYSTEM:
 - The container runs with a read-only root filesystem. Only /tmp is writable.
 - Do NOT write files to $HOME, /root, /app/data, or any other location outside /tmp.
-- If the test needs a writable cache (e.g., Go build cache), set env vars to redirect
-  to /tmp: `ENV GOCACHE=/tmp/.gocache GOMODCACHE=/tmp/.gomodcache`.
+- Build dependencies and compiled artifacts MUST live outside /tmp in the image: the
+  runtime mounts a fresh /tmp and hides anything cached there during image build.
+- Only runtime scratch/cache writes go under /tmp; never depend on downloading missing
+  modules or rebuilding after the read-only container has started.
 - For Python, use `PYTHONDONTWRITEBYTECODE=1` to avoid writing .pyc files.
 
 ATTACKER CAPTURE SERVER (for SSRF/callback/exfiltration tests):
@@ -139,9 +145,9 @@ DOCKER-COMPOSE (only if the test needs multiple services):
 OUTPUT FORMAT:
 Return a JSON object with these keys:
 - "dockerfile": string — Complete Dockerfile content
-- "test_script": string — Complete test source content (Python/JS/Go/C/C++ depending on language)
+- "test_script": string — Complete test source content (Python/JS/TS/Go/C/C++ depending on language)
 - "test_filename": string — Filename for the test script (e.g., "test_exploit.py")
-- "requirements": string — Dependencies file content (requirements.txt / package.json / go.mod)
+- "requirements": string — Dependencies file content (requirements.txt / package.json); empty for Go or dependency-free Python
 - "requirements_filename": string — Filename for dependencies (e.g., "requirements.txt")
 - "docker_compose": string | null — docker-compose.yml content if multi-service, null if single container
 - "needs_attacker_server": boolean — Whether the test needs the attacker capture server
@@ -247,7 +253,75 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
     native_language = resolve_native_language(finding_file, repo_info.get("language"))
     if native_language:
         parts.extend(["", _native_guidance(native_language)])
+    else:
+        managed = _managed_guidance(resolve_docker_template(finding_file, repo_info.get("language")))
+        if managed:
+            parts.extend(["", managed])
     return "\n".join(parts)
+
+
+def _managed_guidance(template: str | None) -> str:
+    """仅附加当前发现的语言规则；模板是可按目标调整的构建参考。"""
+    common = """托管语言复现边界：
+- 仅目标单个源文件按原始 basename 预置到构建上下文根目录，不包含整个仓库。
+  Dockerfile 必须显式复制所需源文件；不能假定兄弟模块、资源或原项目构建文件存在。
+- harness 文件名必须与目标源文件、依赖清单和 Dockerfile 不同，避免覆盖真实目标。
+- 缺少必要项目上下文时保留真实失败并说明限制，不得改写目标、伪造依赖或声称已验证完整项目。
+- 以下模板可按声明运行时、源文件名和依赖调整；运行时只执行已构建产物，所有可写文件放在 /tmp。
+"""
+    guidance = {
+        "node": """JavaScript / TypeScript 构建规则：
+- CommonJS harness 使用 .cjs 和 require；ESM harness 使用 .mjs 和 import。
+  保留目标的 .js/.cjs/.mjs 扩展名，并让生成的 package.json 的 type 与目标实际模块格式一致。
+  ESM 相对导入使用完整扩展名，不能把 ESM 目标直接交给 require。未知模块格式不能凭扫描主语言猜测。
+- test_script 可为 TypeScript，但不能直接用 node 执行任意 .ts/.tsx 源码。
+  将 typescript 及必需类型包写入 package.json 的 devDependencies；构建阶段运行本地
+  ./node_modules/.bin/tsc，编译目标和 harness 到 dist，再用 node 运行对应产物。
+  按目标选择 NodeNext/CommonJS、JSX 和模块选项；.mts 输出 .mjs，.cts 输出 .cjs。
+  不得用 npx 在运行时隐式下载工具；不要把 Node 的类型擦除当成完整 TypeScript 编译器。
+- npm install --include=dev --no-audit --no-fund 在构建阶段安装，包括 TypeScript 编译依赖；
+  即使无第三方依赖也提供有效 package.json。没有预置 package-lock.json 时不要使用 npm ci。
+- 已知需要原生扩展构建工具时只在构建阶段准备；依赖或导入失败不能判为 CONFIRMED。
+""",
+        "python": """Python 导入与依赖规则：
+- test_filename 使用与目标不同的 test_exploit.py；用真实目标模块调用入口，不能重新实现目标函数。
+  源码仅以原 basename 预置，包路径和兄弟文件不会自动存在。不得把缺失的应用模块当 PyPI 包安装。
+- 对可独立导入的单文件，直接 import 或用 importlib.util.spec_from_file_location 从明确路径加载；
+  文件名含连字符或与标准库/依赖重名时使用显式路径，核对 __file__，避免误测同名安装包。
+  原源码需要相对导入、包初始化或额外资源而未提供时，保留可诊断错误，不创建伪造模块掩盖缺失。
+- requirements_filename 使用 requirements.txt；只写真正需要安装的外部包，标准库无需安装。
+  无依赖时 requirements 可留空，参考 Dockerfile 允许依赖清单不存在；有依赖时构建阶段使用
+  python -m pip install --no-cache-dir -r requirements.txt。漏洞版本相关时保留对应版本约束。
+- 设置 PYTHONDONTWRITEBYTECODE=1 和 PYTHONUNBUFFERED=1；运行时不 pip install、不写源码目录，
+  临时文件用 tempfile 放到 /tmp。依赖、虚拟环境和运行所需资源必须在镜像内 /tmp 以外保留。
+- main 必须主动调用真实入口。用 json.dumps(..., ensure_ascii=False) 输出单个最终 JSON；
+  目标日志重定向到 stderr 或捕获为证据，不能让日志冒充最终结果。导入异常不能判定漏洞存在。
+""",
+        "go": """Go 编译与模块规则：
+- 独立程序 harness 的 test_filename 使用唯一的 test_exploit.go，入口是 package main 的 func main()。
+  每个文件只能有一个 package 声明；只导入实际使用的包，遗漏或未使用 import 都会编译失败。
+- 不得改写目标 package 或函数。目标是 package main 且没有冲突入口时，将目标和 harness
+  一起 go build；只编译 test_exploit.go 会漏掉真实目标。目标已有 main 时不要再加第二个 main。
+- 目标是库包时，COPY . . 后必须 RUN mkdir -p target && mv <目标文件.go> target/，
+  原样移动目标且不在根目录留下副本，再用 openant-test/target 导入，按目标 package 名或别名调用导出函数。
+  同包未导出函数改用同 package 的唯一 *_test.go harness，并一起移到 target/；构建阶段
+  go test -c -o /test/test_exploit ./target。目标是 package main 且已有 main 时同样用同包 *_test.go。
+  使用 TestMain 把 m.Run 的框架输出定向到 stderr，随后输出单个结果 JSON；运行已编译测试二进制。
+  不要把不同 package 的 .go 文件放在同一编译目录，也不能 import package main。
+- 所需源码先 COPY，再 RUN go mod init openant-test && go mod tidy，随后 go build -mod=readonly。
+  requirements 和 requirements_filename 留空；go.mod/go.sum 由构建工具生成。
+  若需要漏洞特定依赖版本，在 tidy 前 go mod edit -require=<模块>@<版本>。
+- GOTOOLCHAIN=local 防止自动换编译器；依赖最低版本高于目标时保留明确错误并在重试中说明运行时偏离。
+  保留构建期模块缓存于 /go/pkg/mod，编译缓存于 /opt/openant-go-build-cache；不能放在会被覆盖的 /tmp。
+  CMD 运行已编译二进制，不能 go run/go build/go mod tidy 或依赖运行时联网。
+- CGO 或系统库必须在构建期明确提供；不能偷偷禁用 CGO 或升级依赖来绕过目标语义。
+""",
+    }
+    if template not in guidance:
+        return ""
+    from pathlib import Path
+    reference = (Path(__file__).parent / "docker_templates" / f"{template}.Dockerfile").read_text(encoding="utf-8")
+    return common + guidance[template] + "\n参考 Dockerfile（按真实目标调整）：\n" + reference
 
 
 def resolve_native_language(file_path: str, scan_language: str | None = None) -> str | None:

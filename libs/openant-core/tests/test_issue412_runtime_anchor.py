@@ -17,7 +17,7 @@ _DYNDIR = Path(__file__).resolve().parent.parent / "utilities" / "dynamic_tester
 # The fallback tag the prompt and the template must agree on. When bumping
 # the fallback, update ALL of: this list, the prompt's two mentions in
 # test_generator.py, and docker_templates/go.Dockerfile.
-_KNOWN_FALLBACKS = {"golang:1.27-alpine"}
+_KNOWN_FALLBACKS = {"golang:1.26-alpine"}
 
 
 def _prompt_go_tags() -> set[str]:

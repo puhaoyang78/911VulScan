@@ -39,7 +39,7 @@ C/C++ 生成结果只能提供复现源码，执行器强制使用项目自带�
 
 ```text
 gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined \
-    -fno-sanitize-recover=all -fno-pie -no-pie -x c test_exploit.c -o /tmp/.../test_exploit
+    -fno-sanitize-recover=all -fno-pie -no-pie -x c test_exploit.c -o /tmp/.../test_exploit -lm
 ```
 
 C++ 使用 `g++ -std=c++17 -x c++`。编译最多 60 秒，程序执行最多 30 秒；产物及运行时文件仅写入 `/tmp`。禁用 LeakSanitizer，避免受限容器中的 ptrace 兼容问题；当前不提供内存泄漏检测保证。
@@ -52,6 +52,17 @@ C++ 使用 `g++ -std=c++17 -x c++`。编译最多 60 秒，程序执行最多 30
 - C/C++ 多容器依赖和自定义依赖安装目前不受支持；生成器会拒绝这类结果。
 - 当前 C11/C++17 是可复现测试环境的固定基线，不代表已复现目标项目原有的编译器、平台或 ABI。
 - 动态诊断应结合原发现和目标调用栈复核；自动生成的驱动仍可能存在逻辑错误。
+
+## Python、JavaScript/TypeScript 与 Go
+
+保持现有“模型生成 Dockerfile → 容器构建 → 隔离执行 → 结果收集”流程，只按发现所在文件附加对应语言的构建规则和参考模板：
+
+- Python：标准库不安装为 PyPI 包；无外部依赖时允许不生成 requirements.txt。直接导入或显式路径加载真实单文件，核对目标身份；不伪造缺失包。关闭字节码写入并启用无缓冲输出，保留退出前日志。
+- JavaScript/TypeScript：明确 CommonJS/ESM 扩展名和 package.json type；构建阶段保留 devDependencies 供 TypeScript 编译，不在容器运行时使用 npm/npx 下载依赖。TypeScript 必须按实际模块/JSX 需求编译，不能把任意源码直接交给 Node。
+- Go：采用声明工具链；无声明时参考模板使用 Go 1.26。源码布局准备完成后再初始化模块、解析依赖和编译；同包目标与 harness 一起构建，库包放入独立目录。固定 GOTOOLCHAIN=local，构建产物和依赖缓存不放在运行时会被 tmpfs 覆盖的位置；运行阶段只启动已编译二进制。
+- 运行时声明从仓库根目录已有清单读取，只接受受限版本语法；无法可靠解析的约束不猜测。不会执行项目脚本来推断版本。
+
+这些参考模板不是任意项目构建系统：仅预置发现对应的一个源文件，兄弟模块、资源、私有依赖和完整项目构建文件不会自动复制。生成的 Dockerfile 仍需按目标调整；文件名冲突会返回可修复的 ERROR，不能覆盖真实目标。通用构建失败保留 stdout 与 stderr；超时保留已捕获的输出，运行超时仍是 INCONCLUSIVE。
 
 ## 结果含义
 

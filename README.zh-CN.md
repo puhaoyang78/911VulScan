@@ -1,6 +1,6 @@
 # 911VulScan 中文版
 
-911VulScan 基于 Knostic [OpenAnt](https://github.com/knostic/OpenAnt)，保留上游 Apache 2.0 许可证和署名。`911-dev` 分支提供中文扫描工作台、中文漏洞报告、默认 DeepSeek 配置，以及 C/C++ 隔离动态测试模板。
+911VulScan 基于 Knostic [OpenAnt](https://github.com/knostic/OpenAnt)，保留上游 Apache 2.0 许可证和署名。`911-dev` 分支提供中文扫描工作台、中文漏洞报告、默认 DeepSeek 配置，以及 C/C++ 隔离动态测试模板和 Python、JavaScript/TypeScript、Go 的动态构建指导。
 
 ## 本分支的变化
 

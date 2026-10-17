@@ -126,10 +126,21 @@ def classify_run(stdout: str, stderr: str, returncode: int, *,
 def compile_command(source: Path, binary: Path, language: str) -> list[str]:
     if language not in {"c", "cpp"}:
         raise ValueError("不支持的 C/C++ 编译语言")
+    # C's standard math functions need explicit libm linkage on this Linux
+    # toolchain. Keep the library after the source for --as-needed linkers.
     return ["g++" if language == "cpp" else "gcc",
             "-std=c++17" if language == "cpp" else "-std=c11",
             *SANITIZER_FLAGS, "-x", "c++" if language == "cpp" else "c",
-            str(source), "-o", str(binary)]
+            str(source), "-o", str(binary), "-lm"]
+
+
+def _timeout_output(value: str | bytes | None) -> str:
+    # TimeoutExpired may contain bytes even when subprocess.run(text=True).
+    # A timeout can also interrupt a UTF-8 code point; retain the diagnostics
+    # without letting decoding errors hide the original failure.
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
 
 
 def run_test(source: Path, language: str, *, timeout: int = 30,
@@ -155,8 +166,9 @@ def run_test(source: Path, language: str, *, timeout: int = 30,
         try:
             built = subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
                                    errors="replace", timeout=compile_timeout, cwd=source.parent)
-        except subprocess.TimeoutExpired:
-            return _result("ERROR", "C/C++ 编译超时，未执行测试。")
+        except subprocess.TimeoutExpired as exc:
+            return _result("ERROR", "C/C++ 编译超时，未执行测试。",
+                           _timeout_output(exc.stderr), _timeout_output(exc.stdout))
         except OSError as exc:
             return _result("ERROR", f"C/C++ 编译器无法启动：{exc}")
         if built.returncode:
@@ -172,8 +184,9 @@ def run_test(source: Path, language: str, *, timeout: int = 30,
             executed = subprocess.run([str(binary)], capture_output=True, text=True,
                                       encoding="utf-8", errors="replace", cwd=scratch,
                                       env=env, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return _result("INCONCLUSIVE", "C/C++ 测试执行超时，无法判定漏洞是否复现。")
+        except subprocess.TimeoutExpired as exc:
+            return _result("INCONCLUSIVE", "C/C++ 测试执行超时，无法判定漏洞是否复现。",
+                           _timeout_output(exc.stderr), _timeout_output(exc.stdout))
         except OSError as exc:
             return _result("ERROR", f"C/C++ 测试程序无法启动：{exc}")
         return classify_run(executed.stdout, executed.stderr, executed.returncode,

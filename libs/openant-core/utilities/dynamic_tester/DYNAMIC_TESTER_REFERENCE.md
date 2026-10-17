@@ -18,7 +18,7 @@
 | --- | --- |
 | `python.Dockerfile` | `python:3.11-slim` |
 | `node.Dockerfile` | `node:24-slim` |
-| `go.Dockerfile` | `golang:1.27-alpine` |
+| `go.Dockerfile` | `golang:1.26-alpine` |
 | `c.Dockerfile` | `python:3.12-slim-bookworm`，安装 GCC/G++/libc 头文件 |
 
 其他语言仍按语言注册表解析。C/C++ 固定模板由程序强制应用，不能通过模型输出自定义 Dockerfile。Python/Node/Go 的既有生成路径保持原有模型生成方式。

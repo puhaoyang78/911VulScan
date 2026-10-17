@@ -165,7 +165,10 @@ def test_wheel_omits_test_artifacts_and_carries_runtime_modules(tmp_path: Path):
                 "utilities/llm/providers/deepseek.py",
                 "utilities/llm/language.py",
                 "utilities/dynamic_tester/docker_templates/c.Dockerfile",
-                "utilities/dynamic_tester/docker_templates/c_runner.py"]
+                "utilities/dynamic_tester/docker_templates/c_runner.py",
+                "utilities/dynamic_tester/docker_templates/python.Dockerfile",
+                "utilities/dynamic_tester/docker_templates/node.Dockerfile",
+                "utilities/dynamic_tester/docker_templates/go.Dockerfile"]
     for r in required:
         assert any(n.endswith(r) or n == r for n in names), (
             f"wheel is missing a runtime file the product needs: {r}")

@@ -50,7 +50,8 @@ def test_compile_command(language, compiler, standard):
     assert standard in command
     assert "-fsanitize=address,undefined" in command
     assert "-fno-sanitize-recover=all" in command
-    assert command[-3:] == ["with spaces.c", "-o", "/tmp/bin"]
+    # libm follows the source so GNU ld's --as-needed does not discard it.
+    assert command[-4:] == ["with spaces.c", "-o", "/tmp/bin", "-lm"]
 
 
 @pytest.mark.parametrize("language,suffix", [("c", ".c"), ("cpp", ".cpp")])
