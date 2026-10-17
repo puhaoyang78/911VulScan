@@ -131,9 +131,9 @@ def test_success_path_result_carries_identity_key():
     import inspect
     src = inspect.getsource(collect_result)
     # the success-path construction must pass identity_key=identity_key
-    assert src.count("identity_key=identity_key") == 6, (
-        f"expected 6 identity_key=identity_key sites in collect_result "
-        f"(5 pre-existing error paths + the success path), found "
+    assert src.count("identity_key=identity_key") == 7, (
+        f"expected 7 identity_key=identity_key sites in collect_result "
+        f"(6 error paths, including staging/configuration failure, + the success path), found "
         f"{src.count('identity_key=identity_key')} — the success path "
         f"may have dropped the key again")
     # and the success-path return sits AFTER the 'Valid JSON output' parse

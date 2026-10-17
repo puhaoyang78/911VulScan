@@ -218,6 +218,10 @@ def fingerprint_for_binding(binding, template_texts, *,
     if thinking is not None:
         extra_key = dict(extra_key or {})
         extra_key["thinking_policy"] = thinking
+    system_policy = getattr(adapter, "system_policy", None)
+    if isinstance(system_policy, str) and system_policy:
+        extra_key = dict(extra_key or {})
+        extra_key["system_policy"] = system_policy
     return build_fingerprint(
         phase=binding.phase,
         model=binding.model,

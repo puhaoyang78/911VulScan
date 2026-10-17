@@ -22,11 +22,19 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_provider_configuration(monkeypatch, tmp_path):
+    """Never use developer-saved provider credentials in CLI integration tests."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+
 def run_cli(*args, env_override=None):
     """Run the openant CLI binary and return the CompletedProcess."""
     env = os.environ.copy()
     # Don't let the test hit any real API
     env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("DEEPSEEK_API_KEY", None)
+    env.pop("OPENANT_DEEPSEEK_API_KEY_OVERRIDE", None)
     env.pop("OPENANT_LOCAL_CLAUDE", None)
     # Pin the Go CLI to the exact interpreter running pytest. This:
     #   - blocks a developer's shell-exported OPENANT_PYTHON from changing
@@ -185,7 +193,8 @@ class TestGenerateContext:
         result = run_cli("generate-context", sample_python_repo)
         output = result.stderr + result.stdout
         assert result.returncode != 0
-        assert "api key" in output.lower()
+        assert "API 密钥" in output
+        assert "DEEPSEEK_API_KEY" in output
 
 
 class TestApiKeyHandling:
@@ -194,7 +203,8 @@ class TestApiKeyHandling:
         result = run_cli("scan", sample_python_repo, "--skip-dynamic-test")
         output = result.stderr + result.stdout
         assert result.returncode != 0
-        assert "api key" in output.lower()
+        assert "API 密钥" in output
+        assert "DEEPSEEK_API_KEY" in output
 
 
 class TestInit:

@@ -118,8 +118,8 @@ def test_summary_truncation_banner_in_deliverable(monkeypatch):
     monkeypatch.setattr(gen, "load_prompt", lambda name: "PROMPT" if name in ("system", "summary") else "")
     b = _gen_binding("partial summary text", "max_tokens")
     text, _ = gen.generate_summary_report({"results": [], "metadata": {}}, b)
-    assert "TRUNCATED at the model's output budget" in text
-    assert text.index("TRUNCATED") < text.index("partial summary text")
+    assert "因达到模型输出上限而被截断" in text
+    assert text.index("被截断") < text.index("partial summary text")
 
 
 def test_summary_untruncated_has_no_banner(monkeypatch):
@@ -150,7 +150,7 @@ def test_disclosure_truncation_banner(monkeypatch):
             "finding": "vulnerable", "verdict": "vulnerable",
             "explanation": "e"}
     text, _ = gen.generate_disclosure(vuln, "vuln", b)
-    assert "TRUNCATED at the model's output budget" in text
+    assert "因达到模型输出上限而被截断" in text
 
 
 # --- the budget-drift pin ----------------------------------------------------

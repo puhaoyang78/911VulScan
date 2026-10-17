@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // sarifVersion is the SARIF spec version we emit. 2.1.0 is what GitHub Code
@@ -126,7 +127,7 @@ func BuildSARIF(data ReportData, opts SARIFOptions) map[string]any {
 		if stepReportIsFailure(sr) {
 			execOK = false
 			if sr.ErrorCount > 0 || len(sr.Errors) > 0 {
-				detail := fmt.Sprintf("step %s: %d unit error(s)", sr.Step, sr.ErrorCount)
+				detail := fmt.Sprintf("步骤 %s：%d 个代码单元出错", displayLabel(sr.Step), sr.ErrorCount)
 				if len(sr.Errors) > 0 {
 					detail += " — " + strings.Join(sr.Errors, "; ")
 				}
@@ -134,12 +135,12 @@ func BuildSARIF(data ReportData, opts SARIFOptions) map[string]any {
 			} else {
 				// wave catch: partial with no populated counts — degrade
 				// visibly without a misleading "0 unit error(s)" text.
-				warn(fmt.Sprintf("step %s: degraded (status %s)", sr.Step, sr.Status))
+				warn(fmt.Sprintf("步骤 %s：未完整完成（状态：%s）", displayLabel(sr.Step), displayLabel(sr.Status)))
 			}
 		}
 		if failureSkip[sr.SkippedReason] {
 			execOK = false
-			warn(fmt.Sprintf("step %s skipped: %s", sr.Step, sr.SkippedReason))
+			warn(fmt.Sprintf("步骤 %s 已跳过：%s", displayLabel(sr.Step), displayLabel(sr.SkippedReason)))
 		}
 	}
 	for _, lang := range data.ExcludedLanguages {
@@ -147,7 +148,7 @@ func BuildSARIF(data ReportData, opts SARIFOptions) map[string]any {
 			continue
 		}
 		execOK = false
-		warn(fmt.Sprintf("language excluded from analysis: %s", lang))
+		warn(fmt.Sprintf("以下语言未纳入分析：%s", lang))
 	}
 	invocation["executionSuccessful"] = execOK
 	if len(notifications) > 0 {
@@ -208,7 +209,7 @@ func sarifRulesFor(data ReportData) ([]map[string]any, map[string]int) {
 	for v := range seen {
 		desc := descByVerdict[v]
 		if desc == "" {
-			desc = fmt.Sprintf("Finding with verdict %q.", v)
+			desc = fmt.Sprintf("发现项判定：%s。", displayLabel(v))
 		}
 		props := map[string]any{
 			"verdict": v,
@@ -222,10 +223,10 @@ func sarifRulesFor(data ReportData) ([]map[string]any, map[string]int) {
 			"id":   "openant.verdict." + v,
 			"name": "OpenAntVerdict_" + strings.ReplaceAll(v, "-", "_"),
 			"shortDescription": map[string]any{
-				"text": fmt.Sprintf("OpenAnt %s finding", v),
+				"text": fmt.Sprintf("OpenAnt 发现项：%s", displayLabel(v)),
 			},
 			"fullDescription": map[string]any{
-				"text": desc,
+				"text": displayLabel(desc),
 			},
 			"defaultConfiguration": map[string]any{
 				"level": sarifLevelForVerdict(v),
@@ -347,12 +348,16 @@ func findingMessage(f Finding) string {
 	if len(parts) == 0 {
 		// Fall back so the result still passes SARIF schema validation,
 		// which requires `message.text` to be non-empty.
-		return fmt.Sprintf("OpenAnt %s finding in %s", f.Verdict, f.File)
+		return fmt.Sprintf("OpenAnt 在 %s 中发现：%s", f.File, displayLabel(f.Verdict))
 	}
 	msg := strings.Join(parts, "\n\n")
 	const cap = 4096
 	if len(msg) > cap {
-		msg = msg[:cap-1] + "…"
+		end := cap - len("…")
+		for end > 0 && !utf8.RuneStart(msg[end]) {
+			end--
+		}
+		msg = msg[:end] + "…"
 	}
 	return msg
 }

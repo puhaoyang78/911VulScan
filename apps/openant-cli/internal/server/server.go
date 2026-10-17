@@ -50,6 +50,7 @@ const (
 // jobMeta is the on-disk metadata written immediately on job creation, and
 // (per #320) amended at terminal time with the job's final status.
 type jobMeta struct {
+	LLMConfig string    `json:"llm_config,omitempty"`
 	ID        string    `json:"id"`
 	Repo      string    `json:"repo"`
 	StartedAt time.Time `json:"started_at"`
@@ -72,7 +73,8 @@ type Job struct {
 	Cancel          context.CancelFunc
 
 	// Internal scan parameters (not exposed via API)
-	apiKey      string
+	keyEnv      map[string]string
+	llmConfig   string
 	languages   []string
 	libraryMode bool
 	verify      bool
@@ -88,6 +90,12 @@ func (j *Job) addLog(line string) {
 	if j.logCapped {
 		return
 	}
+	// Never persist an explicitly supplied provider key, even if a subprocess echoes it.
+	for name, secret := range j.keyEnv {
+		if strings.Contains(name, "API_KEY") && secret != "" {
+			line = strings.ReplaceAll(line, secret, "[密钥已隐藏]")
+		}
+	}
 	line = strings.ReplaceAll(line, "\r", " ")
 	line = strings.ReplaceAll(line, "\n", " ")
 	// Bound memory against a repo that floods stderr — by line count AND total
@@ -98,7 +106,7 @@ func (j *Job) addLog(line string) {
 	// Check the PROJECTED size so a single line can't overshoot the cap before
 	// truncation fires on the next call — the bound stays a hard ceiling.
 	if len(j.LogBuf) >= maxLogLines || j.logBytes+len(line) > maxLogBytes {
-		j.LogBuf = append(j.LogBuf, "[log truncated: limit reached]")
+		j.LogBuf = append(j.LogBuf, "[log truncated: 日志已达到大小上限]")
 		j.logCapped = true
 		return
 	}
@@ -313,6 +321,7 @@ func (s *Server) recoverJobs() {
 			if json.Unmarshal(data, &m) == nil {
 				job.Repo = m.Repo
 				job.StartedAt = m.StartedAt
+				job.llmConfig = m.LLMConfig
 				persistedStatus = m.Status
 			}
 		}
@@ -364,7 +373,7 @@ func (s *Server) recoverJobs() {
 			lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 			const maxLogLines = 20000
 			if len(lines) > maxLogLines {
-				lines = append(lines[:maxLogLines:maxLogLines], "[log truncated: too many lines]")
+				lines = append(lines[:maxLogLines:maxLogLines], "[log truncated: 日志行数超过上限]")
 			}
 			for i, l := range lines {
 				l = strings.ReplaceAll(l, "\r", " ")
@@ -478,7 +487,7 @@ func securityHeaders(h http.Handler) http.Handler {
 		// means the request was aimed at another name rebound to 127.0.0.1, so a
 		// remote page can't read the index (CSRF token + job list) or any report.
 		if !hostHeaderIsLoopback(r) {
-			http.Error(w, "invalid host", http.StatusForbidden)
+			http.Error(w, "无效的主机地址：仅支持本机访问", http.StatusForbidden)
 			return
 		}
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -614,21 +623,39 @@ type jobView struct {
 }
 
 type indexData struct {
-	Jobs         []*jobView
-	HasAPIKey    bool // whether a key is configured; the key VALUE is never sent to the page
-	APIKeySource string
-	CSRF         string
-	Nonce        string // the noncedPage CSP nonce (see #578 follow-up A)
+	DeepSeekEndpoint string
+	LLMConfigs       []string
+	RunningCount     int
+	DoneCount        int
+	AttentionCount   int
+	Jobs             []*jobView
+	HasAPIKey        bool // whether a key is configured; the key VALUE is never sent to the page
+	APIKeySource     string
+	CSRF             string
+	Nonce            string // the noncedPage CSP nonce (see #578 follow-up A)
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := config.Load()
-	apiKey := ""
 	apiKeySource := ""
-	if cfg != nil && !cfg.HasV2Providers() && cfg.APIKey != "" {
-		apiKey = cfg.APIKey
-		apiKeySource = "~/.config/openant/config.json"
+	if cfg != nil {
+		if p, ok := cfg.GetProvider("deepseek"); ok && p.Type == "deepseek" && p.APIKey != "" {
+			apiKeySource = "已有模型配置"
+		}
 	}
+	if apiKeySource == "" && os.Getenv("DEEPSEEK_API_KEY") != "" {
+		apiKeySource = "环境变量 DEEPSEEK_API_KEY"
+	}
+
+	profiles := []string{"deepseek-default", "deepseek-pro", "openant-default"}
+	if cfg != nil {
+		for _, name := range cfg.LLMConfigNames() {
+			if name != "deepseek-default" && name != "deepseek-pro" && name != "openant-default" {
+				profiles = append(profiles, name)
+			}
+		}
+	}
+	sort.Strings(profiles)
 
 	jobs := s.mgr.all()
 	views := make([]*jobView, 0, len(jobs))
@@ -637,7 +664,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		v := &jobView{
 			ID:         j.ID,
 			Repo:       j.Repo,
-			StartedAt:  j.StartedAt.Format("2006-01-02 15:04:05"),
+			StartedAt:  j.StartedAt.UTC().Format("2006-01-02 15:04:05"),
 			Status:     j.Status,
 			HasReport:  j.ReportPath != "",
 			HasSummary: j.SummaryPath != "",
@@ -647,11 +674,23 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := indexData{
-		Jobs:         views,
-		HasAPIKey:    apiKey != "",
-		APIKeySource: apiKeySource,
-		CSRF:         s.csrfToken,
-		Nonce:        nonceFrom(r),
+		Jobs:             views,
+		DeepSeekEndpoint: deepSeekEndpointOrigin(cfg),
+		HasAPIKey:        apiKeySource != "",
+		LLMConfigs:       profiles,
+		APIKeySource:     apiKeySource,
+		CSRF:             s.csrfToken,
+		Nonce:            nonceFrom(r),
+	}
+	for _, v := range views {
+		switch v.Status {
+		case StatusRunning:
+			d.RunningCount++
+		case StatusDone:
+			d.DoneCount++
+		default:
+			d.AttentionCount++
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmplIndex.Execute(w, d); err != nil {
@@ -705,12 +744,12 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	switch name {
 	case "marked-18.1.1.min.js", "dompurify-3.4.17.min.js":
 	default:
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	data, err := uifiles.FS.ReadFile("vendor/" + name)
 	if err != nil {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
@@ -720,25 +759,25 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
-		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
+		http.Error(w, "表单格式无效，请刷新后重试", http.StatusBadRequest)
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(r.FormValue("csrf")), []byte(s.csrfToken)) != 1 {
-		http.Error(w, "invalid or missing CSRF token", http.StatusForbidden)
+		http.Error(w, "安全令牌失效或缺失，请刷新页面后重试", http.StatusForbidden)
 		return
 	}
 
 	repo := strings.TrimSpace(r.FormValue("repo"))
 	if repo == "" {
-		http.Error(w, "repo is required", http.StatusBadRequest)
+		http.Error(w, "请填写仓库地址或项目路径", http.StatusBadRequest)
 		return
 	}
 	if strings.HasPrefix(repo, "-") {
-		http.Error(w, "repository path/URL must not start with '-'", http.StatusBadRequest)
+		http.Error(w, "仓库地址或路径不能以短横线开头", http.StatusBadRequest)
 		return
 	}
 	// Reject credentials embedded in an http(s) URL: the repo string is logged and
@@ -749,7 +788,7 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "https://") {
 		u, err := url.Parse(repo)
 		if err != nil || u.User != nil {
-			http.Error(w, "invalid repository URL, or credentials in the URL (use a git credential helper instead)", http.StatusBadRequest)
+			http.Error(w, "仓库地址无效或包含凭据，请使用 Git 凭据助手，不要在地址中填写密码", http.StatusBadRequest)
 			return
 		}
 	}
@@ -757,19 +796,17 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	languages := r.Form["languages"]
 	for _, l := range languages {
 		if !supportedLanguages[l] {
-			http.Error(w, "unsupported language", http.StatusBadRequest)
+			http.Error(w, "不支持所选语言", http.StatusBadRequest)
 			return
 		}
 	}
 	libraryMode := r.FormValue("library_mode") == "on"
-	apiKey := r.FormValue("api_key")
-	if apiKey == "" {
-		// Fall back to the configured key, mirroring cmd/root.go: a v2
-		// llm_providers config deliberately suppresses the legacy key.
-		if cfg, _ := config.Load(); cfg != nil && !cfg.HasV2Providers() {
-			apiKey = cfg.APIKey
-		}
+	llmConfig, keyEnv, err := scanModelSettings(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+
 	verify := r.FormValue("verify") == "on"
 	dynamicTest := r.FormValue("dynamic_test") == "on"
 
@@ -781,7 +818,7 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	s.drainMu.Lock()
 	if s.draining {
 		s.drainMu.Unlock()
-		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+		http.Error(w, "服务正在关闭，请稍后重试", http.StatusServiceUnavailable)
 		return
 	}
 	s.wg.Add(1)
@@ -790,19 +827,19 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	id, err := randomID()
 	if err != nil {
 		s.wg.Done()
-		http.Error(w, "failed to generate ID", http.StatusInternalServerError)
+		http.Error(w, "无法生成任务编号", http.StatusInternalServerError)
 		return
 	}
 
 	jobDir := filepath.Join(s.outDir, id)
 	if err := os.MkdirAll(jobDir, 0750); err != nil {
 		s.wg.Done()
-		http.Error(w, "failed to create job dir", http.StatusInternalServerError)
+		http.Error(w, "无法创建扫描目录，请检查磁盘空间和权限", http.StatusInternalServerError)
 		return
 	}
 
 	// Write meta.json immediately.
-	meta := jobMeta{ID: id, Repo: repo, StartedAt: time.Now().UTC()}
+	meta := jobMeta{ID: id, Repo: repo, StartedAt: time.Now().UTC(), LLMConfig: llmConfig}
 	if data, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(filepath.Join(jobDir, "meta.json"), data, 0640)
 	}
@@ -815,7 +852,8 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		Status:      StatusRunning,
 		Cancel:      cancel,
 		ctx:         ctx,
-		apiKey:      apiKey,
+		keyEnv:      keyEnv,
+		llmConfig:   llmConfig,
 		languages:   languages,
 		libraryMode: libraryMode,
 		verify:      verify,
@@ -828,26 +866,101 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/scan/"+id, http.StatusSeeOther)
 }
 
+// Expose only the endpoint origin, never URL credentials, query tokens or paths.
+// Mirrors the adapter precedence: provider base_url > environment > official.
+func deepSeekEndpointOrigin(cfg *config.Config) string {
+	base := os.Getenv("DEEPSEEK_BASE_URL")
+	if cfg != nil {
+		if p, ok := cfg.GetProvider("deepseek"); ok && p.BaseURL != "" {
+			base = p.BaseURL
+		}
+	}
+	if base == "" {
+		base = "https://api.deepseek.com"
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return "地址配置无效，请检查 DeepSeek 服务商配置"
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// scanModelSettings keeps credential routing explicit: the default form key is
+// ONLY a DeepSeek key. Existing profiles use their own configured credentials.
+// No secret is written to disk, put in argv, or sent back to the browser.
+func scanModelSettings(r *http.Request) (string, map[string]string, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", nil, fmt.Errorf("无法读取模型配置，请检查 openant 配置文件")
+	}
+	provider := r.FormValue("provider")
+	if provider == "" {
+		provider = "deepseek"
+	}
+	if provider == "configured" {
+		if r.FormValue("api_key") != "" {
+			return "", nil, fmt.Errorf("已有配置模式不能接收 DeepSeek 密钥，请清空密钥后重试")
+		}
+		name := r.FormValue("llm_config")
+		if name != "" && name != "deepseek-default" && name != "deepseek-pro" && name != "openant-default" && !cfg.LLMConfigExists(name) {
+			return "", nil, fmt.Errorf("所选模型配置不存在，请刷新页面后重试")
+		}
+		return name, map[string]string{"OPENANT_DEEPSEEK_API_KEY_OVERRIDE": ""}, nil
+	}
+	if provider != "deepseek" {
+		return "", nil, fmt.Errorf("不支持的模型来源")
+	}
+	model := r.FormValue("model")
+	profile := "deepseek-default"
+	switch model {
+	case "", "deepseek-flash":
+	case "deepseek-v4-pro":
+		profile = "deepseek-pro"
+	default:
+		return "", nil, fmt.Errorf("不支持的 DeepSeek 模型，请选择列表中的模型")
+	}
+	key := strings.TrimSpace(r.FormValue("api_key"))
+	pastedKey := key
+	if p, ok := cfg.GetProvider("deepseek"); ok {
+		if p.Type != "deepseek" {
+			return "", nil, fmt.Errorf("名为 deepseek 的配置不是 DeepSeek 服务商，请修正配置或选择已有配置模式")
+		}
+		if key == "" {
+			key = p.APIKey
+		}
+	}
+	if key == "" {
+		key = os.Getenv("DEEPSEEK_API_KEY")
+	}
+	env := map[string]string{"OPENANT_LOCAL_CLAUDE": "false", "OPENANT_DEEPSEEK_API_KEY_OVERRIDE": pastedKey}
+	if key != "" {
+		env["DEEPSEEK_API_KEY"] = key
+	}
+	return profile, env, nil
+}
+
 type scanPageData struct {
-	ID    string
-	Repo  string
-	CSRF  string
-	Nonce string // the securityHeaders CSP nonce (see #578 follow-up A)
+	LLMConfig string
+	ID        string
+	Repo      string
+	CSRF      string
+	Nonce     string // the securityHeaders CSP nonce (see #578 follow-up A)
 }
 
 func (s *Server) handleScanPage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	job, ok := s.mgr.get(id)
 	if !ok {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	job.mu.Lock()
 	repo := job.Repo
+	llmConfig := job.llmConfig
 	job.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmplScan.Execute(w, scanPageData{ID: id, Repo: repo, CSRF: s.csrfToken, Nonce: nonceFrom(r)}); err != nil {
+	if err := s.tmplScan.Execute(w, scanPageData{ID: id, Repo: repo, LLMConfig: llmConfig, CSRF: s.csrfToken, Nonce: nonceFrom(r)}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -856,7 +969,7 @@ func (s *Server) handleScanLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	job, ok := s.mgr.get(id)
 	if !ok {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 
@@ -942,19 +1055,19 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	job, ok := s.mgr.get(id)
 	if !ok {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	job.mu.Lock()
 	rp := job.ReportPath
 	job.mu.Unlock()
 	if rp == "" {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	f, fi, err := openRegularInRoot(filepath.Join(s.outDir, id), rp)
 	if err != nil {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	defer f.Close()
@@ -971,25 +1084,25 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	job, ok := s.mgr.get(id)
 	if !ok {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	job.mu.Lock()
 	sp := job.SummaryPath
 	job.mu.Unlock()
 	if sp == "" {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	f, _, err := openRegularInRoot(filepath.Join(s.outDir, id), sp)
 	if err != nil {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	data, err := io.ReadAll(f)
 	f.Close()
 	if err != nil {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	// json.Marshal produces a properly-escaped JS string literal including outer quotes.
@@ -1014,7 +1127,7 @@ func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	job, ok := s.mgr.get(id)
 	if !ok {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	job.mu.Lock()
@@ -1050,13 +1163,13 @@ func (s *Server) handleDisclosure(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	filename := filepath.Base(r.PathValue("filename")) // sanitize: strip any path components
 	if filename == "." || filename == "" {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 
 	job, ok := s.mgr.get(id)
 	if !ok {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 
@@ -1072,20 +1185,20 @@ func (s *Server) handleDisclosure(w http.ResponseWriter, r *http.Request) {
 	job.mu.Unlock()
 
 	if matchedPath == "" {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	// O_NOFOLLOW read: even a known path must be a regular file within the job dir
 	// at read time — refuses a symlink atomically (no check-then-read TOCTOU).
 	f, _, err := openRegularInRoot(filepath.Join(s.outDir, id), matchedPath)
 	if err != nil {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	data, err := io.ReadAll(f)
 	f.Close()
 	if err != nil {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 
@@ -1124,6 +1237,8 @@ func disclosureTitleFromFile(path string) string {
 			title := strings.TrimSpace(strings.TrimLeft(line, "#"))
 			// Strip common "Security Disclosure:" prefix.
 			for _, prefix := range []string{
+				"安全漏洞披露：",
+				"安全披露：",
 				"Security Disclosure: ",
 				"Security Disclosure:",
 			} {
@@ -1180,21 +1295,21 @@ func findDisclosures(outDir string) []string {
 
 func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
-		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(s.csrfToken)) != 1 {
-		http.Error(w, "invalid or missing CSRF token", http.StatusForbidden)
+		http.Error(w, "安全令牌失效或缺失，请刷新页面后重试", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
 	if !jobIDRe.MatchString(id) {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	job, ok := s.mgr.get(id)
 	if !ok {
-		http.NotFound(w, r)
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
 	job.mu.Lock()
@@ -1236,7 +1351,7 @@ func (s *Server) runJob(job *Job) {
 	defer func() {
 		// Panic recovery — log rather than silently dropping the goroutine.
 		if r := recover(); r != nil {
-			job.addLog(fmt.Sprintf("[error] internal panic: %v", r))
+			job.addLog(fmt.Sprintf("[error] 内部异常：%v", r))
 		}
 		// Any path that leaves the job still "running" here is a cancellation
 		// (delete/shutdown) or a recovered panic; mark it terminal so an open SSE
@@ -1249,6 +1364,7 @@ func (s *Server) runJob(job *Job) {
 		// Persist full log buffer to logs.txt.
 		job.mu.Lock()
 		logData := strings.Join(job.LogBuf, "\n") + "\n"
+		job.keyEnv = nil // release per-run credentials after the last subprocess exits
 		job.mu.Unlock()
 		_ = os.WriteFile(filepath.Join(outDir, "logs.txt"), []byte(logData), 0640)
 	}()
@@ -1262,7 +1378,7 @@ func (s *Server) runJob(job *Job) {
 		return
 	}
 
-	job.addLog("→ Starting scan of " + job.Repo)
+	job.addLog("→ 开始扫描：" + job.Repo)
 
 	// Determine local path: clone if URL, use directly if local path.
 	localPath := job.Repo
@@ -1272,10 +1388,10 @@ func (s *Server) runJob(job *Job) {
 
 	if isURL {
 		cloneDir := filepath.Join(outDir, "repo")
-		job.addLog("[clone] Cloning " + job.Repo + "…")
+		job.addLog("[clone] 正在克隆仓库：" + job.Repo + "…")
 		if err := cloneRepo(job.ctx, job.Repo, cloneDir, job.addLog); err != nil {
 			if job.ctx.Err() == nil {
-				job.addLog("[clone] Error: " + err.Error())
+				job.addLog("[clone] 克隆失败：" + err.Error())
 				job.setError()
 			}
 			return
@@ -1285,6 +1401,9 @@ func (s *Server) runJob(job *Job) {
 
 	// Build scan args.
 	args := []string{"scan", "--output", outDir}
+	if job.llmConfig != "" {
+		args = append(args, "--llm-config="+job.llmConfig)
+	}
 	// Language selection mirrors the CLI. No selection = the auto default: every
 	// detected language above the size threshold (NOT just the dominant one — see
 	// core/language_selection.py select_languages). One selection = --language;
@@ -1324,9 +1443,9 @@ func (s *Server) runJob(job *Job) {
 	}
 	args = append(args, "--", localPath)
 
-	job.addLog("→ Running: python -m openant " + strings.Join(args, " "))
+	job.addLog("→ 执行命令：python -m openant " + strings.Join(args, " "))
 
-	stdout, exitCode, err := python.InvokeCtxCapture(job.ctx, s.pythonPath, args, "", job.apiKey, job.addLog)
+	stdout, exitCode, err := python.InvokeCtxCaptureEnv(job.ctx, s.pythonPath, args, "", job.keyEnv, job.addLog)
 	if job.ctx.Err() != nil {
 		return // cancelled — don't mark error
 	}
@@ -1339,7 +1458,7 @@ func (s *Server) runJob(job *Job) {
 			job.setTimeout()
 			return
 		}
-		job.addLog("[error] scan failed to start: " + err.Error())
+		job.addLog("[error] 无法启动扫描：" + err.Error())
 		job.setError()
 		return
 	}
@@ -1352,7 +1471,7 @@ func (s *Server) runJob(job *Job) {
 				job.addLog("[error] " + m)
 			}
 		} else {
-			job.addLog(fmt.Sprintf("[error] scan exited with code %d", exitCode))
+			job.addLog(fmt.Sprintf("[error] 扫描退出，错误码 %d", exitCode))
 		}
 		job.setError()
 		return
@@ -1380,7 +1499,7 @@ func (s *Server) runJob(job *Job) {
 
 	// If still missing, try explicit report generation (non-fatal).
 	if !fileExists(reportPath) {
-		if err := s.generateHTMLReport(job.ctx, outDir, reportPath, job.apiKey, job.addLog); err != nil {
+		if err := s.generateHTMLReport(job.ctx, outDir, reportPath, job.llmConfig, job.keyEnv, job.addLog); err != nil {
 			if job.ctx.Err() != nil {
 				return
 			}
@@ -1396,7 +1515,7 @@ func (s *Server) runJob(job *Job) {
 				job.setTimeout()
 				return
 			}
-			job.addLog("[report] Warning: " + err.Error())
+			job.addLog("[report] 警告：" + err.Error())
 			// Continue — mark done only if we found something.
 		}
 	}
@@ -1405,7 +1524,7 @@ func (s *Server) runJob(job *Job) {
 		return
 	}
 	if !fileExists(reportPath) {
-		job.addLog("[error] no report.html produced; marking scan as error")
+		job.addLog("[error] 未生成 report.html，扫描未完成")
 		job.setError()
 		return
 	}
@@ -1426,7 +1545,7 @@ func (s *Server) runJob(job *Job) {
 	if summaryPath == "" {
 		// Non-fatal — requires API key / LLM.
 		sp := filepath.Join(outDir, "SUMMARY_REPORT.md")
-		if err := s.generateSummary(job.ctx, outDir, sp, job.apiKey, job.addLog); err != nil {
+		if err := s.generateSummary(job.ctx, outDir, sp, job.llmConfig, job.keyEnv, job.addLog); err != nil {
 			if job.ctx.Err() != nil {
 				return
 			}
@@ -1439,7 +1558,7 @@ func (s *Server) runJob(job *Job) {
 				job.setTimeout()
 				return
 			}
-			job.addLog("[report] Warning: summary not generated: " + err.Error())
+			job.addLog("[report] 警告：未生成摘要：" + err.Error())
 		} else {
 			summaryPath = sp
 		}
@@ -1739,10 +1858,10 @@ func repoHostBlocked(ctx context.Context, repo string) bool {
 
 func cloneRepo(ctx context.Context, repo, dest string, onLog func(string)) error {
 	if !(strings.HasPrefix(repo, "https://") || strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "git@")) {
-		return fmt.Errorf("unsupported repository URL scheme")
+		return fmt.Errorf("不支持此仓库地址协议")
 	}
 	if repoHostBlocked(ctx, repo) {
-		return fmt.Errorf("refusing to clone from a loopback, link-local, or metadata address")
+		return fmt.Errorf("为保护本机安全，禁止从回环、链路本地或云元数据地址克隆")
 	}
 	// Bound the clone in time so a hostile remote that streams forever can't hold a
 	// scan slot indefinitely (the parent ctx is cancel-only). Disk size is not
@@ -1811,55 +1930,59 @@ func patchPipelineOutput(outDir, repo string, onLog func(string)) {
 		return
 	}
 	if err := os.WriteFile(path, patched, 0640); err != nil {
-		onLog("[report] Warning: could not patch pipeline_output.json: " + err.Error())
+		onLog("[report] 警告：无法更新 pipeline_output.json：" + err.Error())
 	}
 }
 
 // generateHTMLReport uses `python -m openant report-data` to get pre-computed
 // report JSON, then renders it with Go's embedded HTML template — the same
 // pipeline the `openant report -f html` CLI command uses.
-func (s *Server) generateHTMLReport(ctx context.Context, outDir, reportPath, apiKey string, onLog func(string)) error {
+func (s *Server) generateHTMLReport(ctx context.Context, outDir, reportPath, llmConfig string, keyEnv map[string]string, onLog func(string)) error {
 	resultsPath := findResultsFile(outDir)
 	if resultsPath == "" {
-		return fmt.Errorf("no results file found in %s", outDir)
+		return fmt.Errorf("未在 %s 中找到结果文件", outDir)
 	}
 
 	args := []string{"report-data", resultsPath}
+	// HTML remediation is an LLM-backed report phase, so retain the job binding.
+	if llmConfig != "" {
+		args = append(args, "--llm-config="+llmConfig)
+	}
 	if ds := findDatasetFile(outDir); ds != "" {
 		args = append(args, "--dataset", ds)
 	}
 
-	onLog("[report] Generating HTML report…")
-	stdout, exitCode, err := python.InvokeCtxCapture(ctx, s.pythonPath, args, "", apiKey, func(line string) {
+	onLog("[report] 正在生成 HTML 报告…")
+	stdout, exitCode, err := python.InvokeCtxCaptureEnv(ctx, s.pythonPath, args, "", keyEnv, func(line string) {
 		onLog("[report] " + line)
 	})
 	if err != nil {
 		return err
 	}
 	if exitCode != 0 {
-		return fmt.Errorf("report-data exited with code %d", exitCode)
+		return fmt.Errorf("报告数据生成失败，退出码 %d", exitCode)
 	}
 
 	// Parse the JSON envelope that Python writes to stdout.
 	var envelope types.Envelope
 	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope); err != nil {
-		return fmt.Errorf("parse report-data output: %w", err)
+		return fmt.Errorf("解析报告数据失败：%w", err)
 	}
 	if envelope.Status != "success" {
 		if len(envelope.Errors) > 0 {
 			return fmt.Errorf("report-data: %s", envelope.Errors[0])
 		}
-		return fmt.Errorf("report-data returned status %q", envelope.Status)
+		return fmt.Errorf("报告数据返回状态 %q", envelope.Status)
 	}
 
 	// Re-marshal then unmarshal into ReportData (same as report.go does).
 	dataBytes, err := json.Marshal(envelope.Data)
 	if err != nil {
-		return fmt.Errorf("marshal report data: %w", err)
+		return fmt.Errorf("序列化报告数据失败：%w", err)
 	}
 	var reportData report.ReportData
 	if err := json.Unmarshal(dataBytes, &reportData); err != nil {
-		return fmt.Errorf("parse report data: %w", err)
+		return fmt.Errorf("解析报告数据失败：%w", err)
 	}
 
 	return report.GenerateReskin(reportData, reportPath)
@@ -1867,29 +1990,32 @@ func (s *Server) generateHTMLReport(ctx context.Context, outDir, reportPath, api
 
 // generateSummary runs `python -m openant report --format summary` to produce
 // SUMMARY_REPORT.md.  This step makes LLM calls so it requires an API key.
-func (s *Server) generateSummary(ctx context.Context, outDir, outputPath, apiKey string, onLog func(string)) error {
+func (s *Server) generateSummary(ctx context.Context, outDir, outputPath, llmConfig string, keyEnv map[string]string, onLog func(string)) error {
 	resultsPath := findResultsFile(outDir)
 	if resultsPath == "" {
-		return fmt.Errorf("no results file found in %s", outDir)
+		return fmt.Errorf("未在 %s 中找到结果文件", outDir)
 	}
 
 	args := []string{"report", resultsPath, "--format", "summary", "--output", outputPath}
+	if llmConfig != "" {
+		args = append(args, "--llm-config="+llmConfig)
+	}
 	if po := filepath.Join(outDir, "pipeline_output.json"); fileExists(po) {
 		args = append(args, "--pipeline-output", po)
 	}
 
-	onLog("[report] Generating Markdown summary…")
-	exitCode, err := python.InvokeCtx(ctx, s.pythonPath, args, "", apiKey, func(line string) {
+	onLog("[report] 正在生成 Markdown 摘要…")
+	exitCode, err := python.InvokeCtxEnv(ctx, s.pythonPath, args, "", keyEnv, func(line string) {
 		onLog("[report] " + line)
 	})
 	if err != nil {
 		return err
 	}
 	if exitCode != 0 {
-		return fmt.Errorf("summary generation exited with code %d", exitCode)
+		return fmt.Errorf("摘要生成失败，退出码 %d", exitCode)
 	}
 	if !fileExists(outputPath) {
-		return fmt.Errorf("summary file not produced at %s", outputPath)
+		return fmt.Errorf("未在 %s 生成摘要文件", outputPath)
 	}
 	return nil
 }

@@ -270,13 +270,19 @@ def test_every_cache_rated_record_is_pinned():
         "claude-fable-5", "claude-fable-5-1", "claude-haiku-4-5-20251001",
         "claude-mythos-5", "claude-mythos-5-1", "claude-opus-4-7",
         "claude-opus-4-8", "claude-opus-5", "claude-sonnet-4-6",
-        "claude-sonnet-5",
+        "claude-sonnet-5", "deepseek-flash", "deepseek-v4-pro",
     }
     assert set(_rated) == _expected, (
         f"the cache-rated census changed: {set(_rated) ^ _expected}")
     for name, rec in _rated.items():
         _c = rec["cache"]
         assert isinstance(_c["read"], (int, float)) and _c["read"] > 0, name
+        if rec["provider"] == "deepseek":
+            expected = {"deepseek-flash": .02, "deepseek-v4-pro": .044 / 1.32}
+            assert _c["read"] == expected[name]
+            assert "write" not in _c  # DeepSeek bills cache misses at input price.
+            assert "official" in _c["source"]
+            continue
         assert "write" in _c, f"{name}: read without write (the anthropic shape has both)"
         assert isinstance(_c["write"], (int, float)) and _c["write"] > 0, name
 

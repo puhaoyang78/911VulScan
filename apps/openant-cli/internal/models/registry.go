@@ -59,6 +59,7 @@ var phaseTier = map[string]string{
 // the registry surfaces as a failing prefill (and unit test) rather than a
 // silently-404'ing default.
 var tierModel = map[string]map[string]string{
+	"deepseek":  {"strong": "deepseek-flash", "light": "deepseek-flash"},
 	"anthropic": {"strong": "claude-opus-4-8", "light": "claude-sonnet-4-6"},
 	"openai":    {"strong": "gpt-4o", "light": "gpt-4o-mini"},
 	"google":    {"strong": "gemini-1.5-pro", "light": "gemini-2.0-flash"},

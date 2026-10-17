@@ -124,6 +124,14 @@ class TestNoContextFlagDoesNotSilentlyIgnoreAThreatModel:
         import core.scanner as scanner_mod
         import utilities.llm as llm_mod
         monkeypatch.setattr(llm_mod, "probe_registry_or_raise", lambda *a, **k: None)
+        # This test concerns scanner context receipts, not provider selection.
+        # Make the historical Anthropic harness explicit and entirely offline;
+        # fresh-install DeepSeek selection is covered by its adapter tests.
+        import utilities.llm.registry as registry_mod
+        from tests._llm_factories.anthropic import make_adapter
+        monkeypatch.setattr(llm_mod, "load_config_file", lambda: llm_mod.parse_config(
+            {"default_llm": "openant-default"}))
+        monkeypatch.setattr(registry_mod, "build_adapter", lambda provider: make_adapter("text"))
 
         repo = tmp_path / "repo"; repo.mkdir()
         (repo / "app.py").write_text("def f():\n    pass\n")

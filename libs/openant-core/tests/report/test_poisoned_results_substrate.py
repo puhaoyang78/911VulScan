@@ -28,7 +28,6 @@ GREEN (with fa17): all pass.
 
 from __future__ import annotations
 
-import ast
 import json
 import types
 from pathlib import Path
@@ -214,10 +213,9 @@ def test_generate_report_main_survives_poison(tmp_path: Path, monkeypatch, capsy
     # main() prints "Summary: {<verdict counts>}" — parse it and assert the
     # count reflects only the 1 valid dict, never the 5 raw elements.
     summary_line = next(
-        ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("Summary:")
+        ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("摘要：")
     )
-    counts = ast.literal_eval(summary_line.split("Summary:", 1)[1].strip())
-    assert counts == {"vulnerable": 1}
+    assert summary_line == "摘要：存在漏洞：1"
 
 
 # ---------------------------------------------------------------------------

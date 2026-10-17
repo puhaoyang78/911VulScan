@@ -11,12 +11,13 @@ from typing import TYPE_CHECKING
 
 from core.file_boundary import boundary_in_code, split_on_boundary
 from prompts._fence import safe_code_fence, collapse_inline
+from prompts.report_language import CHINESE_REPORT_INSTRUCTION
 
 if TYPE_CHECKING:
     from context.application_context import ApplicationContext
 
 
-VERIFICATION_SYSTEM_PROMPT = """You are a penetration tester. You only report vulnerabilities you can actually exploit."""
+VERIFICATION_SYSTEM_PROMPT = """You are a penetration tester. You only report vulnerabilities you can actually exploit.""" + CHINESE_REPORT_INSTRUCTION
 
 # #621: the builtin attacker personas, hoisted to module constants so verify's
 # checkpoint identity can hash them (core/verifier.py folds these into
@@ -241,17 +242,15 @@ def attacker_model_descriptor(app_context: "ApplicationContext") -> dict:
         return {
             "kind": "threat_model",
             "attacker": (
-                "Declared by the repository's own threat model; attacker "
-                "profiles are rendered per finding at verification time."),
+                "由仓库提供的威胁模型定义；验证每个发现项时应用对应的攻击者能力。"),
         }
     if _is_untrusted_input_context(app_context):
         supply = _untrusted_supply_list(app_context)
         return {
             "kind": "untrusted_input",
             "attacker": (
-                f"An attacker who supplies the untrusted input this "
-                f"application processes ({supply}); no server access, no "
-                "admin credentials, no CLI access."),
+                f"提供应用所处理的不可信输入的攻击者（{supply}）；"
+                "无服务器访问权限、管理员凭据或命令行访问权限。"),
         }
     if app_context is not None and app_context.suppress_local_only():
         # #653: the "local access is the operator's own" framing is right
@@ -264,19 +263,15 @@ def attacker_model_descriptor(app_context: "ApplicationContext") -> dict:
         return {
             "kind": "remote_only",
             "attacker": (
-                "Remote attacker with browser access, no server-side "
-                "access, no admin credentials"
-                + (" — this web application's remote surface is the "
-                   "browser; no operator-local access applies."
+                "通过浏览器访问的远程攻击者，无服务器访问权限或管理员凭据"
+                + ("；该 Web 应用的远程攻击面为浏览器，不包含操作人员的本地访问。"
                    if is_web else
-                   "; this CLI tool/library's local access is the "
-                   "operator's own.")),
+                   "；该 CLI 工具或库的本地访问权限属于操作人员本人。")),
         }
     return {
         "kind": "browser_only",
         "attacker": (
-            "Remote attacker with browser access, no server-side access, "
-            "no admin credentials."),
+            "通过浏览器访问的远程攻击者，无服务器访问权限或管理员凭据。"),
     }
 
 
@@ -575,7 +570,7 @@ def get_consistency_check_prompt(
 {code_fence}
 """
 
-    return f"""These findings have similar code patterns. Should they have the same verdict?
+    return CHINESE_REPORT_INSTRUCTION + f"""These findings have similar code patterns. Should they have the same verdict?
 
 {findings_text}
 

@@ -49,6 +49,8 @@ downgrade safety net per the plan.
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Mapping, Optional
@@ -155,7 +157,7 @@ class ConfigFile:
     """The whole config.json, post-migration to v2."""
 
     schema_version: int = CURRENT_SCHEMA_VERSION
-    default_llm: str = "openant-default"
+    default_llm: str = "deepseek-default"
     active_project: Optional[str] = None
     llm_providers: dict[str, ProviderConfig] = field(default_factory=dict)
     llm_configs: dict[str, LLMConfig] = field(default_factory=dict)
@@ -232,7 +234,14 @@ def parse_config(raw: dict) -> ConfigFile:
                 base_url=None,
             )
 
-    default_llm = raw.get("default_llm") or "openant-default"
+    # Preserve existing Anthropic installs; never silently re-route their key.
+    # Match the Go Config.DefaultLLM() fallback order.
+    legacy_anthropic = bool(legacy_api_key or legacy_default_model or "anthropic" in providers)
+    legacy_env = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()) and not bool(
+        os.environ.get("DEEPSEEK_API_KEY", "").strip())
+    default_llm = raw.get("default_llm") or (
+        "openant-default" if legacy_anthropic or legacy_env else "deepseek-default"
+    )
     if not isinstance(default_llm, str) or not default_llm:
         raise ConfigError(
             "config.json: 'default_llm' must be a non-empty string"
@@ -313,9 +322,9 @@ def _parse_configs(raw: dict) -> dict[str, LLMConfig]:
             raise ConfigError(
                 f"config.json: llm-config name must be a non-empty string, got {name!r}"
             )
-        if name == "openant-default":
+        if name in ("openant-default", "deepseek-default", "deepseek-pro"):
             raise ConfigError(
-                "config.json: 'openant-default' is a built-in name and cannot be "
+                f"config.json: {name!r} is a built-in name and cannot be "
                 "redefined in llm_configs. Copy it under a different name: "
                 "`openant llm-config copy openant-default my-config`."
             )
@@ -368,7 +377,7 @@ def _validate_phase_references(cf: ConfigFile) -> None:
     """
     for config in cf.llm_configs.values():
         for phase, ref in config.phases.items():
-            if ref.provider not in cf.llm_providers and ref.provider != "anthropic":
+            if ref.provider not in cf.llm_providers and ref.provider not in ("anthropic", "deepseek"):
                 raise ConfigError(
                     f"llm-config {config.name!r} phase {phase!r} references "
                     f"unknown provider {ref.provider!r}. Defined providers: "
@@ -447,6 +456,8 @@ def _serialise_provider(p: ProviderConfig) -> dict:
     # the no-silent-drops violation (parse is serialise's declared inverse).
     if p.request_timeout is not None:
         entry["request_timeout"] = p.request_timeout
+    if p.thinking is not None:
+        entry["thinking"] = dict(p.thinking)
     return entry
 
 
@@ -464,7 +475,7 @@ def _serialise_config(c: LLMConfig) -> dict:
 
 def empty_config() -> ConfigFile:
     """Return a fresh ConfigFile representing 'no config.json at all'."""
-    return ConfigFile()
+    return parse_config({})
 
 
 def with_provider(cf: ConfigFile, provider: ProviderConfig) -> ConfigFile:

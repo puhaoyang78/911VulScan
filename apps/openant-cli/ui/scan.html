@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="csrf" content="{{.CSRF}}">
-<title>Scan — Knostic OpenAnt</title>
+<title>扫描进度 · 911VulScan</title>
 <style nonce="{{.Nonce}}">
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; }
@@ -90,73 +90,85 @@
     background: #fff5f5; transition: all 0.15s; display: block;
   }
   .btn-disclosure:hover { background: #cf222e; color: #fff; }
+  /* Shared 911VulScan workbench design; no remote fonts or assets. */
+  body { background:#f0f5f6; color:#152b3b; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  header { background:#132c3c; } header a { color:#c6e8e3; } .main { max-width:1200px; padding:28px 24px; }
+  .page-heading { display:flex; justify-content:space-between; align-items:center; gap:18px; margin-bottom:28px; } .page-heading h1 { font-size:26px; margin:8px 0; } .page-heading p { font-size:12px; color:#5b7081; line-height:1.7; overflow-wrap:anywhere; } .eyebrow { color:#087d78; font-size:12px; letter-spacing:.08em; font-weight:700; } .new-scan { border:1px solid #bdd6d1; color:#087d78; text-decoration:none; padding:9px 14px; border-radius:8px; white-space:nowrap; font-size:13px; background:white; }
+  .steps { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); background:white; border:1px solid #dbe5e9; border-radius:12px; padding:20px 12px; gap:10px; } .step-item { min-width:0; } .step { width:100%; text-align:center; border-radius:8px; padding:10px 6px; border:1px solid #dbe5e9; font-size:13px; line-height:1.6; } .step.active { background:#e5f5ef; color:#087d78; border-color:#087d78; } .step.done { background:#087d78; border-color:#087d78; } .step.skipped { border-style:dashed; } .step.failed { background:#fff3d6; color:#865600; border-color:#e2bb66; } .step-count { font-size:10px; text-align:center; line-height:1.7; }
+  .log-panel { border-radius:12px; } .log-header { padding:13px 16px; justify-content:space-between; gap:16px; } .log-body { height:440px; font-size:12px; } .log-line .ts { color:#8295a2; } .log-empty { color:#93a9b9; } .autoscroll { color:#b4c8d2; font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; } .autoscroll input { accent-color:#34d0b3; }
+  .status-bar { background:#fff; border:1px solid #dbe5e9; border-radius:9px; padding:12px 16px; } .btn.ready { background:#087d78; border-color:#087d78; } .btn.ready:hover { background:#056661; } .artifact-note { font-size:12px; color:#5b7081; margin-top:12px; } footer { color:#5b7081; font-size:11px; padding-top:28px; } :focus-visible { outline:3px solid #e8a848; outline-offset:3px; }
+  @media(max-width:700px) { header { padding:16px; } .main { padding:22px 16px; } .steps { grid-template-columns:repeat(3,minmax(0,1fr)); } .page-heading { align-items:flex-start; } .page-heading h1 { font-size:22px; } .log-body { height:50vh; min-height:260px; } .actions .btn { flex:1; text-align:center; padding:10px; } }
+  @media(prefers-reduced-motion:reduce) { * { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
 </style>
 </head>
 <body>
 <header>
-  <a href="/">← Home</a>
+  <a href="/">← 返回工作台</a>
   <span class="sep">/</span>
   <span class="title">{{.Repo}}</span>
 </header>
-<div class="main">
+<main class="main"><div class="page-heading"><div><span class="eyebrow">911VulScan · 扫描任务</span><h1>跟踪分析进度</h1><p>模型配置：{{if .LLMConfig}}{{.LLMConfig}}{{else}}沿用已有配置{{end}} · 原始诊断信息保留命令与技术标识</p></div><a class="new-scan" href="/">新建扫描</a></div>
   <!-- Pipeline step tracker -->
   <div class="steps">
     <div class="step-item">
-      <div class="step" id="step-parse">Parse</div>
+      <div class="step" id="step-parse">代码解析</div>
       <div class="step-count" id="count-parse"></div>
     </div>
     <div class="step-item">
-      <div class="step" id="step-enhance">Enhance</div>
+      <div class="step" id="step-enhance">上下文增强</div>
       <div class="step-count" id="count-enhance"></div>
     </div>
     <div class="step-item">
-      <div class="step" id="step-analyze">Analyze</div>
+      <div class="step" id="step-analyze">漏洞分析</div>
       <div class="step-count" id="count-analyze"></div>
     </div>
     <div class="step-item">
-      <div class="step" id="step-verify">Verify</div>
+      <div class="step" id="step-verify">模拟验证</div>
       <div class="step-count" id="count-verify"></div>
     </div>
+    <div class="step-item"><div class="step" id="step-dynamic">动态测试</div><div class="step-count" id="count-dynamic"></div></div>
     <div class="step-item">
-      <div class="step" id="step-report">Report</div>
+      <div class="step" id="step-report">生成报告</div>
       <div class="step-count" id="count-report"></div>
     </div>
   </div>
 
   <!-- Error banner -->
-  <div class="error-banner" id="error-banner">Scan failed. Check the log above for details.</div>
+  <div class="error-banner" id="error-banner" role="alert">扫描未完成。请检查下方日志中的错误详情。</div>
 
   <!-- Status bar -->
   <div class="status-bar">
     <div class="dot running" id="status-dot"></div>
-    <span class="status-text" id="status-text">Scanning…</span>
+    <span class="status-text" id="status-text" data-state="connecting" role="status" aria-live="polite">正在连接扫描任务…</span>
   </div>
 
   <!-- Log terminal -->
   <div class="log-panel">
     <div class="log-header">
-      <span>scan / {{.ID}}</span>
+      <span>任务日志 / {{.ID}}</span><label class="autoscroll"><input type="checkbox" id="auto-scroll" checked> 自动滚动</label>
     </div>
-    <div class="log-body" id="log-body"></div>
+    <div class="log-body" id="log-body" tabindex="0" aria-label="扫描日志"><div id="log-empty" class="log-empty">等待扫描日志；任务可能正在排队…</div></div>
   </div>
 
   <!-- Report/Summary buttons -->
   <div class="actions">
-    <a class="btn" id="btn-summary" href="/summary/{{.ID}}" target="_blank">View Summary</a>
-    <a class="btn" id="btn-report"  href="/report/{{.ID}}"  target="_blank">View HTML Report</a>
+    <a class="btn" id="btn-summary" href="/summary/{{.ID}}" target="_blank" rel="noopener" aria-disabled="true" tabindex="-1">查看中文摘要</a>
+    <a class="btn" id="btn-report"  href="/report/{{.ID}}"  target="_blank" rel="noopener" aria-disabled="true" tabindex="-1">查看漏洞报告</a>
   </div>
 
+  <p class="artifact-note" id="artifact-note" role="status"></p>
   <!-- Disclosure report links (populated on scan complete) -->
   <div class="disclosures" id="disclosures" style="display:none">
-    <div class="disclosures-label">Disclosure Reports</div>
+    <div class="disclosures-label">漏洞披露材料</div>
     <div class="disclosure-links" id="disclosure-links"></div>
   </div>
-</div>
+<footer>911VulScan · 基于 Knostic OpenAnt 构建</footer>
+</main>
 
 <script nonce="{{.Nonce}}">
 const jobID = '{{.ID}}';
 
-const steps = ['parse','enhance','analyze','verify','report'];
+const steps = ['parse','enhance','analyze','verify','dynamic','report'];
 const stepEls = {};
 const countEls = {};
 steps.forEach(s => {
@@ -174,21 +186,25 @@ function setCount(stage, n) {
 
 function markActive(name) {
   const el = stepEls[name];
-  if (el && !el.classList.contains('done')) {
+  if (el && !el.classList.contains('done') && !el.classList.contains('failed')) {
     el.classList.add('active');
+    el.setAttribute('aria-current', 'step');
   }
 }
 function markDone(name) {
   const el = stepEls[name];
   if (el) {
     el.classList.remove('active');
+    el.removeAttribute('aria-current');
     el.classList.add('done');
     el.textContent = '✓ ' + el.textContent.replace(/^✓ /, '');
   }
 }
 function markAllDone() {
   steps.forEach(s => {
-    if (!stepEls[s].classList.contains('done')) markDone(s);
+    if (stepEls[s].classList.contains('failed')) return;
+    if (stepEls[s].classList.contains('active') || s === 'report') markDone(s);
+    else if (!stepEls[s].classList.contains('done') && !stepEls[s].classList.contains('skipped')) { stepEls[s].classList.add('skipped'); countEls[s].textContent = '未执行或无阶段记录'; }
   });
 }
 
@@ -232,22 +248,61 @@ function tryExtractCounts(line) {
   if (m) { setCount('report', parseNum(m[m.length - 1])); return; }
 }
 
+function stageFromText(text) {
+  if (/parsing repository|代码解析|解析仓库/.test(text)) return 'parse';
+  if (/enhanc|application context|上下文|增强/.test(text)) return 'enhance';
+  if (/vulnerability detection|漏洞检测|漏洞分析/.test(text)) return 'analyze';
+  if (/verif|验证|复核/.test(text)) return 'verify';
+  if (/dynamic|动态测试/.test(text)) return 'dynamic';
+  if (/generating reports|summary report|disclosure docs|生成报告/.test(text)) return 'report';
+  return null;
+}
+function finishActiveStages(next) {
+  steps.forEach(stage => { if (stage !== next && stepEls[stage].classList.contains('active')) markDone(stage); });
+}
+function markSkipped(stage, reason) {
+  const el = stepEls[stage];
+  if (!el || el.classList.contains('done')) return;
+  el.classList.remove('active'); el.removeAttribute('aria-current'); el.classList.add('skipped');
+  countEls[stage].textContent = reason || '已跳过';
+}
 function updateSteps(line) {
-  const l = line.toLowerCase();
-  if (/^\[parse\]/.test(l))                             { markActive('parse'); }
-  else if (/^✓ parse/.test(l))                          { markDone('parse'); }
-  else if (/^\[enhance\]/.test(l))                      { markDone('parse'); markActive('enhance'); }
-  else if (/^✓ enhance/.test(l))                        { markDone('enhance'); }
-  else if (/^\[analyze\]|^\[detect\]/.test(l))          { markDone('enhance'); markActive('analyze'); }
-  else if (/^✓ analy|^✓ detect/.test(l))                { markDone('analyze'); }
-  else if (/^\[verify\]/.test(l))                       { markDone('analyze'); markActive('verify'); }
-  else if (/^✓ verify/.test(l))                         { markDone('verify'); }
-  else if (/^\[report\]/.test(l))                       { markDone('verify'); markActive('report'); }
-  else if (/^✓ report/.test(l))                         { markDone('report'); }
+  const l = line.replace(/^\d{2}:\d{2}:\d{2}\s+/, '').trim().toLowerCase();
+  // The actual Python scanner emits numbered phase announcements, not only tags.
+  if (/^\[\d+\/\d+\]/.test(l)) {
+    const stage = stageFromText(l);
+    if (stage) { finishActiveStages(stage); markActive(stage); }
+    return;
+  }
+  if (/^-\s*(skipping|跳过)/.test(l)) {
+    const stage = stageFromText(l);
+    if (stage) markSkipped(stage, /docker not found|未找到 docker/.test(l) ? '未找到 Docker' : '已跳过');
+    return;
+  }
+  if (/^(warning:|警告[：:])/.test(l) && /failed|失败/.test(l)) {
+    const stage = stageFromText(l);
+    if (stage) {
+      stepEls[stage].classList.remove('active'); stepEls[stage].removeAttribute('aria-current');
+      stepEls[stage].classList.add('failed'); countEls[stage].textContent = '存在警告，查看日志';
+    }
+    return;
+  }
+  const tagged = l.match(/^\[(parse|enhance|analyze|detect|verify|report|dynamic[-_]?test|dynamic)\]/);
+  if (tagged) {
+    const name = tagged[1] === 'detect' ? 'analyze' : tagged[1].startsWith('dynamic') ? 'dynamic' : tagged[1];
+    finishActiveStages(name); markActive(name); return;
+  }
+  const completed = l.match(/^✓ (parse|enhance|analy\w*|detect|verify|report|dynamic)/);
+  if (completed) {
+    const name = completed[1].startsWith('analy') || completed[1] === 'detect' ? 'analyze' : completed[1];
+    markDone(name);
+  }
 }
 
 function classifyLine(line) {
   const l = line.toLowerCase();
+  if (/warning|failed|error|警告|失败|错误/.test(l)) return 'finding';
+  if (/^\[\d+\/\d+\]/.test(l.trim())) return 'step-tag';
   if (line.startsWith('✓') || /complete\b/.test(l)) return 'ok';
   if (/potential|vulner|finding|! /.test(l) && !line.startsWith('✓')) return 'finding';
   if (/^\[parse\]|^\[enhance\]|^\[analyze\]|^\[detect\]|^\[verify\]|^\[report\]|^\[dynamic/.test(l)) return 'step-tag';
@@ -255,8 +310,38 @@ function classifyLine(line) {
   return '';
 }
 
+function enableArtifact(id) {
+  const link = document.getElementById(id);
+  link.classList.add('ready'); link.removeAttribute('aria-disabled'); link.removeAttribute('tabindex');
+}
+// Only localize known presentation prefixes. Preserve filenames, source snippets,
+// commands and machine diagnostics verbatim so evidence remains auditable.
+function presentLog(line) {
+  const labels = {parse:'代码解析', enhance:'上下文增强', analyze:'漏洞分析', detect:'漏洞检测', verify:'模拟验证', report:'生成报告', clone:'克隆仓库', error:'错误', warning:'警告', timeout:'超时', dynamic:'动态测试', 'dynamic-test':'动态测试', 'dynamic_test':'动态测试'};
+  return line.replace(/^\[([a-z_-]+)\]/i, (tag, name) => labels[name.toLowerCase()] ? '[' + labels[name.toLowerCase()] + ']' : tag)
+    .replace(/^✓ (parse|enhance|analyze|verify|report)\b/i, (_, name) => '✓ ' + labels[name.toLowerCase()])
+    .replace(/Parsing repository\.\.\./g, '正在解析仓库…')
+    .replace(/Generating application context\.\.\./g, '正在生成项目上下文…')
+    .replace(/Enhancing dataset\.\.\./g, '正在增强代码上下文…')
+    .replace(/Running vulnerability detection \(Stage 1\)\.\.\./g, '正在进行漏洞分析（第一阶段）…')
+    .replace(/Running verification \(Stage 2\)\.\.\./g, '正在进行模拟验证（第二阶段）…')
+    .replace(/Building pipeline_output\.json\.\.\./g, '正在汇总 pipeline_output.json…')
+    .replace(/Running dynamic tests \(Docker\)\.\.\./g, '正在运行动态测试（Docker）…')
+    .replace(/Generating reports\.\.\./g, '正在生成报告…')
+    .replace(/Skipping dynamic test \(Docker not found\)\./g, '跳过动态测试（未找到 Docker）。')
+    .replace(/Skipping dynamic test \(no findings to test\)\./g, '跳过动态测试（没有待测试发现）。')
+    .replace(/Skipping dynamic test \(not enabled\)\./g, '跳过动态测试（未启用）。')
+    .replace(/Skipping verification \(no vulnerable findings\)\./g, '跳过模拟验证（未发现待验证漏洞）。')
+    .replace(/Skipping verification \(--no-verify or not requested\)\./g, '跳过模拟验证（未启用）。')
+    .replace(/\[Scan\] LLM config:/g, '[扫描] 模型配置：')
+    .replace(/\bParsed: (\d+) units/g, '已解析：$1 个代码单元')
+    .replace(/\bEnhanced: (\d+) units/g, '已增强：$1 个代码单元')
+    .replace(/\bConfirmed: (\d+) vulnerabilities/g, '已确认：$1 个漏洞');
+}
+
 function appendLine(rawLine) {
   const logBody = document.getElementById('log-body');
+  const empty = document.getElementById('log-empty'); if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'log-line';
 
@@ -276,11 +361,11 @@ function appendLine(rawLine) {
 
   const bodySpan = document.createElement('span');
   bodySpan.className = 'body';
-  bodySpan.textContent = body;
+  bodySpan.textContent = presentLog(body);
   div.appendChild(bodySpan);
 
   logBody.appendChild(div);
-  logBody.scrollTop = logBody.scrollHeight;
+  if (document.getElementById('auto-scroll').checked) logBody.scrollTop = logBody.scrollHeight;
 
   updateSteps(rawLine);
   tryExtractCounts(rawLine);
@@ -297,30 +382,35 @@ function loadDisclosures() {
         const a = document.createElement('a');
         a.href = d.url;
         a.target = '_blank';
+        a.rel = 'noopener';
         a.className = 'btn-disclosure';
         a.textContent = d.label;
         links.appendChild(a);
       });
       container.style.display = '';
     })
-    .catch(() => {});
+    .catch(() => { document.getElementById('artifact-note').textContent = '披露材料暂时无法加载，请刷新重试。'; });
 }
 
 function onDone(status) {
   streamClosed = true;
+  const emptyLog = document.getElementById('log-empty');
+  if (emptyLog) emptyLog.textContent = '本任务未保留日志记录。';
   const dot = document.getElementById('status-dot');
   const text = document.getElementById('status-text');
   dot.classList.remove('running');
+  text.dataset.state = status;
 
   if (status === 'done') {
     dot.classList.add('done');
-    text.textContent = 'Scan complete';
+    text.textContent = document.querySelector('.step.failed') ? '扫描已完成，部分阶段存在警告，请结合日志复核' : '扫描已完成';
     markAllDone();
-    document.getElementById('btn-report').classList.add('ready');
+    enableArtifact('btn-report');
     // Only enable Summary button if the summary actually exists.
     fetch('/summary/' + jobID, { method: 'HEAD' }).then(r => {
-      if (r.ok) document.getElementById('btn-summary').classList.add('ready');
-    });
+      if (r.ok) enableArtifact('btn-summary');
+      else document.getElementById('artifact-note').textContent = '本次扫描未生成摘要，可先查看漏洞报告。';
+    }).catch(() => { document.getElementById('artifact-note').textContent = '摘要状态暂时无法确认，请刷新重试。'; });
     loadDisclosures();
   } else if (status === 'timeout') {
     // #320: the invoke deadline killed the run — a distinct state with the
@@ -329,13 +419,13 @@ function onDone(status) {
     // the generic "Scan failed" banner contradicted index.html's deliberate
     // amber-not-red timeout design).
     dot.classList.add('timeout');
-    text.textContent = 'Scan timed out — raise OPENANT_INVOKE_TIMEOUT to finish a long run';
+    text.textContent = '扫描已超时，可调高 OPENANT_INVOKE_TIMEOUT 后重新运行';
     document.getElementById('error-banner').textContent =
-      'Scan timed out — raise OPENANT_INVOKE_TIMEOUT (e.g. OPENANT_INVOKE_TIMEOUT=2h) to finish a long run.';
+      '任务超时。可设置 OPENANT_INVOKE_TIMEOUT=2h 后重新运行；已生成的中间结果保留在任务目录中。';
     document.getElementById('error-banner').style.display = 'block';
   } else {
     dot.classList.add('error');
-    text.textContent = 'Scan failed';
+    text.textContent = '扫描未完成，请检查日志';
     document.getElementById('error-banner').style.display = 'block';
   }
 }
@@ -343,6 +433,8 @@ function onDone(status) {
 function connect() {
   if (streamClosed) return;
   const es = new EventSource('/scan/' + jobID + '/logs');
+  es.onopen = function() { if (!streamClosed) { const text = document.getElementById('status-text'); text.textContent = '扫描进行中，日志已连接'; text.dataset.state = 'running'; } };
+  window.addEventListener('pagehide', () => es.close(), { once:true });
 
   es.onmessage = function(e) {
     appendLine(e.data);
@@ -359,14 +451,16 @@ function connect() {
     // re-sending the whole log — leave those alone. CLOSED means a fatal,
     // non-retryable response (e.g. the job was deleted -> 404); stop and surface
     // it rather than spinning a fresh connection every 2s (an infinite loop).
+    if (es.readyState === EventSource.CONNECTING && !streamClosed) { const text = document.getElementById('status-text'); text.textContent = '连接暂时中断，正在自动重连…'; text.dataset.state = 'reconnecting'; }
     if (es.readyState === EventSource.CLOSED && !streamClosed) {
       streamClosed = true;
       const text = document.getElementById('status-text');
-      if (text) text.textContent = 'Live updates disconnected — reload to reconnect.';
+      if (text) { text.textContent = '实时连接已断开，请刷新页面重新连接。'; text.dataset.state = 'disconnected'; }
     }
   };
 }
 
+window.addEventListener('pageshow', event => { if (event.persisted) { streamClosed = false; location.reload(); } });
 connect();
 </script>
 </body>

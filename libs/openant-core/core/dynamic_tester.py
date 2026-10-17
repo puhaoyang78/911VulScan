@@ -66,13 +66,13 @@ def run_tests(
     # Check Docker availability
     if not shutil.which("docker"):
         raise RuntimeError(
-            "Docker is required for dynamic testing but was not found. "
-            "Install Docker and ensure it is running."
+            "动态验证需要 Docker，但当前未找到可执行文件。"
+            "请安装并启动 Docker；不会在宿主机直接运行目标代码。"
         )
 
     if not os.path.exists(pipeline_output_path):
         raise FileNotFoundError(
-            f"pipeline_output.json not found: {pipeline_output_path}"
+            f"未找到 pipeline_output.json： {pipeline_output_path}"
         )
 
     os.makedirs(output_dir, exist_ok=True)
@@ -89,8 +89,8 @@ def run_tests(
         if f.get("stage2_verdict") in DYNAMIC_TESTABLE
     ]
 
-    print(f"[Dynamic Test] {len(testable)} testable findings "
-          f"(out of {len(findings)} total)", file=sys.stderr)
+    print(f"[动态测试] 可测试发现：{len(testable)} 项 "
+          f"（总计 {len(findings)} 项）", file=sys.stderr)
 
     if not testable:
         results_path = os.path.join(output_dir, "dynamic_test_results.json")
@@ -105,7 +105,7 @@ def run_tests(
     # Import and run
     from utilities.dynamic_tester import run_dynamic_tests
 
-    print(f"[Dynamic Test] Running with max_retries={max_retries}...",
+    print(f"[动态测试] 开始执行，最大重试次数：{max_retries}……",
           file=sys.stderr)
 
     results = run_dynamic_tests(
@@ -149,7 +149,7 @@ def run_tests(
             errors += 1
 
     results_json_path = os.path.join(output_dir, "dynamic_test_results.json")
-    results_md_path = os.path.join(output_dir, "dynamic_test_results.md")
+    results_md_path = os.path.join(output_dir, "DYNAMIC_TEST_RESULTS.md")
 
     # Check which output files exist (dynamic_tester may write them itself)
     if not os.path.exists(results_md_path):
@@ -157,9 +157,9 @@ def run_tests(
 
     tracking.log_usage("Dynamic Test", _phase_baseline)
 
-    print(f"\n[Dynamic Test] Results: {confirmed} confirmed, "
-          f"{not_reproduced} not reproduced, {blocked} blocked, "
-          f"{inconclusive} inconclusive, {errors} errors", file=sys.stderr)
+    print(f"\n[动态测试] 结果：已确认 {confirmed} 项，"
+          f"未复现 {not_reproduced} 项，已阻止 {blocked} 项，"
+          f"无法判定 {inconclusive} 项，错误 {errors} 项", file=sys.stderr)
 
     return DynamicTestStepResult(
         results_json_path=results_json_path,

@@ -119,7 +119,7 @@ def _build_vulnerable_code_section(file_path: str, code: str, language: str | No
     # when the path carries no recognizable extension.
     fence_lang = fence_for_path(file_path, fallback=language)
     return (
-        "## Vulnerable Code\n\n"
+        "## 漏洞代码\n\n"
         f"`{file_path}`:\n\n"
         f"```{fence_lang}\n{code}\n```"
     )
@@ -197,7 +197,7 @@ def _dedup_caller_callee(
         if (f.get("route_key") or f.get("unit_id", "")) not in remove_keys
     ]
     removed = len(confirmed) - len(deduped)
-    print(f"[Report] Deduplicated {removed} caller/callee finding(s)", file=sys.stderr)
+    print(f"[报告] 已去重 {removed} 个调用者/被调用者发现项", file=sys.stderr)
     return deduped
 
 
@@ -368,7 +368,7 @@ def build_pipeline_output(
         A ``(output_path, findings_count)`` tuple: the *output_path* written
         to and the number of findings emitted into ``pipeline_output.json``.
     """
-    print(f"[Report] Building pipeline_output.json...", file=sys.stderr)
+    print(f"[报告] 正在构建 pipeline_output.json…", file=sys.stderr)
 
     experiment = read_json(results_path)
     # fa17 TRUST BOUNDARY: normalize model-supplied `results` to dicts-only once
@@ -503,7 +503,7 @@ def build_pipeline_output(
                     flow_str = " -> ".join(_coerce_to_str(step) for step in data_flow)
                 else:
                     flow_str = _coerce_to_str(data_flow)
-                parts.append("Data flow: " + flow_str)
+                parts.append("数据流：" + flow_str)
             # #534: read Stage 2's explanation from where the verify stage
             # actually writes it (finding["verification"]["explanation"]),
             # with the legacy top-level key as fallback — the old read was a
@@ -514,7 +514,7 @@ def build_pipeline_output(
                 _v = {}
             _v_expl = _v.get("explanation") or finding.get("verification_explanation")
             if _v_expl:
-                parts.append("Verification: " + _coerce_to_str(_v_expl))
+                parts.append("验证说明：" + _coerce_to_str(_v_expl))
             steps_to_reproduce = "\n\n".join(parts) if parts else None
 
         # Determine stage2 verdict.
@@ -565,7 +565,7 @@ def build_pipeline_output(
             # #314: the run-stable join key (see finding_identity_key);
             # VULN-NNN stays as the display ID.
             "identity_key": finding_identity_key(_file, _func, _cwe),
-            "name": vuln.get("name", finding.get("finding", "Unknown Vulnerability")),
+            "name": vuln.get("name", finding.get("finding", "未知漏洞")),
             "short_name": vuln.get("short_name", finding.get("verdict", "vuln")),
             "location": {
                 # function is the exact complement of file so that
@@ -577,7 +577,7 @@ def build_pipeline_output(
                 "function": route_key.split(":", 1)[1] if ":" in route_key else route_key,
             },
             "cwe_id": vuln.get("cwe_id") or finding.get("cwe_id") or full_result.get("cwe_id", 0),
-            "cwe_name": vuln.get("cwe_name") or finding.get("cwe_name") or full_result.get("cwe_name", "Unknown"),
+            "cwe_name": vuln.get("cwe_name") or finding.get("cwe_name") or full_result.get("cwe_name", "未知"),
             "stage1_verdict": finding.get("verdict", finding.get("finding", "vulnerable")),
             "stage2_verdict": stage2_verdict,
             # #534: Stage 2's text reaches the disclosure prompt as OWN
@@ -788,9 +788,9 @@ def build_pipeline_output(
             _reach_telemetry["orphan_advisory"] = _oa
     elif total_units > 0 and (processing_level or "").lower() not in ("", "all", "none"):
         reachability_warnings.append(
-            f"Reachability filtering was requested (level={processing_level!r}) "
-            "but no reachability_filter record was found; reachable_units falls "
-            "back to total_units and may overstate reachability."
+            f"已请求可达性筛选（level={processing_level!r}），"
+            "但未找到 reachability_filter 记录；reachable_units 回退为 "
+            "total_units，可能高估可达范围。"
         )
 
     # reachable_units is a parse-stage count (units the filter kept); total_units
@@ -799,10 +799,9 @@ def build_pipeline_output(
     # shows reachable_units > total_units without explanation.
     if isinstance(reachable_units, int) and reachable_units > total_units:
         reachability_warnings.append(
-            f"reachable_units ({reachable_units}) exceeds analyzed total_units "
-            f"({total_units}): analysis covered a subset of the reachable units "
-            "(e.g. --limit). reachable_units is the reachability filter's kept "
-            "count; units_analyzed reflects what was actually analyzed."
+            f"reachable_units（{reachable_units}）超过已分析的 total_units"
+            f"（{total_units}）：本次仅分析了部分可达代码单元（例如使用了 --limit）。"
+            "reachable_units 为可达性筛选保留的数量，units_analyzed 为实际分析的数量。"
         )
 
     pipeline_output = {
@@ -923,9 +922,9 @@ def build_pipeline_output(
     if diff_meta is not None:
         pipeline_output["diff"] = diff_meta
         _banner = (
-            f"[Report] Incremental scan: base={diff_meta.get('base_ref')}, "
+            f"[报告] 增量扫描：base={diff_meta.get('base_ref')}, "
             f"scope={diff_meta.get('scope')}, "
-            f"{diff_meta.get('units_in_diff', '?')}/{diff_meta.get('units_total_parsed', '?')} units"
+            f"{diff_meta.get('units_in_diff', '?')}/{diff_meta.get('units_total_parsed', '?')} 个代码单元"
         )
         if diff_meta.get("pr_number"):
             _banner += f", PR #{diff_meta['pr_number']}"
@@ -933,8 +932,8 @@ def build_pipeline_output(
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     write_json(output_path, pipeline_output, ensure_ascii=False)
-    print(f"  pipeline_output.json: {len(findings_data)} findings", file=sys.stderr)
-    print(f"  Written to {output_path}", file=sys.stderr)
+    print(f"  pipeline_output.json：{len(findings_data)} 个发现项", file=sys.stderr)
+    print(f"  已写入 {output_path}", file=sys.stderr)
 
     return output_path, len(findings_data)
 
@@ -956,7 +955,7 @@ def generate_html_report(
     Returns:
         ReportResult with the output path.
     """
-    print("[Report] Generating HTML report...", file=sys.stderr)
+    print("[报告] 正在生成 HTML 报告…", file=sys.stderr)
 
     # Pass step reports dir so the HTML report can include cost/time breakdown
     step_reports_dir = os.path.dirname(os.path.abspath(results_path))
@@ -991,9 +990,9 @@ def generate_html_report(
                             env=child_interpreter_env(), timeout=1800)
 
     if result.returncode != 0:
-        raise RuntimeError(f"HTML report generation failed (exit code {result.returncode})")
+        raise RuntimeError(f"HTML 报告生成失败（退出码 {result.returncode}）")
 
-    print(f"  HTML report: {output_path}", file=sys.stderr)
+    print(f"  HTML 报告： {output_path}", file=sys.stderr)
     return ReportResult(output_path=output_path, format="html")
 
 
@@ -1014,7 +1013,7 @@ def generate_csv_report(
     Returns:
         ReportResult with the output path.
     """
-    print("[Report] Generating CSV report...", file=sys.stderr)
+    print("[报告] 正在生成 CSV 报告…", file=sys.stderr)
 
     # -P: keep the untrusted CWD off sys.path so a hostile report/ package in the
     # scanned repo cannot shadow this one. See the html path above for the full note.
@@ -1029,9 +1028,9 @@ def generate_csv_report(
                             env=child_interpreter_env(), timeout=1800)
 
     if result.returncode != 0:
-        raise RuntimeError(f"CSV export failed (exit code {result.returncode})")
+        raise RuntimeError(f"CSV 导出失败（退出码 {result.returncode}）")
 
-    print(f"  CSV report: {output_path}", file=sys.stderr)
+    print(f"  CSV 报告： {output_path}", file=sys.stderr)
     return ReportResult(output_path=output_path, format="csv")
 
 
@@ -1064,7 +1063,7 @@ def generate_summary_report(
         resolve_llm_config,
     )
 
-    print("[Report] Generating summary report (LLM)...", file=sys.stderr)
+    print("[报告] 正在调用大语言模型生成摘要报告…", file=sys.stderr)
 
     pipeline_data = read_json(results_path)
     # fa18 TRUST BOUNDARY: `findings` is a model array-of-dict read back from
@@ -1081,7 +1080,7 @@ def generate_summary_report(
     try:
         validate_pipeline_output(pipeline_data)
     except ValidationError as e:
-        raise RuntimeError(f"Invalid pipeline output: {e}")
+        raise RuntimeError(f"扫描结果格式无效： {e}")
 
     # Resolve the report-phase binding once and pass it through.
     # #684: when the scanner invokes this mid-scan, it passes its own
@@ -1099,8 +1098,8 @@ def generate_summary_report(
     with open_utf8(output_path, "w") as f:
         f.write(report_text)
 
-    print(f"  Summary report: {output_path}", file=sys.stderr)
-    print(f"  Cost: ${usage['cost_usd']:.4f} ({usage['total_tokens']:,} tokens)", file=sys.stderr)
+    print(f"  摘要报告： {output_path}", file=sys.stderr)
+    print(f"  预估费用： ${usage['cost_usd']:.4f} ({usage['total_tokens']:,} tokens)", file=sys.stderr)
 
     # Record in global tracker so step_context picks it up
     _record_usage_in_tracker(usage, report_binding)
@@ -1160,7 +1159,7 @@ def generate_disclosure_docs(
         resolve_llm_config,
     )
 
-    print("[Report] Generating disclosure documents (LLM)...", file=sys.stderr)
+    print("[报告] 正在调用大语言模型生成披露文档…", file=sys.stderr)
 
     pipeline_data = read_json(results_path)
     # fa18 TRUST BOUNDARY: normalize model `findings` to dicts-only at load,
@@ -1175,7 +1174,7 @@ def generate_disclosure_docs(
     try:
         validate_pipeline_output(pipeline_data)
     except ValidationError as e:
-        raise RuntimeError(f"Invalid pipeline output: {e}")
+        raise RuntimeError(f"扫描结果格式无效： {e}")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -1207,9 +1206,9 @@ def generate_disclosure_docs(
     ]
 
     if not confirmed:
-        print("  No confirmed vulnerabilities to generate disclosures for.", file=sys.stderr)
+        print("  没有可生成披露文档的已确认漏洞。", file=sys.stderr)
     else:
-        print(f"  Generating {len(confirmed)} disclosures in parallel (8 workers)...",
+        print(f"  正在并行生成 {len(confirmed)} 份披露文档（8 个任务）…",
               file=sys.stderr)
 
         def _one(args):
@@ -1231,7 +1230,7 @@ def generate_disclosure_docs(
                 print(f"  [{count}/{len(confirmed)}] {name} -> {filepath}",
                       file=sys.stderr)
         except KeyboardInterrupt:
-            print("\n[Report] Interrupted — cancelling pending disclosures...",
+            print("\n[报告] 已中断，正在取消待生成的披露文档…",
                   file=sys.stderr, flush=True)
             executor.shutdown(wait=False, cancel_futures=True)
             raise
@@ -1239,8 +1238,8 @@ def generate_disclosure_docs(
 
     merged_usage = _merge_usage(all_usages) if all_usages else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
 
-    print(f"  Disclosures: {count} files in {output_dir}", file=sys.stderr)
-    print(f"  Cost: ${merged_usage['cost_usd']:.4f} ({merged_usage['total_tokens']:,} tokens)", file=sys.stderr)
+    print(f"  披露文档：{count} 个文件，目录 {output_dir}", file=sys.stderr)
+    print(f"  预估费用： ${merged_usage['cost_usd']:.4f} ({merged_usage['total_tokens']:,} tokens)", file=sys.stderr)
 
     # Record in global tracker so step_context picks it up
     _record_usage_in_tracker(merged_usage, report_binding)
@@ -1289,9 +1288,9 @@ def _record_usage_in_tracker(usage: dict, binding):
         except Exception:
             # The counting mechanism is unavailable: the stderr line below
             # is the only remaining signal — still never silent.
-            print("[report] accounting hand-off failed AND the counter "
-                  "is unavailable", file=sys.stderr)
-        print(f"[report] accounting hand-off failed "
+            print("[报告] 用量记录传递失败，且计数器"
+                  "不可用", file=sys.stderr)
+        print(f"[报告] 用量记录传递失败 "
               f"({type(exc).__name__}): {exc}", file=sys.stderr)
 
 

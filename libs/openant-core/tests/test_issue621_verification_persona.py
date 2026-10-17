@@ -216,9 +216,10 @@ def test_system_prompt_untrusted_arm():
 
 def test_system_prompt_unchanged_for_golden_classes():
     assert "local filesystem access" in get_verification_system_prompt(all_trusted_cli())
+    from prompts.report_language import CHINESE_REPORT_INSTRUCTION
     assert get_verification_system_prompt(None) == (
         "You are a penetration tester. You only report vulnerabilities "
-        "you can actually exploit.")
+        "you can actually exploit." + CHINESE_REPORT_INSTRUCTION)
     assert "browser attacker" in get_verification_system_prompt(threat_model_ctx())
 
 
@@ -339,35 +340,35 @@ def test_summary_methodology_block_is_deterministic():
         "attacker": "An attacker who supplies the untrusted input this "
                     "application processes (input_files)."}}
     out = _summary_methodology_block(base)
-    assert "## Methodology" in out
-    assert "Attacker model: An attacker who supplies" in out
-    assert "Two-stage analysis" in out
+    assert "## 分析方法" in out
+    assert "攻击者模型：An attacker who supplies" in out
+    assert "两阶段分析" in out
 
     skipped = {"pipeline_stats": {"skipped_steps": [
         {"step": "verify", "reason": "no_candidates"}]}}
     out = _summary_methodology_block(skipped)
-    assert "Stage 2 did not run" in out
-    assert "Attacker model:" not in out
+    assert "未运行第 2 阶段" in out
+    assert "攻击者模型：" not in out
 
     failed = {"pipeline_stats": {"skipped_steps": [
         {"step": "verify", "reason": "failed"}]}}
     out = _summary_methodology_block(failed)
-    assert "failed to complete" in out, (
+    assert "未能完成" in out, (
         "a verify that raised mid-run did not 'not run' — the wording must "
         "not understate it")
-    assert "Attacker model:" not in out
+    assert "攻击者模型：" not in out
 
     old_artifact = {"pipeline_stats": {"skipped_steps": []}}
     out = _summary_methodology_block(old_artifact)
-    assert "not recorded by this scan" in out, (
+    assert "本次扫描未记录" in out, (
         "an old artifact without the key gets the honest absence, never a guess")
 
     hostile = {"pipeline_stats": {"skipped_steps": []}, "attacker_model": {
         "kind": "untrusted_input",
         "attacker": "x" * 500}}
     out = _summary_methodology_block(hostile)
-    line = [l for l in out.splitlines() if l.startswith("Attacker model:")][0]
-    assert len(line) <= 300 + len("Attacker model: "), (
+    line = [l for l in out.splitlines() if l.startswith("攻击者模型：")][0]
+    assert len(line) <= 300 + len("攻击者模型："), (
         "a repo-authored descriptor cannot balloon the deterministic section")
 
 

@@ -19,10 +19,11 @@ from pathlib import Path
 import core.scanner as scanner_mod
 from tests.test_pr69_report_llmconfig_forwarding import _install_minimal_pipeline
 
-# brings the autouse _offline_registry fixture (probe neutered, config resolves).
-# Package-qualified so the file also collects when run in isolation, not only
-# under a whole-`tests/` run (bare sibling names resolve only mid-suite).
-pytest_plugins = ("tests.test_pr69_report_llmconfig_forwarding",)
+# Import the autouse fixture locally; pytest_plugins would activate it for
+# every collected test, including registry tests that need real construction.
+from tests import test_pr69_report_llmconfig_forwarding as _report_harness
+
+_offline_registry = _report_harness._offline_registry
 
 
 def test_step_counter_never_overflows_when_optional_steps_skipped(

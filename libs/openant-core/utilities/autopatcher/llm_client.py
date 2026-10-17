@@ -766,7 +766,8 @@ def call_llm(prompt: str, model: str = GPT_4O_MINI, stage: str = "unknown") -> s
     messages = [Message(role="user", content=[TextBlock(text=prompt)])]
 
     try:
-        result = adapter.complete(model=model_to_use, system=None, messages=messages, max_tokens=resolved_max_tokens)
+        from utilities.llm.language import with_chinese_output
+        result = adapter.complete(model=model_to_use, system=with_chinese_output(None), messages=messages, max_tokens=resolved_max_tokens)
     except LLMNotFoundError as exc:
         _handle_model_unavailable(provider, model_to_use, str(exc))  # always raises
     except LLMError as exc:

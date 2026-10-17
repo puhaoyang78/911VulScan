@@ -102,21 +102,21 @@ def validate_pipeline_output(data: dict) -> PipelineOutput:
 
     for field in required_fields:
         if field not in data:
-            raise ValidationError(f"Missing required field: {field}")
+            raise ValidationError(f"缺少必填字段： {field}")
 
     if "name" not in data["repository"]:
-        raise ValidationError("repository.name is required")
+        raise ValidationError("缺少必填字段 repository.name")
 
     if not isinstance(data["findings"], list):
-        raise ValidationError("findings must be a list")
+        raise ValidationError("findings 必须为列表")
 
     finding_required = ["id", "name", "short_name", "location", "cwe_id", "cwe_name", "stage1_verdict", "stage2_verdict"]
     for i, finding in enumerate(data["findings"]):
         for field in finding_required:
             if field not in finding:
-                raise ValidationError(f"Finding {i}: missing required field '{field}'")
+                raise ValidationError(f"发现项 {i}：缺少必填字段 '{field}'")
 
         if "file" not in finding["location"] or "function" not in finding["location"]:
-            raise ValidationError(f"Finding {i}: location must have 'file' and 'function'")
+            raise ValidationError(f"发现项 {i}：location 必须包含 'file' 和 'function'")
 
     return PipelineOutput.from_dict(data)

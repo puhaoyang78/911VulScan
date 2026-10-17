@@ -43,7 +43,7 @@ def collect_result(
             finding_id=finding_id,
             identity_key=identity_key,
             status="ERROR",
-            details="Test generation failed — LLM did not return valid test code",
+            details="测试生成失败：模型未返回有效测试代码",
             generation_cost_usd=generation_cost,
         )
 
@@ -53,11 +53,21 @@ def collect_result(
             finding_id=finding_id,
             identity_key=identity_key,
             status="ERROR",
-            details="Docker execution was not attempted",
+            details="未执行 Docker 测试",
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
             generation_cost_usd=generation_cost,
+        )
+
+    if getattr(execution, "execution_error", None):
+        return DynamicTestResult(
+            finding_id=finding_id, identity_key=identity_key, status="ERROR",
+            details=execution.execution_error,
+            test_code=generation.get("test_script", ""),
+            dockerfile=generation.get("dockerfile", ""),
+            docker_compose=generation.get("docker_compose", ""),
+            elapsed_seconds=execution.elapsed_seconds, generation_cost_usd=generation_cost,
         )
 
     # Build failure
@@ -66,7 +76,7 @@ def collect_result(
             finding_id=finding_id,
             identity_key=identity_key,
             status="ERROR",
-            details=f"Docker build failed: {execution.build_error[:2000]}",
+            details=f"Docker 构建失败： {execution.build_error[:2000]}",
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -80,7 +90,7 @@ def collect_result(
             finding_id=finding_id,
             identity_key=identity_key,
             status="INCONCLUSIVE",
-            details="Container execution timed out",
+            details="容器执行超时",
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -96,9 +106,9 @@ def collect_result(
             finding_id=finding_id,
             identity_key=identity_key,
             status="ERROR",
-            details=f"Container did not produce valid JSON output. "
-                    f"Exit code: {execution.exit_code}. "
-                    f"Stderr: {execution.stderr[:300]}",
+            details=f"容器未输出有效 JSON 结果。"
+                    f"退出码：{execution.exit_code}。"
+                    f"标准错误：{execution.stderr[:300]}",
             evidence=[TestEvidence(type="command_output", content=execution.stdout[:2000])],
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
@@ -111,11 +121,21 @@ def collect_result(
     status = parsed.get("status", "ERROR")
     if status not in VALID_STATUSES:
         status = "INCONCLUSIVE"
+    details = parsed.get("details", "")
+    if execution.exit_code != 0:
+        # A stale/synthetic JSON line printed before a crash is not a successful
+        # test. The trusted C runner exits 0 only after capturing sanitizer proof.
+        status = "ERROR"
+        details = f"容器异常退出（退出码 {execution.exit_code}），不能采信其结果。{execution.stderr[:300]}"
 
     evidence = []
     for e in (parsed.get("evidence") or []):
-        if isinstance(e, dict) and "type" in e and "content" in e:
+        if isinstance(e, dict) and isinstance(e.get("type"), str) and isinstance(e.get("content"), str):
             evidence.append(TestEvidence(type=e["type"], content=str(e["content"])[:5000]))
+
+    if status == "CONFIRMED" and not any(e.type.strip() and e.content.strip() for e in evidence):
+        status = "INCONCLUSIVE"
+        details = "测试声称已确认，但未提供有效证据，无法确认漏洞。"
 
     return DynamicTestResult(
         finding_id=finding_id,
@@ -126,7 +146,7 @@ def collect_result(
         # EVERY fresh run (the merge self-disables).
         identity_key=identity_key,
         status=status,
-        details=parsed.get("details", ""),
+        details=details,
         evidence=evidence,
         test_code=generation.get("test_script", ""),
         dockerfile=generation.get("dockerfile", ""),
@@ -145,9 +165,16 @@ def _parse_container_output(stdout: str) -> dict | None:
     if not stdout.strip():
         return None
 
+    def valid(obj):
+        return (isinstance(obj, dict) and isinstance(obj.get("status"), str)
+                and isinstance(obj.get("details", ""), str)
+                and isinstance(obj.get("evidence", []), list))
+
     # Try parsing the entire output as JSON
     try:
-        return json.loads(stdout.strip())
+        parsed = json.loads(stdout.strip())
+        if valid(parsed):
+            return parsed
     except json.JSONDecodeError:
         pass
 
@@ -157,7 +184,9 @@ def _parse_container_output(stdout: str) -> dict | None:
         line = line.strip()
         if line.startswith("{"):
             try:
-                return json.loads(line)
+                parsed = json.loads(line)
+                if valid(parsed):
+                    return parsed
             except json.JSONDecodeError:
                 continue
 

@@ -5,6 +5,7 @@ and collecting stdout/stderr output. All execution is isolated
 in Docker containers with no host volume mounts or privileged mode.
 """
 
+import json
 import os
 import re
 import shutil
@@ -32,11 +33,14 @@ class DockerExecutionResult:
         self.exit_code: int = -1
         self.timed_out: bool = False
         self.build_error: str | None = None
+        self.execution_error: str | None = None
+        self.infrastructure_error: bool = False
         self.elapsed_seconds: float = 0.0
 
     @property
     def success(self) -> bool:
-        return self.build_error is None and not self.timed_out
+        return (self.build_error is None and self.execution_error is None
+                and not self.timed_out and self.exit_code == 0)
 
 
 # Per-service compose keys we KEEP when reconstructing an untrusted compose. This is an
@@ -249,6 +253,10 @@ def _write_test_files(work_dir: str, generation: dict, source_file: str | None =
             the file is copied into *work_dir* so the Dockerfile can COPY it
             without the LLM having to guess the path.
     """
+    if generation.get("native_language"):
+        _write_native_test_files(work_dir, generation, source_file)
+        return
+
     # Pre-stage the vulnerable source file so `COPY <basename> .` just works.
     if source_file and os.path.isfile(source_file):
         shutil.copy2(source_file, os.path.join(work_dir, os.path.basename(source_file)))
@@ -291,6 +299,29 @@ def _write_test_files(work_dir: str, generation: dict, source_file: str | None =
         compose_content = _sanitize_compose(generation["docker_compose"])
         with open_utf8(os.path.join(work_dir, "docker-compose.yml"), "w") as f:
             f.write(compose_content)
+
+
+def _write_native_test_files(work_dir: str, generation: dict, source_file: str | None) -> None:
+    """固定 C/C++ scaffold；模型不能改写执行器、Dockerfile 或编译命令。"""
+    language = generation.get("native_language")
+    if language not in {"c", "cpp"}:
+        raise ValueError("C/C++ 测试语言配置无效")
+    if not source_file or not os.path.isfile(source_file):
+        raise ValueError("C/C++ 动态验证缺少真实目标源文件；请提供 --repo-path，未执行测试")
+    test_name = "test_exploit.cpp" if language == "cpp" else "test_exploit.c"
+    reserved = {test_name, "Dockerfile", "_openant_c_runner.py", "_openant_c_spec.json"}
+    if source_file:
+        source_name = os.path.basename(source_file)
+        if source_name in reserved:
+            raise ValueError("目标源文件名与 C/C++ 测试模板冲突，未执行测试")
+        shutil.copy2(source_file, os.path.join(work_dir, source_name))
+    shutil.copy2(os.path.join(_TEMPLATES_DIR, "c.Dockerfile"), os.path.join(work_dir, "Dockerfile"))
+    shutil.copy2(os.path.join(_TEMPLATES_DIR, "c_runner.py"), os.path.join(work_dir, "_openant_c_runner.py"))
+    with open_utf8(os.path.join(work_dir, test_name), "w") as handle:
+        handle.write(generation["test_script"])
+    with open_utf8(os.path.join(work_dir, "_openant_c_spec.json"), "w") as handle:
+        json.dump({"language": language, "test_filename": test_name,
+                   "target_filename": os.path.basename(source_file)}, handle)
 
 
 # The env the docker build/run subprocess is ALLOWED to see. `docker compose`
@@ -375,7 +406,9 @@ def _run_command(cmd: list[str], timeout: int, cwd: str = None) -> tuple[str, st
         )
         return result.stdout, result.stderr, result.returncode, False
     except subprocess.TimeoutExpired:
-        return "", "Command timed out", -1, True
+        return "", "命令执行超时", -1, True
+    except OSError as exc:
+        return "", f"无法启动命令 {cmd[0]}：{exc}", 127, False
 
 
 def run_single_container(
@@ -431,6 +464,8 @@ def run_single_container(
             # Single container: docker build + run
             result = _run_single(work_dir, image_tag, network_name,
                                  container_timeout, build_timeout)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        result.execution_error = f"测试文件准备失败：{exc}"
     finally:
         result.elapsed_seconds = time.time() - start_time
         # Clean up work directory
@@ -458,7 +493,8 @@ def _run_single(
         cwd=work_dir,
     )
     if code != 0 or timed_out:
-        result.build_error = stderr if not timed_out else "Build timed out"
+        result.build_error = (stderr or stdout or f"Docker 构建退出码：{code}") if not timed_out else "Docker 构建超时"
+        result.infrastructure_error = code == 127
         result.stderr = stderr
         result.timed_out = timed_out
         return result
@@ -535,7 +571,8 @@ def _run_compose(
         cwd=work_dir,
     )
     if code != 0 or timed_out:
-        result.build_error = stderr if not timed_out else "Compose build timed out"
+        result.build_error = (stderr or stdout or f"Docker Compose 构建退出码：{code}") if not timed_out else "Docker Compose 构建超时"
+        result.infrastructure_error = code == 127
         result.stderr = stderr
         result.timed_out = timed_out
         # #536: a failed build still tears down. The finally below covers

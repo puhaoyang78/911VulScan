@@ -50,8 +50,7 @@ def should_skip_for_language(file_path: str, scan_language: str | None) -> tuple
         return False, ""
     language = language_for_path(file_path) or scan_language or "unknown"
     return True, (
-        f"no dynamic-test Docker template for {language}; "
-        "skipped instead of generating an untemplated test"
+        f"语言 {language} 暂无动态测试 Docker 模板，已跳过；未执行漏洞验证。"
     )
 
 def _summary_counts_from_checkpoints(checkpointed) -> dict:
@@ -98,7 +97,7 @@ def _summary_counts_from_checkpoints(checkpointed) -> dict:
             # inflating `errors` (it is not an error; the counts stay the
             # #311 disjoint semantics).
             det = cp.get("details")
-            if isinstance(det, str) and det.strip().startswith("Container execution timed out"):
+            if isinstance(det, str) and det.strip().startswith(("Container execution timed out", "容器执行超时", "C/C++ 测试执行超时")):
                 breakdown["timeout"] = breakdown.get("timeout", 0) + 1
     return {"completed": completed, "errors": errors, "error_breakdown": breakdown}
 
@@ -108,11 +107,11 @@ def _error_category(details) -> str:
     if not isinstance(details, str) or not details:
         return "other"
     d = details.strip()
-    if d.startswith("Test generation"):
+    if d.startswith(("Test generation", "测试生成")):
         return "generation"
-    if d.startswith("Docker build failed"):
+    if d.startswith(("Docker build failed", "Docker 构建失败", "C/C++ 编译")):
         return "build"
-    if d.startswith("Container execution timed out"):
+    if d.startswith(("Container execution timed out", "容器执行超时", "C/C++ 测试执行超时")):
         # famD panel (opus, documented-not-deleted): today the collector
         # writes this details prefix with status INCONCLUSIVE (counted on
         # the completed side by the wave-r1 timeout bucket, not as an
@@ -122,7 +121,8 @@ def _error_category(details) -> str:
         # "other".
         return "timeout"
     if (d.startswith("Docker execution was not attempted")
-            or d.startswith("Container did not produce valid JSON output")):
+            or d.startswith(("Container did not produce valid JSON output", "容器未输出", "容器异常退出",
+                              "未执行 Docker 测试", "测试文件准备失败", "C/C++ sanitizer", "C/C++ 测试配置"))):
         return "execution"
     return "other"
 
@@ -195,7 +195,7 @@ def run_dynamic_tests(
     repo_info["declared_runtimes"] = derive_declared_runtimes(repo_path)
 
     if not findings:
-        print("No findings to test.", file=sys.stderr)
+        print("没有需要动态测试的发现。", file=sys.stderr)
         return []
 
     if output_dir is None:
@@ -221,10 +221,10 @@ def run_dynamic_tests(
     errored_ids = {fid for fid in checkpointed.keys() if fid not in successful_ids}
 
     if successful_ids:
-        print(f"Restored {len(successful_ids)} already-tested findings from checkpoints",
+        print(f"已从检查点恢复 {len(successful_ids)} 项测试结果",
               file=sys.stderr, flush=True)
     if errored_ids:
-        print(f"Retrying {len(errored_ids)} previously errored findings",
+        print(f"准备重试之前出错的 {len(errored_ids)} 项发现",
               file=sys.stderr, flush=True)
 
     # Use the global tracker so step_context captures dynamic-test cost in
@@ -355,8 +355,8 @@ def run_dynamic_tests(
     checkpoint.ensure_dir()
     checkpoint.write_summary(total, _completed, _errors, _counts["error_breakdown"], phase="in_progress", usage=_summary_usage())
 
-    print(f"Dynamic testing {total} findings from {repo_info['name']} "
-          f"({restored} already done, {remaining} remaining)",
+    print(f"正在动态测试仓库 {repo_info['name']} 的 {total} 项发现 "
+          f"（已完成 {restored} 项，剩余 {remaining} 项）",
           file=sys.stderr)
 
     try:
@@ -417,7 +417,7 @@ def run_dynamic_tests(
         _file = _file if isinstance(_file, str) else ""  # location.file may be non-str (JSON)
         _skip, _reason = should_skip_for_language(_file, repo_info.get("language"))
         if _skip:
-            print(f"\n[{i+1}/{total}] SKIPPED {finding_id}: {_reason}", file=sys.stderr)
+            print(f"\n[{i+1}/{total}] 跳过 {finding_id}（SKIPPED）：{_reason}", file=sys.stderr)
             results.append(DynamicTestResult(
                 finding_id=finding_id,
                 identity_key=finding.get("identity_key", ""),
@@ -426,7 +426,7 @@ def run_dynamic_tests(
             ))
             continue
 
-        print(f"\n[{i+1}/{total}] Testing {finding_id}: "
+        print(f"\n[{i+1}/{total}] 正在测试 {finding_id}："
               f"{finding.get('name', 'unknown')}...", file=sys.stderr)
 
         # Begin per-unit tracking so we can capture token counts for this
@@ -440,12 +440,12 @@ def run_dynamic_tests(
         # on-disk _summary.json kept errors: 0, the exact #311 defect on the
         # raise route. Treat a raise exactly like a None return: record the
         # ERROR unit file, derive the summary from the files, continue.
-        print("  Generating test...", file=sys.stderr)
+        print("  正在生成测试……", file=sys.stderr)
         try:
             generation = generate_test(finding, repo_info, dynamic_test_binding, tracker)
         except Exception as gen_exc:
             generation = None
-            print(f"  Test generation raised: {type(gen_exc).__name__}", file=sys.stderr)
+            print(f"  测试生成发生异常：{type(gen_exc).__name__}", file=sys.stderr)
             _gen_exc_message = str(gen_exc)
             _gen_exc_raised = True
         else:
@@ -455,11 +455,11 @@ def run_dynamic_tests(
         generation_cost = unit_usage["cost_usd"]
 
         if generation is None:
-            print("  Test generation failed.", file=sys.stderr)
+            print("  测试生成失败。", file=sys.stderr)
             result = collect_result(finding, None, None, generation_cost)
             if _gen_exc_raised:
                 # keep the raised exception's own words (the None path has none)
-                result.details = f"Test generation raised {_gen_exc_message[:2000]}"
+                result.details = f"测试生成异常：{_gen_exc_message[:2000]}"
             result.generation_input_tokens = unit_usage["input_tokens"]
             result.generation_output_tokens = unit_usage["output_tokens"]
             # #598 + #626: persist the generation spend's unpriced ids,
@@ -481,7 +481,7 @@ def run_dynamic_tests(
                                          usage=_summary_usage())
             continue
 
-        print(f"  Generated (${generation_cost:.4f}). Running in Docker...",
+        print(f"  测试已生成（${generation_cost:.4f}），正在 Docker 内执行……",
               file=sys.stderr)
 
         # Resolve the vulnerable source file for pre-staging. location.file is a
@@ -512,24 +512,27 @@ def run_dynamic_tests(
         retry_count = 0
 
         while result.status == "ERROR" and retry_count < max_retries:
+            if getattr(execution, "infrastructure_error", False) or getattr(execution, "execution_error", None):
+                print("  Docker 环境或测试配置不可用，不再请求模型重试。", file=sys.stderr)
+                break
             # Extract error message: build error > stderr > application-level details
             if execution.build_error:
                 error_msg = execution.build_error
-                error_type = "Build"
+                error_type = "构建"
             elif execution.exit_code != 0 and execution.stderr:
                 error_msg = execution.stderr
-                error_type = "Runtime"
+                error_type = "运行时"
             else:
                 error_msg = result.details
-                error_type = "Application"
+                error_type = "应用"
 
             if execution.timed_out:
-                print(f"  Timed out — not retrying.", file=sys.stderr)
+                print(f"  执行超时，不再重试。", file=sys.stderr)
                 break
 
             retry_count += 1
-            print(f"  {error_type} error. Retry {retry_count}/{max_retries} "
-                  f"with error feedback...", file=sys.stderr)
+            print(f"  {error_type}出错，正在第 {retry_count}/{max_retries} 次重试，"
+                  f"已附带错误反馈……", file=sys.stderr)
 
             retry_gen = regenerate_test(
                 finding, repo_info, generation,
@@ -541,14 +544,14 @@ def run_dynamic_tests(
             generation_cost = unit_usage["cost_usd"]
 
             if retry_gen is None:
-                print(f"  Retry generation failed.", file=sys.stderr)
+                print(f"  重试生成失败。", file=sys.stderr)
                 break
 
             generation = retry_gen
             execution = run_single_container(generation, finding_id,
                                              source_file=source_file)
             result = collect_result(finding, generation, execution, generation_cost)
-            print(f"  Retry {retry_count} result: {result.status} "
+            print(f"  第 {retry_count} 次重试结果：{result.status} "
                   f"(${generation_cost:.4f})", file=sys.stderr)
 
         result.retry_count = retry_count
@@ -570,10 +573,10 @@ def run_dynamic_tests(
             _errors = _counts["errors"]
             checkpoint.write_summary(total, _completed, _errors, _counts["error_breakdown"], phase="in_progress", usage=_summary_usage())
 
-        print(f"  Result: {result.status} ({result.elapsed_seconds:.1f}s)",
+        print(f"  结果：{result.status}（{result.elapsed_seconds:.1f} 秒）",
               file=sys.stderr)
     except KeyboardInterrupt:
-        print("\n[Dynamic Test] Interrupted — progress saved to checkpoints",
+        print("\n[动态测试] 已中断，进度已保存到检查点",
               file=sys.stderr, flush=True)
         # #419 (the #417 class): `return results` here swallowed the
         # interrupt AND handed the caller partial results, which then wrote
@@ -594,7 +597,7 @@ def run_dynamic_tests(
     report_path = os.path.join(output_dir, "DYNAMIC_TEST_RESULTS.md")
     with open_utf8(report_path, "w") as f:
         f.write(report_md)
-    print(f"\nReport written to {report_path}", file=sys.stderr)
+    print(f"\n报告已写入 {report_path}", file=sys.stderr)
 
     # Save structured results JSON
     results_path = os.path.join(output_dir, "dynamic_test_results.json")
@@ -605,7 +608,7 @@ def run_dynamic_tests(
             "total_cost_usd": round(total_cost, 6),
             "results": [r.to_dict() for r in results],
         }, f, indent=2, ensure_ascii=False)
-    print(f"Results JSON written to {results_path}", file=sys.stderr)
+    print(f"JSON 结果已写入 {results_path}", file=sys.stderr)
 
     # Mark done. Checkpoints are preserved as a permanent artifact alongside
     # results — allows retroactive retry of errored findings after fixes.

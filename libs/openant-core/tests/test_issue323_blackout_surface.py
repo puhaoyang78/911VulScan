@@ -145,10 +145,10 @@ func TestReachabilityLineZZ(t *testing.T) {
 	color.Output = oldColor
 	buf.ReadFrom(r)
 	out := buf.String()
-	if !strings.Contains(out, "Reachability") {
+	if !strings.Contains(out, "可达性范围") {
 		t.Fatalf("no reachability line: %q", out)
 	}
-	if !strings.Contains(out, "120 of 120 units in scope (33.3% reduction)") {
+	if !strings.Contains(out, "纳入 120/120 个代码单元（减少 33.3%）") {
 		t.Fatalf("the counts/pct missing: %q", out)
 	}
 	if !strings.Contains(out, "blacked out") {

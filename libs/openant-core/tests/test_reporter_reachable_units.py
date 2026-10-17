@@ -181,7 +181,7 @@ def test_limit_run_reachable_exceeds_total_warns(tmp_path: Path):
     assert stats["reachable_units"] == 892            # true kept count preserved
     assert stats["total_units"] == 100
     warnings = stats.get("reachability_warnings") or []
-    assert any("exceeds analyzed total_units" in w for w in warnings), (
+    assert any("超过已分析的 total_units" in w for w in warnings), (
         "expected a warning explaining reachable_units > total_units under --limit"
     )
 

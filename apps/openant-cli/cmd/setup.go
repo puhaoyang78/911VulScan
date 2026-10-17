@@ -39,37 +39,36 @@ var errStdinClosed = errors.New("stdin closed before answer provided")
 // reachability, lighter models for the generation phases). Users can always
 // override at the prompt.
 var setupLLMPhases = []phaseSpec{
-	{name: "app_context", short: "Application-context classification (runs first in scan)."},
-	{name: "llm_reach", short: "LLM-driven reachability review (opt-in stage)."},
-	{name: "enhance", short: "Context enhancement (single-shot + agentic tool calling)."},
-	{name: "analyze", short: "Stage 1 vulnerability detection."},
-	{name: "verify", short: "Stage 2 attacker simulation (tool calling)."},
-	{name: "dynamic_test", short: "Docker exploit-test generation."},
-	{name: "report", short: "Disclosure + summary + remediation generation."},
+	{name: "app_context", short: "应用场景分类（扫描时首先运行）。"},
+	{name: "llm_reach", short: "LLM 可达性复核（可选阶段）。"},
+	{name: "enhance", short: "上下文增强（单次请求及工具调用）。"},
+	{name: "analyze", short: "第一阶段：漏洞检测。"},
+	{name: "verify", short: "第二阶段：攻击验证（工具调用）。"},
+	{name: "dynamic_test", short: "Docker 漏洞利用测试生成。"},
+	{name: "report", short: "漏洞披露、摘要及修复建议生成。"},
 }
 
 // Provider adapter types the wizard offers in the picker. All of them
-// ship with a Python adapter (anthropic, openai, google, bedrock,
+// ship with a Python adapter (deepseek, anthropic, openai, google, bedrock,
 // openrouter, ollama) — see
 // “libs/openant-core/utilities/llm/providers/__init__.py“ — so a
 // completed wizard config runs without further changes. The wizard
 // probes each provider+model pair against the real provider API
 // before saving, so a typo'd key or model ID surfaces immediately.
-var supportedProviderTypes = []string{"anthropic", "openai", "google", "bedrock", "openrouter", "ollama"}
+var supportedProviderTypes = []string{"deepseek", "anthropic", "openai", "google", "bedrock", "openrouter", "ollama"}
 
 // apiKeyHints maps a provider type to a one-line reminder shown right
 // before the wizard asks for the API key. Used to head off the common
 // "I have a ChatGPT/Claude/Gemini subscription, why doesn't it work?"
 // confusion — consumer subscriptions are NOT the same product as the
-// REST API and don't share quota. Today only OpenAI has a note here
-// (the conversation that motivated this came up around Codex/ChatGPT
-// subscriptions); the map is keyed by provider so anthropic/google
-// can grow their own reminders later without touching the prompt loop.
+// REST API and do not share quota. Entries also document provider-specific
+// environment variables and credential-free local or cloud-auth paths.
 var apiKeyHints = map[string]string{
-	"openai":     "Note: ChatGPT/Codex subscriptions do NOT include API access — get an API key at platform.openai.com (separate billing).",
-	"bedrock":    "Note: Bedrock uses the AWS credential chain, not an API key — leave the key BLANK and export AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (+ AWS_REGION).",
-	"openrouter": "Note: create an OpenRouter API key at openrouter.ai/keys; the base URL defaults to https://openrouter.ai/api/v1.",
-	"ollama":     "Note: Ollama runs locally and needs NO API key — leave the key BLANK (a placeholder is used automatically). Base URL defaults to http://localhost:11434/v1; models must be pulled first (`ollama pull <model>`).",
+	"deepseek":   "DeepSeek API 密钥：https://platform.deepseek.com/api_keys；也可设置 DEEPSEEK_API_KEY。默认端点为 https://api.deepseek.com，支持 DEEPSEEK_BASE_URL。",
+	"openai":     "注意：ChatGPT/Codex 订阅不包含 API 额度，请在 platform.openai.com 获取独立计费的 API 密钥。",
+	"bedrock":    "注意：Bedrock 使用 AWS 凭证链，请将密钥留空，并配置 AWS 凭证和 AWS_REGION。",
+	"openrouter": "注意：在 openrouter.ai/keys 创建 API 密钥；默认地址为 https://openrouter.ai/api/v1。",
+	"ollama":     "注意：Ollama 本地运行时无需 API 密钥，请留空。默认地址为 http://localhost:11434/v1，需先运行 ollama pull <model> 下载模型。",
 }
 
 type phaseSpec struct {
@@ -79,28 +78,25 @@ type phaseSpec struct {
 
 var setupCmd = &cobra.Command{
 	Use:   "setup",
-	Short: "Interactive configuration wizards",
-	Long: `Interactive wizards for first-time OpenAnt setup.
+	Short: "交互式配置向导",
+	Long: `首次使用 911VulScan 的交互式配置向导。
 
-Subcommands ask focused questions and write the answers to
-~/.config/openant/config.json. Useful for users who'd rather not
-hand-author the v2 config JSON.`,
+通过问答将设置保存到 ~/.config/openant/config.json，
+无需手动编写配置文件。`,
 }
 
 var setupLLMCmd = &cobra.Command{
 	Use:   "llm",
-	Short: "Walk through creating an llm-config interactively",
-	Long: `Interactive wizard for creating an llm-config.
+	Short: "交互式创建 LLM 配置",
+	Long: `交互式创建 LLM 配置。
 
-Asks per-phase questions: which provider, which model. Reuses
-credentials across phases that share a provider name. Validates each
-unique (provider, model) pair with a 1-token probe before writing so
-a typo'd key or model ID surfaces here instead of at the next scan.
+为各个扫描阶段选择服务商和模型，同名服务商共用凭证。
+保存前会对每个不同的服务商与模型组合发送最小验证请求，可能计费。
 
-The built-in ` + "`openant-default`" + ` llm-config is always available without
-running this wizard. Use ` + "`setup llm`" + ` when you want a non-default
-configuration — e.g. a different model for the analyze phase, or a
-separate provider entry for a proxy / Anthropic-compatible endpoint.`,
+首次使用默认选择内置 deepseek-default（DeepSeek Flash）。
+deepseek-pro 使用 DeepSeek V4 Pro；openant-default 保留 Anthropic 兼容配置。
+这些内置配置无需运行向导即可使用。需要自定义阶段、模型或代理端点时，
+可通过 setup llm 创建自己的具名配置。`,
 	Args: cobra.NoArgs,
 	Run:  runSetupLLM,
 }
@@ -127,7 +123,7 @@ func runSetupLLM(cmd *cobra.Command, args []string) {
 	// replaces. Per-phase lookups below use this snapshot.
 	modelReg, err := models.Load()
 	if err != nil {
-		output.PrintError(fmt.Sprintf("cannot read model registry (config/models.json): %v", err))
+		output.PrintError(fmt.Sprintf("无法读取模型注册表（config/models.json）：%v", err))
 		os.Exit(1)
 	}
 
@@ -154,10 +150,10 @@ func runSetupLLM(cmd *cobra.Command, args []string) {
 
 	for _, spec := range setupLLMPhases {
 		fmt.Fprintln(os.Stderr)
-		fmt.Fprintf(os.Stderr, "--- %s phase ---\n", spec.name)
+		fmt.Fprintf(os.Stderr, "--- %s 阶段 ---\n", spec.name)
 		fmt.Fprintln(os.Stderr, spec.short)
 
-		providerName, err := promptRequired(reader, "Provider name", lastProvider)
+		providerName, err := promptRequired(reader, "服务商名称", lastProvider)
 		if err != nil {
 			exitOnInputError(err)
 		}
@@ -166,7 +162,7 @@ func runSetupLLM(cmd *cobra.Command, args []string) {
 		if _, alreadyAsked := sessionProviders[providerName]; !alreadyAsked {
 			provEntry, provExisted := cfg.GetProvider(providerName)
 			if provExisted {
-				fmt.Fprintf(os.Stderr, "Using existing provider %q (type=%s)\n", providerName, provEntry.Type)
+				fmt.Fprintf(os.Stderr, "使用已有服务商 %q（类型=%s）\n", providerName, provEntry.Type)
 				sessionProviders[providerName] = provEntry
 			} else {
 				entry, err := promptNewProvider(reader, providerName)
@@ -186,7 +182,7 @@ func runSetupLLM(cmd *cobra.Command, args []string) {
 			shownModelHints[providerName] = true
 			if prov.BaseURL == "" {
 				if opts := modelReg.KnownModels(prov.Type); len(opts) > 0 {
-					fmt.Fprintf(os.Stderr, "  Known %s models: %s\n", prov.Type, strings.Join(opts, ", "))
+					fmt.Fprintf(os.Stderr, "  可用的 %s 模型：%s\n", prov.Type, strings.Join(opts, ", "))
 				}
 			}
 		}
@@ -203,7 +199,7 @@ func runSetupLLM(cmd *cobra.Command, args []string) {
 				defaultModel = m
 			}
 		}
-		model, err := promptRequired(reader, "Model", defaultModel)
+		model, err := promptRequired(reader, "模型", defaultModel)
 		if err != nil {
 			exitOnInputError(err)
 		}
@@ -214,14 +210,14 @@ func runSetupLLM(cmd *cobra.Command, args []string) {
 
 	// default_llm flag.
 	fmt.Fprintln(os.Stderr)
-	makeDefault, err := promptYesNo(reader, fmt.Sprintf("Set %q as default_llm?", configName), true)
+	makeDefault, err := promptYesNo(reader, fmt.Sprintf("将 %q 设为默认 LLM 配置？", configName), true)
 	if err != nil {
 		exitOnInputError(err)
 	}
 
 	// Probe each unique (provider, model) pair.
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "Probing providers (1-token request per unique provider+model)...")
+	fmt.Fprintln(os.Stderr, "正在验证服务商（每个不同的服务商与模型组合发送最小请求，可能计费）...")
 	if err := probeAllPhases(sessionProviders, phaseChoices); err != nil {
 		output.PrintError(err.Error())
 		os.Exit(1)
@@ -235,12 +231,12 @@ func runSetupLLM(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Fprintln(os.Stderr)
-	output.PrintSuccess(fmt.Sprintf("llm-config %q written.", configName))
+	output.PrintSuccess(fmt.Sprintf("LLM 配置 %q 已保存。", configName))
 	if makeDefault {
 		fmt.Fprintf(os.Stderr, "  default_llm: %s\n", configName)
 	}
 	path, _ := config.Path()
-	fmt.Fprintf(os.Stderr, "  config:      %s\n", path)
+	fmt.Fprintf(os.Stderr, "  配置文件：   %s\n", path)
 }
 
 // ---------------------------------------------------------------------------
@@ -248,11 +244,11 @@ func runSetupLLM(cmd *cobra.Command, args []string) {
 // ---------------------------------------------------------------------------
 
 func writeIntro(w io.Writer, cfg *config.Config) {
-	fmt.Fprintln(w, "OpenAnt LLM setup wizard")
-	fmt.Fprintln(w, "Creates a named llm-config in ~/.config/openant/config.json.")
+	fmt.Fprintln(w, "911VulScan LLM 配置向导")
+	fmt.Fprintln(w, "在 ~/.config/openant/config.json 中创建具名 LLM 配置。")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "The pipeline binds each phase to its configured (provider, model).")
-	fmt.Fprintln(w, "Phases:")
+	fmt.Fprintln(w, "每个扫描阶段使用各自配置的服务商与模型。")
+	fmt.Fprintln(w, "扫描阶段：")
 	for _, spec := range setupLLMPhases {
 		fmt.Fprintf(w, "  - %-13s %s\n", spec.name, spec.short)
 	}
@@ -261,17 +257,17 @@ func writeIntro(w io.Writer, cfg *config.Config) {
 	existingConfigs := cfg.LLMConfigNames()
 	sort.Strings(existingConfigs)
 	if len(existingConfigs) > 0 {
-		fmt.Fprintln(w, "Existing llm-configs in your file:")
+		fmt.Fprintln(w, "已有 LLM 配置：")
 		for _, name := range existingConfigs {
 			fmt.Fprintf(w, "  - %s\n", name)
 		}
 	} else {
-		fmt.Fprintln(w, "(No user-authored llm-configs yet — openant-default is always available.)")
+		fmt.Fprintln(w, "（尚无自定义配置。内置 deepseek-default、deepseek-pro 和兼容配置 openant-default 始终可用。）")
 	}
 	existingProviders := cfg.ProviderNames()
 	sort.Strings(existingProviders)
 	if len(existingProviders) > 0 {
-		fmt.Fprintln(w, "Existing providers (re-using one of these skips the credential questions):")
+		fmt.Fprintln(w, "已有服务商（重复使用时无需再次输入密钥）：")
 		for _, name := range existingProviders {
 			if p, ok := cfg.GetProvider(name); ok {
 				fmt.Fprintf(w, "  - %s (type=%s)\n", name, p.Type)
@@ -287,26 +283,26 @@ func writeIntro(w io.Writer, cfg *config.Config) {
 
 func promptLLMConfigName(reader *bufio.Reader, cfg *config.Config) (string, bool, error) {
 	for {
-		name, err := promptString(reader, "Name for this llm-config", "")
+		name, err := promptString(reader, "LLM 配置名称", "")
 		if err != nil {
 			return "", false, err
 		}
 		name = strings.TrimSpace(name)
 		if name == "" {
-			fmt.Fprintln(os.Stderr, "Name cannot be empty.")
+			fmt.Fprintln(os.Stderr, "名称不能为空。")
 			continue
 		}
-		if name == "openant-default" {
-			fmt.Fprintln(os.Stderr, "'openant-default' is the built-in baseline and cannot be redefined. Pick a different name.")
+		if config.IsBuiltinLLM(name) {
+			fmt.Fprintf(os.Stderr, "%q 是内置配置，不能覆盖，请换一个名称。\n", name)
 			continue
 		}
 		if cfg.LLMConfigExists(name) {
-			replace, yesErr := promptYesNo(reader, fmt.Sprintf("llm-config %q already exists. Replace?", name), false)
+			replace, yesErr := promptYesNo(reader, fmt.Sprintf("LLM 配置 %q 已存在，是否覆盖？", name), false)
 			if yesErr != nil {
 				return "", false, yesErr
 			}
 			if !replace {
-				fmt.Fprintln(os.Stderr, "Cancelled.")
+				fmt.Fprintln(os.Stderr, "已取消。")
 				return "", false, nil
 			}
 		}
@@ -326,13 +322,13 @@ func promptNewProvider(reader *bufio.Reader, name string) (config.ProviderEntry,
 	}
 
 	for {
-		provType, err := promptRequired(reader, fmt.Sprintf("Provider type %v", supportedProviderTypes), defaultType)
+		provType, err := promptRequired(reader, fmt.Sprintf("服务商类型 %v", supportedProviderTypes), defaultType)
 		if err != nil {
 			return config.ProviderEntry{}, err
 		}
 		if !stringSliceContains(supportedProviderTypes, provType) {
-			fmt.Fprintf(os.Stderr, "Unknown provider type %q. The wizard offers: %v.\n", provType, supportedProviderTypes)
-			fmt.Fprintln(os.Stderr, "To use a provider not listed here, contribute an adapter — see the OpenAnt documentation for adding new provider adapters.")
+			fmt.Fprintf(os.Stderr, "未知服务商类型 %q，可选类型：%v。\n", provType, supportedProviderTypes)
+			fmt.Fprintln(os.Stderr, "如需使用其他服务商，请按项目文档添加对应适配器。")
 			continue
 		}
 		// Per-provider subscription-vs-API reminder — the wizard needs
@@ -346,11 +342,11 @@ func promptNewProvider(reader *bufio.Reader, name string) (config.ProviderEntry,
 		// No-echo read so the pasted key never lands in the terminal
 		// scrollback. Blank input is still allowed (read from env), and
 		// on a non-TTY this transparently falls back to a normal line read.
-		apiKey, err := promptSecret(reader, "API key (paste; leave blank to read from environment)")
+		apiKey, err := promptSecret(reader, "API 密钥（粘贴；留空则读取环境变量）")
 		if err != nil {
 			return config.ProviderEntry{}, err
 		}
-		baseURL, err := promptString(reader, "Base URL (optional — leave blank for the provider's default endpoint)", "")
+		baseURL, err := promptString(reader, "API 基础地址（可选；留空则使用服务商默认地址）", "")
 		if err != nil {
 			return config.ProviderEntry{}, err
 		}
@@ -364,7 +360,7 @@ func promptNewProvider(reader *bufio.Reader, name string) (config.ProviderEntry,
 func exitOnInputError(err error) {
 	if errors.Is(err, errStdinClosed) {
 		fmt.Fprintln(os.Stderr)
-		output.PrintError("Cancelled — no more input.")
+		output.PrintError("已取消：输入已结束。")
 		os.Exit(1)
 	}
 	output.PrintError(err.Error())
@@ -449,7 +445,7 @@ func promptRequired(reader *bufio.Reader, prompt, defaultVal string) (string, er
 		if val != "" {
 			return val, nil
 		}
-		fmt.Fprintln(os.Stderr, "  (this field is required)")
+		fmt.Fprintln(os.Stderr, "  （此项必填）")
 	}
 }
 
@@ -475,7 +471,7 @@ func promptYesNo(reader *bufio.Reader, prompt string, defaultVal bool) (bool, er
 		case "n", "no":
 			return false, nil
 		default:
-			fmt.Fprintln(os.Stderr, "  Please answer y or n.")
+			fmt.Fprintln(os.Stderr, "  请输入 y 或 n。")
 		}
 	}
 }
@@ -513,16 +509,19 @@ func probeAllPhases(
 		if prov.APIKey == "" && prov.Type != "ollama" {
 			// Blank key means "read from the environment" (the wizard
 			// offers this and WriteLLMConfig persists the env-read shape).
-			// The Go probe can't read the provider's env var, so skip it;
-			// Python's registry.validate() surfaces a missing/blank env
+			// Leave this validation to the scan-start registry rather than
+			// copying environment credentials into the wizard state. The
+			// Python registry surfaces a missing/blank env
 			// key at scan start instead. Ollama is exempt: it needs no
 			// key at all (the adapter sends a placeholder), so its probe
 			// always runs.
-			fmt.Fprintln(os.Stderr, "SKIPPED (key from environment)")
+			fmt.Fprintln(os.Stderr, "已跳过（密钥从环境变量读取，扫描时验证）")
 			continue
 		}
 		var probeErr error
 		switch prov.Type {
+		case "deepseek":
+			probeErr = probeDeepSeek(prov.APIKey, prov.BaseURL, ref.Model)
 		case "anthropic":
 			probeErr = probeAnthropic(prov.APIKey, prov.BaseURL, ref.Model)
 		case "openai":
@@ -534,7 +533,7 @@ func probeAllPhases(
 			// key, so there's nothing to probe here (a blank key is already
 			// SKIPPED above; this covers a non-blank value). The AWS creds are
 			// validated at scan start by the Python registry.
-			fmt.Fprintln(os.Stderr, "SKIPPED (AWS credentials)")
+			fmt.Fprintln(os.Stderr, "已跳过（使用 AWS 凭证链）")
 			continue
 		case "openrouter":
 			// OpenRouter speaks the OpenAI wire API but on its own endpoint;
@@ -546,14 +545,14 @@ func probeAllPhases(
 			// not check keys — probe with the same placeholder the adapter uses.
 			probeErr = probeOllama(prov.APIKey, prov.BaseURL, ref.Model)
 		default:
-			fmt.Fprintln(os.Stderr, "SKIPPED")
-			return fmt.Errorf("provider type %q has no probe implementation yet", prov.Type)
+			fmt.Fprintln(os.Stderr, "已跳过")
+			return fmt.Errorf("服务商类型 %q 尚不支持连接验证", prov.Type)
 		}
 		if probeErr != nil {
-			fmt.Fprintln(os.Stderr, "FAILED")
-			return fmt.Errorf("probe failed for provider %q model %q: %w", ref.Provider, ref.Model, probeErr)
+			fmt.Fprintln(os.Stderr, "失败")
+			return fmt.Errorf("服务商 %q 的模型 %q 验证失败：%w", ref.Provider, ref.Model, probeErr)
 		}
-		fmt.Fprintln(os.Stderr, "OK")
+		fmt.Fprintln(os.Stderr, "通过")
 	}
 	return nil
 }
@@ -563,15 +562,15 @@ func probeAllPhases(
 // ---------------------------------------------------------------------------
 
 func defaultStartingProvider(cfg *config.Config) string {
-	// If the user already has providers on disk, default to the first
-	// one alphabetically (most likely "anthropic"). Otherwise default
-	// to "anthropic" — the reference adapter and the most common choice.
+	if ref, ok := cfg.LLMPhase("", "analyze"); ok {
+		return ref.Provider
+	}
 	names := cfg.ProviderNames()
 	sort.Strings(names)
 	if len(names) > 0 {
 		return names[0]
 	}
-	return "anthropic"
+	return "deepseek"
 }
 
 func stringSliceContains(haystack []string, needle string) bool {

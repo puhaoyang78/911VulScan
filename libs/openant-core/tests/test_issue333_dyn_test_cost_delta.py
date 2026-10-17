@@ -82,7 +82,7 @@ def _run(tmp_path, gen_fn):
 
 def _md_total_cost(md):
     for line in md.splitlines():
-        if "Total Cost:" in line:
+        if "预估总费用：" in line:
             return float(line.split("$")[1])
     raise AssertionError(f"no Total Cost line in report:\n{md}")
 

@@ -1,6 +1,10 @@
-# Report Generator Module
+# 报告生成模块
 
-Generates security reports and disclosure documents from OpenAnt pipeline output using Claude Opus 4.5.
+使用当前配置中 `report` 阶段的模型，根据 OpenAnt 扫描结果生成简体中文安全报告和漏洞披露文档。
+
+HTML、Markdown、摘要、披露和动态测试报告采用中文显示。JSON/CSV 字段、状态枚举、SARIF 标识、源代码、路径、攻击载荷及原始证据保持不变。费用为按配置费率计算的预估值，最终以供应商账单为准。
+
+以下命令与输入结构保持兼容。
 
 ## Usage
 

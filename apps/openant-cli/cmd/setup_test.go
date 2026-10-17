@@ -78,7 +78,7 @@ func TestSetupLLMWizard_HappyPath(t *testing.T) {
 	//   8. Set as default_llm: y
 	script := strings.Join([]string{
 		"my-config", // llm-config name
-		"",          // analyze: provider (accept default "anthropic")
+		"anthropic", // app_context: explicitly preserve the Anthropic test path
 		"",          // analyze: provider type (accept default "anthropic")
 		"sk-test",   // analyze: API key
 		"",          // analyze: base URL (blank)
@@ -256,7 +256,7 @@ func TestSetupLLMWizard_RefusesOpenantDefaultName(t *testing.T) {
 	script := strings.Join([]string{
 		"openant-default", // rejected — reserved
 		"my-config",       // accepted
-		"",                // analyze: provider
+		"anthropic",       // app_context: explicitly select Anthropic
 		"",                // analyze: provider type
 		"sk-test",         // analyze: API key
 		"",                // analyze: base URL

@@ -147,11 +147,11 @@ class TestGeneratorBlocks:
             units_analyzed=120, total_units=120, stage1_errors=0,
             findings_input=4, units_analyzed_total=120,
             downgraded=1, upgraded=0))
-        assert "Parsed: 5389 units" in block
-        assert "In scope after reachability filter: 2343 of 5389" in block
-        assert "Analyzed in Stage 1: 120 units" in block
-        assert "Adjudicated in Stage 2: 4 of 120 analyzed units" in block
-        assert "1 downgraded, 0 upgraded" in block
+        assert "已解析：5389 个代码单元" in block
+        assert "可达性筛选后范围内的代码单元：2343/5389" in block
+        assert "第 1 阶段已分析：120 个代码单元" in block
+        assert "第 2 阶段已判定：4/120 个已分析代码单元" in block
+        assert "1 个降级，0 个升级" in block
 
     def test_present_only_no_fabricated_zeros(self):
         block = _summary_statistics_block(self._stats())
@@ -174,17 +174,17 @@ class TestGeneratorBlocks:
              "cwe_id": 3, "stage2_verdict": "unverified"},
         ]
         block = _summary_tables_block({"findings": findings})
-        conf = block.split("## Not Confirmed")[0]
+        conf = block.split("## 未确认的发现项")[0]
         assert "| 1 | A |" in conf and "| 2 | B |" in conf
         assert "| C |" not in conf  # THE receipt: unverified in Confirmed
-        nc = block.split("## Not Confirmed")[1]
-        assert "| C |" in nc and "unverified" in nc
+        nc = block.split("## 未确认的发现项")[1]
+        assert "| C |" in nc and "未验证" in nc
 
     def test_no_findings_no_placeholder_tables(self):
         block = _summary_tables_block({"findings": []})
         assert "{step}" not in block
         assert "{name}" not in block
-        assert "No findings to report." in block
+        assert "没有可报告的发现项。" in block
 
     def test_strip_model_duplicate_sections(self):
         model_text = ("## Overview\n\nSome narrative.\n\n"
@@ -215,8 +215,8 @@ class TestGeneratorBlocks:
             costs={"parse": {"actual": 0.0}, "analyze": {"actual": 2.7}}))
         assert "Estimated" not in block
         assert "Units" not in block
-        assert "| parse | $0.00 |" in block
-        assert "| analyze | $2.70 |" in block
+        assert "| 代码解析 | $0.00 |" in block
+        assert "| 漏洞分析 | $2.70 |" in block
 
 
 # --- the fable+astra gate fold: the splice-position contract ----

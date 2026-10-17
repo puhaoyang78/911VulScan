@@ -1,45 +1,46 @@
 Generate a security disclosure document from the provided vulnerability data.
+Write every human-readable heading, explanation, verification status and remediation instruction in Simplified Chinese. Preserve code, payloads, file paths, identifiers and CWE IDs.
 
 INPUT DATA:
 {vulnerability_data}
 
 OUTPUT FORMAT:
 
-# Security Disclosure: {short_title}
+# 安全漏洞披露： {short_title}
 
-**Product:** {product_name}
-**Type:** CWE-{cwe_id} ({cwe_name})
+**产品：** {product_name}
+**类型：** CWE-{cwe_id} ({cwe_name})
 
-## Summary
+## 概述
 
 {2-3 sentence description of the vulnerability. What is the bug? What can an attacker do?}
 
 {1 sentence explaining why the code is vulnerable — refer to the function name and the dangerous operation}
 
-## Steps to Reproduce
+## 复现步骤
 
-**Prerequisites:**
+**前提条件：**
 {bullet list of what attacker needs}
 
-**Step 1:** {action}
+**步骤 1：** {action}
 
 {code block if needed}
 
-**Step 2:** {action}
+**步骤 2：** {action}
 
 {code block if needed}
 
 [Continue for all steps]
 
-**Tested:** {platform/version}, {date}.
+**测试环境：** {platform/version}, {date}.
 
-## Impact
+## 影响
 
 - {impact point 1}
 - {impact point 2}
 - {impact point 3}
 
-## Suggested Fix
+## 修复建议
 
 {1 sentence description}
 
@@ -49,7 +50,7 @@ OUTPUT FORMAT:
 
 ---
 
-Verified via {"dynamic testing" if dynamic_testing else "dynamic test FAILED (status: " + dynamic_testing_attempted.status + ") — NOT verified by it" if dynamic_testing_attempted else "attacker simulation (Stage 2)" if stage2_verdict in ("confirmed", "agreed") else "static analysis"}.
+验证方式：{"动态测试" if dynamic_testing else "动态测试未确认（状态：" + dynamic_testing_attempted.status + "），不能据此确认漏洞" if dynamic_testing_attempted else "攻击者模拟（第 2 阶段）" if stage2_verdict in ("confirmed", "agreed") else "静态分析"}.
 
 ---
 
@@ -59,9 +60,9 @@ INSTRUCTIONS:
   Summary and Steps to Reproduce must not assert reachability of any path that
   explanation describes as gated or conditional — state the precondition it
   names instead.
-- Do NOT include a "## Vulnerable Code" section — it is added automatically after your output is generated. Do NOT emit code fences with the vulnerable source code. If you need to reference the vulnerable code, refer to the function name and describe the issue in prose.
+- Do NOT include a "## 漏洞代码" section — it is added automatically after your output is generated. Do NOT emit code fences with the vulnerable source code. If you need to reference the vulnerable code, refer to the function name and describe the issue in prose.
 - Other code snippets (Suggested Fix): show only the minimal change needed, not entire files
-- Steps to Reproduce: if dynamic_testing data exists, use those steps; if only dynamic_testing_attempted exists (the test ran but did not confirm), still write "[REQUIRES DYNAMIC TESTING]" — the attempted evidence is diagnostic, not a reproduction; otherwise write "[REQUIRES DYNAMIC TESTING]" for each step
+- Steps to Reproduce: if dynamic_testing data exists, use those steps; if only dynamic_testing_attempted exists (the test ran but did not confirm), still write "[需要动态测试]" — the attempted evidence is diagnostic, not a reproduction; otherwise write "[需要动态测试]" for each step
 - Impact: 3-5 bullet points, no sub-bullets
 - Suggested Fix: show minimal code change, use comments to indicate what was added
 - Do not include CVSS scores or severity ratings

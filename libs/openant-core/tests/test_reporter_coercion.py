@@ -202,8 +202,8 @@ class TestBuildPipelineOutputCoercion:
         steps = out["findings"][0]["steps_to_reproduce"] or ""
         # Plain text, no JSON quote wrapping around the original string.
         assert "GET /user?id=' OR 1=1--" in steps
-        assert "Data flow: request.query.id -> db.execute(sql)" in steps
-        assert "Verification: no input validation" in steps
+        assert "数据流：request.query.id -> db.execute(sql)" in steps
+        assert "验证说明：no input validation" in steps
 
 
 class TestBuildPipelineOutputDataFlowContainer:
@@ -232,7 +232,7 @@ class TestBuildPipelineOutputDataFlowContainer:
         })
         steps = out["findings"][0]["steps_to_reproduce"] or ""
         # The scalar value is preserved, not dropped.
-        assert "Data flow: 42" in steps, (
+        assert "数据流：42" in steps, (
             f"scalar data_flow lost / crashed: {steps!r}"
         )
 
@@ -245,7 +245,7 @@ class TestBuildPipelineOutputDataFlowContainer:
             "exploit_path": {"data_flow": "request.query.id"},
         })
         steps = out["findings"][0]["steps_to_reproduce"] or ""
-        assert "Data flow: request.query.id" in steps, (
+        assert "数据流：request.query.id" in steps, (
             f"bare-string data_flow garbled: {steps!r}"
         )
         # Proof of "not char-by-char": no single-char arrow joins.
@@ -266,12 +266,12 @@ class TestBuildPipelineOutputDataFlowContainer:
 
     def test_none_data_flow_is_skipped(self, tmp_path):
         # Falsy / absent data_flow must be omitted entirely, not render
-        # an empty "Data flow: " line.
+        # an empty "数据流：" line.
         out = _run_build(tmp_path, finding={
             "attack_vector": "GET /user?id=evil",
             "exploit_path": {"data_flow": None},
         })
         steps = out["findings"][0]["steps_to_reproduce"] or ""
-        assert "Data flow" not in steps
+        assert "数据流" not in steps
         # The other part still renders, proving we only skipped data_flow.
         assert "GET /user?id=evil" in steps

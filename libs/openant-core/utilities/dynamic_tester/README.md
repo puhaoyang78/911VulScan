@@ -1,297 +1,88 @@
-# Dynamic Tester
+# 动态漏洞验证
 
-Bridges OpenAnt's static analysis pipeline and confirmed exploitability by running Docker-isolated dynamic exploit tests against every finding.
+读取 `pipeline_output.json`，为可动态测试的发现生成复现程序，在 Docker 沙箱中构建、运行并保存结果。生成阶段使用当前配置的 `dynamic_test` 模型，不绑定特定厂商。自然语言输出采用简体中文，JSON 字段和状态枚举保持稳定。
 
-## Overview
+## 前提与调用
 
-The dynamic tester takes `pipeline_output.json` — the output of OpenAnt's static analysis pipeline (Stages 1 and 2) — and for each finding:
-
-1. Sends the finding to Claude Sonnet, which generates a self-contained Docker test (Dockerfile + test script + dependencies)
-2. Builds and runs the test in an isolated Docker container
-3. Parses the container's structured JSON output
-4. Classifies the result: `CONFIRMED`, `NOT_REPRODUCED`, `BLOCKED`, `INCONCLUSIVE`, or `ERROR`
-5. If the test fails (build error or runtime crash), feeds the error back to the LLM for one retry
-
-This adds a `DYNAMIC_TESTED` step to the pipeline, between `VERIFIED` (Stage 2) and `REPORTED`.
-
-## Prerequisites
-
-- **Docker Engine** must be installed and running
-- **Anthropic API key** in `.env` (used for Claude Sonnet test generation)
-- No additional Python packages required (uses `subprocess` for Docker CLI)
-
-## Quick Start
-
-### Standalone CLI
+- 已安装并启动 Docker Engine；生产路径不会改为在宿主机直接运行目标代码。
+- 已配置模型服务凭据。生成及重试可能产生模型费用。
+- 已有静态分析结果；仅对 `DYNAMIC_TESTABLE` 范围内的发现进行验证。
+- C/C++ 必须提供真实仓库路径；单文件对应的源文件会先复制到隔离构建目录。
 
 ```bash
-# Run against a pipeline output file
-python -m utilities.dynamic_tester datasets/langchain/pipeline_output.json
+# 常规命令（活动项目自动提供仓库路径）
+openant dynamic-test /path/to/pipeline_output.json --repo-path /path/to/repository
 
-# Specify a custom output directory
-python -m utilities.dynamic_tester datasets/langchain/pipeline_output.json --output-dir /tmp/results
+# Python 模块入口
+python -m utilities.dynamic_tester /path/to/pipeline_output.json \
+  --repo-path /path/to/repository --output-dir /tmp/dynamic-results
 ```
-
-### Python API
 
 ```python
 from utilities.dynamic_tester import run_dynamic_tests
-
-results = run_dynamic_tests("datasets/langchain/pipeline_output.json")
-
-for r in results:
-    print(f"{r.finding_id}: {r.status} — {r.details}")
+results = run_dynamic_tests(
+    "/path/to/pipeline_output.json",
+    output_dir="/tmp/dynamic-results",
+    repo_path="/path/to/repository",
+)
 ```
 
-### Autopilot Integration
+输出包括中文 `DYNAMIC_TEST_RESULTS.md`、机器可读 `dynamic_test_results.json` 以及可恢复的逐项检查点。动态验证不会证明仓库整体安全。
 
-The dynamic tester runs automatically as part of the autopilot pipeline between the verify and report steps. It is budget-gated (default $5.00 per repo) and can be configured in `autopilot/config.py`.
+## C/C++ 模板
+
+语言注册表将 C/C++ 路由到 `c.Dockerfile`。`.c` 使用 GCC/C11；`.cpp`、`.cc`、`.cxx`、`.hpp`、`.hh`、`.hxx` 和 `.C` 使用 G++/C++17。无明确扩展名时接受 `c`、`c++`、`cpp`、`cxx`、`c/c++`；`.h` 使用扫描语言作区分。其他可识别语言的文件不会因为扫描默认值是 C 而错误进入该模板。
+
+C/C++ 生成结果只能提供复现源码，执行器强制使用项目自带的 Dockerfile、Python 包装器和编译命令。模型不能替换运行器或关闭 sanitizer。复现程序应引入并调用已预置的真实目标文件，构造攻击输入，并在正常结束时打印结构化结果。
+
+容器基于 `python:3.12-slim-bookworm`，安装 GCC、G++ 和 libc 开发头文件。包装器执行真实编译：
+
+```text
+gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined \
+    -fno-sanitize-recover=all -fno-pie -no-pie -x c test_exploit.c -o /tmp/.../test_exploit
+```
+
+C++ 使用 `g++ -std=c++17 -x c++`。编译最多 60 秒，程序执行最多 30 秒；产物及运行时文件仅写入 `/tmp`。禁用 LeakSanitizer，避免受限容器中的 ptrace 兼容问题；当前不提供内存泄漏检测保证。
+
+### 支持边界
+
+- 当前是单编译单元、标准库复现；不会自动运行整个项目的 CMake、Make 或自定义脚本。
+- 仅预置发现所在的一个目标文件；缺失本地头文件、额外链接库或特定编译参数会明确返回 `ERROR`，不能当作“未复现”。
+- 缺少真实目标文件、文件名与固定 scaffold 冲突、无法启动编译器、sanitizer 初始化失败，也都返回 `ERROR`。
+- C/C++ 多容器依赖和自定义依赖安装目前不受支持；生成器会拒绝这类结果。
+- 当前 C11/C++17 是可复现测试环境的固定基线，不代表已复现目标项目原有的编译器、平台或 ABI。
+- 动态诊断应结合原发现和目标调用栈复核；自动生成的驱动仍可能存在逻辑错误。
+
+## 结果含义
+
+| 机器状态 | 中文含义 |
+| --- | --- |
+| `CONFIRMED` | 通用模板验证攻击证据；C/C++ 模板仅在具体 ASan/UBSan 诊断指向真实目标且程序错误终止时自动确认 |
+| `NOT_REPRODUCED` | 测试完成，但本次输入未复现；不等于证明安全 |
+| `BLOCKED` | 攻击被目标控制措施阻止 |
+| `INCONCLUSIVE` | 超时、普通异常退出、只有 `DEADLYSIGNAL` 或缺少明确结果 |
+| `ERROR` | 生成、构建、编译、配置或执行环境出错 |
+| `SKIPPED` | 对应语言没有动态测试模板，未执行 |
+
+正常退出且无 JSON 不能推断 `NOT_REPRODUCED`。构建输出、一般崩溃、sanitizer 启动失败不能自动确认漏洞。sanitizer 首个目标/驱动源码位置若指向驱动，或未匹配真实目标文件，则为 `INCONCLUSIVE`；空证据的 `CONFIRMED` 同样降为 `INCONCLUSIVE`。C/C++ 程序自行打印的 `CONFIRMED` 即使附带非空证据，也会降为 `INCONCLUSIVE` 并保留证据，供人工复核；当前模板不自动确认缺少 sanitizer 佐证的逻辑漏洞。sanitizer 形式的日志若伴随正常退出，同样不能确认。容器以非零状态退出时，结果收集器不会采信此前打印的成功 JSON。
+
+这些门槛用于减少误报，不是不可伪造的证据来源证明。生成的驱动或目标仍可能伪造诊断文本、源文件位置并主动以非零状态退出。重要结论必须人工检查驱动是否真正调用目标、完整诊断与原始发现是否对应，并在可信环境复现；自动状态不能替代人工证据审核。
+
+```json
+{"status":"NOT_REPRODUCED","details":"越界输入被拒绝，本次未复现。","evidence":[]}
+```
+
+## 隔离边界
+
+单容器使用无外部网络、只读根文件系统、移除全部 capabilities、禁止新增权限及进程/内存/CPU 限额；没有宿主卷挂载或特权模式。多容器路径重建 compose 白名单并使用内部网络。构建阶段仍可能下载基础镜像与公开依赖；这不是完全离线构建。
+
+不要在宿主机直接运行生成的 C/C++ 程序。`docker_templates/c_runner.py` 是容器内部组件，只有回归测试会在本机编译仓库自带、已审阅的 fixture。
+
+## 离线回归验证
 
 ```bash
-# Runs automatically in the pipeline
-python -m autopilot --repo owner/repo
+cd libs/openant-core
+python -m pytest tests/test_dynamic_c_templates.py tests/test_dynamic_tester_language.py tests/test_docker_scaffold.py -q
 ```
 
-## Output Files
-
-After running, two files are written to the output directory (defaults to the same directory as the input file):
-
-| File | Format | Contents |
-|------|--------|----------|
-| `DYNAMIC_TEST_RESULTS.md` | Markdown | Human-readable report with summary table, per-finding details, evidence, and generated test code |
-| `dynamic_test_results.json` | JSON | Structured results for programmatic consumption |
-
-### JSON Output Schema
-
-```json
-{
-  "repository": "langchain",
-  "total_findings": 3,
-  "total_cost_usd": 0.1234,
-  "results": [
-    {
-      "finding_id": "VULN-001",
-      "status": "CONFIRMED",
-      "details": "Successfully read /etc/passwd via path traversal",
-      "evidence": [
-        {"type": "file_read", "content": "root:x:0:0:root:/root:/bin/bash..."}
-      ],
-      "test_code": "...",
-      "dockerfile": "...",
-      "docker_compose": "",
-      "elapsed_seconds": 45.2,
-      "generation_cost_usd": 0.0412
-    }
-  ]
-}
-```
-
-## Architecture
-
-```
-pipeline_output.json
-  │
-  ▼
-┌─────────────────────┐    Claude Sonnet    ┌──────────────────┐
-│   test_generator.py  │ ────────────────▶  │  Dockerfile       │
-│   (LLM prompt +      │                    │  test_script      │
-│    CWE guidance)      │                    │  requirements     │
-└─────────────────────┘                     │  docker_compose?  │
-                                            └────────┬─────────┘
-                                                     │
-                                                     ▼
-                                            ┌──────────────────┐
-                                            │ docker_executor.py│
-                                            │  docker build     │
-                                            │  docker run       │
-                                            │  (isolated, 512MB)│
-                                            └────────┬─────────┘
-                                                     │
-                                     ┌───────────────┼───────────────┐
-                                     │ success        │ build/runtime │
-                                     │                │ error         │
-                                     ▼                ▼               │
-                              ┌──────────┐    ┌──────────────┐       │
-                              │ parse    │    │ regenerate   │       │
-                              │ JSON     │    │ (retry once) │───────┘
-                              │ stdout   │    └──────────────┘
-                              └────┬─────┘
-                                   │
-                                   ▼
-                            ┌──────────────┐
-                            │result_collector│
-                            │ classify:     │
-                            │ CONFIRMED     │
-                            │ NOT_REPRODUCED│
-                            │ BLOCKED       │
-                            │ INCONCLUSIVE  │
-                            │ ERROR         │
-                            └──────────────┘
-                                   │
-                                   ▼
-                            ┌──────────────┐
-                            │  reporter.py  │
-                            │  .md + .json  │
-                            └──────────────┘
-```
-
-## File Inventory
-
-| File | Purpose |
-|------|---------|
-| `__init__.py` | Public API — `run_dynamic_tests(pipeline_output_path, output_dir)` |
-| `__main__.py` | CLI entry point — `python -m utilities.dynamic_tester <path>` |
-| `models.py` | `DynamicTestResult` and `TestEvidence` dataclasses |
-| `test_generator.py` | Sends findings to Claude Sonnet, receives Dockerfile + test script |
-| `docker_executor.py` | Builds images, runs containers, handles compose and cleanup |
-| `result_collector.py` | Parses container stdout JSON, classifies results |
-| `reporter.py` | Generates the Markdown report |
-| `docker_templates/python.Dockerfile` | Reference Dockerfile for Python tests (documentation only) |
-| `docker_templates/node.Dockerfile` | Reference Dockerfile for Node.js tests (documentation only) |
-| `docker_templates/go.Dockerfile` | Reference Dockerfile for Go tests (documentation only) |
-| `docker_templates/attacker_server.py` | HTTP capture server for SSRF/exfiltration tests (port 9999) — the only file here the executor reads |
-
-Note: the `*.Dockerfile` templates are **reference documentation, not the
-runtime**. The Dockerfile actually built for each test is LLM-generated per
-finding (`generation["dockerfile"]`, written by `docker_executor.py`); the
-only prompt-pinned base image is Go (`test_generator.py`); Python/Node base
-images are chosen per generation; the attacker sidecar's image is inlined in
-`docker_executor.py`. Do not reason about test runtimes from the template
-files — that has misled review before (see #351's correction comment).
-
-## Container Output Contract
-
-Every test container **must** print exactly one JSON object to stdout as its final output:
-
-```json
-{
-  "status": "CONFIRMED|NOT_REPRODUCED|BLOCKED|INCONCLUSIVE|ERROR",
-  "details": "Human-readable explanation of the result",
-  "evidence": [
-    {
-      "type": "file_read|http_response|command_output|network_capture",
-      "content": "The actual evidence data"
-    }
-  ]
-}
-```
-
-All debug output must go to stderr. The result collector looks for the last valid JSON object in stdout.
-
-### Status Definitions
-
-| Status | Meaning |
-|--------|---------|
-| `CONFIRMED` | The vulnerability was successfully exploited. Evidence proves it. |
-| `NOT_REPRODUCED` | The test ran correctly but the exploit did not succeed (e.g., input was sanitized). |
-| `BLOCKED` | A security control prevented the exploit (e.g., WAF, permission denied). |
-| `INCONCLUSIVE` | The test ran but the result is ambiguous (e.g., partial evidence, timeout). |
-| `ERROR` | The test itself failed (build error, import error, crash). Not a finding verdict. |
-
-## Container Security
-
-All containers run with strict isolation:
-
-- **Read-only filesystem** (`--read-only`) with `/tmp` and `/root` as writable tmpfs
-- **No privilege escalation** (`--security-opt no-new-privileges`)
-- **All capabilities dropped** (`--cap-drop ALL`)
-- **PID limit** — 256 (`--pids-limit`)
-- **Memory limit** — 512 MB (`--memory 512m`)
-- **CPU limit** — 1 CPU (`--cpus 1`)
-- **Isolated network** — single-container tests run with `--network none`; multi-service
-  tests run on an `internal: true` Docker network (no external gateway)
-- **No host volume mounts / no privileged mode** — enforced, not assumed: an untrusted
-  multi-service `docker-compose` is *reconstructed* from an allowlist (see below), so
-  `privileged`, `cap_add`, host `volumes`, `pid`/`ipc`/`network_mode`, `devices`, etc.
-  cannot reach the runtime
-- **Timeouts** — 120s for execution, 300s for builds
-
-Multi-service tests (e.g., those needing the attacker capture server) use Docker Compose
-on an internal network, with each service reconstructed and hardened identically.
-
-## Attacker Capture Server
-
-For testing SSRF, data exfiltration, and callback-based vulnerabilities, a lightweight HTTP capture server is provided at `docker_templates/attacker_server.py`.
-
-**Port:** 9999
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/health` | GET | Health check — returns `{"status": "ok"}` |
-| `/capture` | GET/POST | Captures the full request (method, path, headers, body) |
-| `/logs` | GET | Returns all captured requests as a JSON array |
-| `/logs/clear` | POST | Clears the captured request log |
-
-In Docker Compose, the test container references the attacker server as `http://attacker:9999`. Tests should wait for `/health` before running the exploit, then check `/logs` for captured requests.
-
-## Retry Mechanism
-
-When a test fails due to a Docker build error or a runtime crash (non-zero exit code, not timeout):
-
-1. The error message (up to 2000 chars) is sent back to Claude Sonnet along with the original finding and the failed Dockerfile/requirements
-2. The LLM generates a corrected test
-3. The corrected test is executed once (no further retries)
-
-Common issues the retry fixes:
-- Missing directories (e.g., `mkdir -p` needed)
-- Dependency version conflicts
-- Wrong import paths or missing sub-packages
-- Docker Compose service name mismatches
-
-## Test Generation
-
-The LLM receives:
-- Finding details (CWE, location, description, vulnerable code, steps to reproduce)
-- Repository info (name, language, application type)
-- CWE-specific testing guidance for common CWEs (22, 78, 79, 89, 94, 134, 918, 200, 502)
-- Rules about Docker isolation, output format, dependency management
-
-It returns a JSON object with:
-- `dockerfile` — complete Dockerfile
-- `test_script` + `test_filename` — the exploit test code
-- `requirements` + `requirements_filename` — dependency file
-- `docker_compose` — docker-compose.yml if multi-service (null otherwise)
-- `needs_attacker_server` — boolean flag
-
-LLM-generated docker-compose files are post-processed by `_sanitize_compose()` to:
-- Remove obsolete `version:` keys
-- Replace remote attacker image references with `build: ./attacker-server`
-
-## Cost
-
-| Item | Cost |
-|------|------|
-| Test generation (Claude Sonnet) | ~$0.03-0.05 per finding |
-| Retry generation | ~$0.04-0.06 additional per retried finding |
-| Docker execution | Free (local) |
-| Autopilot budget default | $5.00 per repo (~25-30 findings) |
-| Autopilot cost rate | $0.15 per finding (for budget estimation) |
-
-## Autopilot Configuration
-
-In `autopilot/config.py`, the dynamic test step has its own budget:
-
-```yaml
-budgets:
-  dynamic_test:
-    max_cost_usd: 5.0
-    over_budget: abort    # abort | warn | ignore
-```
-
-The step transitions the repo to `DYNAMIC_TESTED` on completion or `DYNAMIC_TEST_SKIPPED` if skipped (no findings, missing pipeline_output, or over budget).
-
-## Extending
-
-### Adding a new language
-
-1. Add a Dockerfile template to `docker_templates/`
-2. Add the language mapping to `LANGUAGE_MAP` in `test_generator.py`
-3. The LLM will use the language context to generate appropriate test scripts
-
-### Adding CWE-specific guidance
-
-Add entries to the `_get_cwe_guidance()` function in `test_generator.py`. The guidance string is appended to the LLM prompt for findings matching that CWE ID.
-
-### Changing container security settings
-
-Modify the `docker run` flags in `docker_executor.py:_run_single()`. The current settings prioritize isolation over flexibility.
+测试分别覆盖真实 C/C++ 漏洞版和修复版编译执行、UBSan、编译失败、超时、无效 JSON，以及模拟 Docker 的文件预置和安全参数。若本机没有编译器，对应原生测试明确跳过。Docker 接线 mock 通过不等于真实 Docker 镜像构建或容器集成已通过。

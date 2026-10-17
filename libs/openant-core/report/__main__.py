@@ -53,12 +53,12 @@ def cmd_summary(args):
     try:
         validate_pipeline_output(pipeline_data)
     except ValidationError as e:
-        print(f"Validation error: {e}", file=sys.stderr)
+        print(f"验证错误： {e}", file=sys.stderr)
         sys.exit(1)
 
     report_binding = _build_report_binding()
 
-    print("Generating summary report...")
+    print("正在生成摘要报告…")
     report, usage = generate_summary_report(pipeline_data, report_binding)
 
     output_path = Path(args.output) if args.output else Path("SUMMARY_REPORT.md")
@@ -66,7 +66,7 @@ def cmd_summary(args):
     with open_utf8(output_path, "w") as f:
         f.write(report)
     print(f"  -> {output_path}")
-    print(f"  Cost: ${usage['cost_usd']:.4f} ({usage['total_tokens']:,} tokens)")
+    print(f"  预估费用： ${usage['cost_usd']:.4f} ({usage['total_tokens']:,} tokens)")
 
 
 def cmd_disclosures(args):
@@ -80,7 +80,7 @@ def cmd_disclosures(args):
     try:
         validate_pipeline_output(pipeline_data)
     except ValidationError as e:
-        print(f"Validation error: {e}", file=sys.stderr)
+        print(f"验证错误： {e}", file=sys.stderr)
         sys.exit(1)
 
     output_dir = Path(args.output) if args.output else Path("disclosures")
@@ -98,7 +98,7 @@ def cmd_disclosures(args):
         if finding.get("stage2_verdict") not in DISCLOSURE_ELIGIBLE:
             continue
 
-        print(f"Generating disclosure for {finding['short_name']}...")
+        print(f"正在为 {finding['short_name']} 生成披露文档…")
         disclosure, _usage = generate_disclosure(finding, product_name, report_binding)
 
         # Coerce to str, fall back to id, and basename so a null/typed/traversal
@@ -112,41 +112,41 @@ def cmd_disclosures(args):
         count += 1
 
     if count == 0:
-        print("No confirmed vulnerabilities to generate disclosures for.")
+        print("没有可生成披露文档的已确认漏洞。")
     else:
-        print(f"Generated {count} disclosure(s).")
+        print(f"已生成 {count} 份披露文档。")
 
 
 def cmd_all(args):
     """Generate all reports."""
     generate_all(args.input, args.output or "output")
-    print("Done.")
+    print("完成。")
 
 
 def main():
     parser = argparse.ArgumentParser(
         prog="report",
-        description="Generate security reports and disclosure documents from OpenAnt pipeline output."
+        description="根据 OpenAnt 扫描结果生成安全报告和漏洞披露文档。"
     )
 
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
     # summary command
-    summary_parser = subparsers.add_parser("summary", help="Generate summary report")
-    summary_parser.add_argument("input", help="Pipeline output JSON file")
-    summary_parser.add_argument("-o", "--output", help="Output file (default: SUMMARY_REPORT.md)")
+    summary_parser = subparsers.add_parser("summary", help="生成摘要报告")
+    summary_parser.add_argument("input", help="扫描结果 JSON 文件")
+    summary_parser.add_argument("-o", "--output", help="输出文件（默认：SUMMARY_REPORT.md）")
     summary_parser.set_defaults(func=cmd_summary)
 
     # disclosures command
-    disclosures_parser = subparsers.add_parser("disclosures", help="Generate disclosure documents")
-    disclosures_parser.add_argument("input", help="Pipeline output JSON file")
-    disclosures_parser.add_argument("-o", "--output", help="Output directory (default: disclosures/)")
+    disclosures_parser = subparsers.add_parser("disclosures", help="生成漏洞披露文档")
+    disclosures_parser.add_argument("input", help="扫描结果 JSON 文件")
+    disclosures_parser.add_argument("-o", "--output", help="输出目录（默认：disclosures/）")
     disclosures_parser.set_defaults(func=cmd_disclosures)
 
     # all command
-    all_parser = subparsers.add_parser("all", help="Generate all reports (summary + disclosures)")
-    all_parser.add_argument("input", help="Pipeline output JSON file")
-    all_parser.add_argument("-o", "--output", help="Output directory (default: output/)")
+    all_parser = subparsers.add_parser("all", help="生成全部报告（摘要和披露文档）")
+    all_parser.add_argument("input", help="扫描结果 JSON 文件")
+    all_parser.add_argument("-o", "--output", help="输出目录（默认：output/）")
     all_parser.set_defaults(func=cmd_all)
 
     args = parser.parse_args()

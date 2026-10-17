@@ -67,7 +67,7 @@ class TestDisclosureVerdictHeader:
         out, _ = gen.generate_disclosure(
             _finding("unverified"), "prod", _Binding(_LLM_BODY)
         )
-        assert "UNVERIFIED" in out, "an unverified Stage-1 candidate is not marked"
+        assert "未验证" in out, "an unverified Stage-1 candidate is not marked"
         assert "app/routes.py:handler" in out, "the location is not stamped"
 
     def test_confirmed_finding_is_marked_confirmed(self, monkeypatch):
@@ -75,16 +75,16 @@ class TestDisclosureVerdictHeader:
         out, _ = gen.generate_disclosure(
             _finding("confirmed"), "prod", _Binding(_LLM_BODY)
         )
-        assert "CONFIRMED" in out
-        assert "UNVERIFIED" not in out
+        assert "已通过第 2 阶段攻击者模拟确认" in out
+        assert "未验证" not in out
 
     def test_error_verdict_is_unverified_not_confirmed(self, monkeypatch):
         monkeypatch.setattr(gen, "lookup_pricing", lambda b: None)
         out, _ = gen.generate_disclosure(
             _finding("error"), "prod", _Binding(_LLM_BODY)
         )
-        assert "UNVERIFIED" in out
-        assert "CONFIRMED" not in out
+        assert "未验证" in out
+        assert "已通过第 2 阶段攻击者模拟确认" not in out
 
     def test_bypassable_is_unverified_not_confirmed(self, monkeypatch):
         """`bypassable` is a Stage-1 verdict (no Stage-2 adjudication), so it must
@@ -94,16 +94,16 @@ class TestDisclosureVerdictHeader:
         out, _ = gen.generate_disclosure(
             _finding("bypassable"), "prod", _Binding(_LLM_BODY)
         )
-        assert "UNVERIFIED" in out
-        assert "CONFIRMED" not in out
+        assert "未验证" in out
+        assert "已通过第 2 阶段攻击者模拟确认" not in out
 
     def test_vulnerable_is_unverified_not_confirmed(self, monkeypatch):
         monkeypatch.setattr(gen, "lookup_pricing", lambda b: None)
         out, _ = gen.generate_disclosure(
             _finding("vulnerable"), "prod", _Binding(_LLM_BODY)
         )
-        assert "UNVERIFIED" in out
-        assert "CONFIRMED" not in out
+        assert "未验证" in out
+        assert "已通过第 2 阶段攻击者模拟确认" not in out
 
     def test_marker_is_deterministic_not_llm_dependent(self, monkeypatch):
         """The LLM body carries no verification text, so the marker is proof the
@@ -113,4 +113,4 @@ class TestDisclosureVerdictHeader:
         out, _ = gen.generate_disclosure(
             _finding("unverified"), "prod", _Binding(_LLM_BODY)
         )
-        assert out.lstrip().startswith("> **Verification:**")
+        assert out.lstrip().startswith("> **验证状态：**")

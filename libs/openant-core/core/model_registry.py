@@ -47,7 +47,7 @@ from pathlib import Path
 _CONFIG_REL = Path("config") / "models.json"
 _SEARCH_LEVELS = 6
 _VALID_STATUS = frozenset({"current", "retired", "unknown"})
-_VALID_PROVIDERS = frozenset({"anthropic", "openai", "google", "bedrock", "openrouter", "ollama"})
+_VALID_PROVIDERS = frozenset({"anthropic", "openai", "google", "bedrock", "openrouter", "ollama", "deepseek"})
 
 # Local-inference providers: models run on the user's own hardware, so $0 is a
 # truthful, verified fact — not an unverified vendor quote. The "current =>

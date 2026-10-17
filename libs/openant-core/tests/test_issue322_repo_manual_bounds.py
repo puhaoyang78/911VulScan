@@ -84,7 +84,7 @@ def test_banner_covers_repo_manual():
         "manual_override_warnings": ["not_a_vulnerability (12 entries)"],
     })
     assert header != "", "the banner must render for a repo-supplied override"
-    assert "repo-committed file" in header
+    assert "仓库提交的文件" in header
     assert "12" in header
 
 
@@ -173,6 +173,14 @@ class TestScannerManualOverrideIntegration:
     def _offline(self, monkeypatch):
         import utilities.llm as llm_mod
         monkeypatch.setattr(llm_mod, "probe_registry_or_raise", lambda *a, **k: None)
+        # This test concerns scanner context receipts, not provider selection.
+        # Make the historical Anthropic harness explicit and entirely offline;
+        # fresh-install DeepSeek selection is covered by its adapter tests.
+        import utilities.llm.registry as registry_mod
+        from tests._llm_factories.anthropic import make_adapter
+        monkeypatch.setattr(llm_mod, "load_config_file", lambda: llm_mod.parse_config(
+            {"default_llm": "openant-default"}))
+        monkeypatch.setattr(registry_mod, "build_adapter", lambda provider: make_adapter("text"))
 
     @pytest.fixture
     def repo(self, tmp_path):

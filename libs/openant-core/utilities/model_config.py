@@ -55,3 +55,7 @@ GEMINI_2_0_FLASH = "gemini-2.0-flash"
 GEMINI_2_0_FLASH_LITE = "gemini-2.0-flash-lite"
 GEMINI_1_5_PRO = "gemini-1.5-pro"
 GEMINI_1_5_FLASH = "gemini-1.5-flash"
+
+# --- DeepSeek (official API model IDs, checked 2026-10-17) ------------
+DEEPSEEK_FLASH = "deepseek-flash"
+DEEPSEEK_PRO = "deepseek-v4-pro"

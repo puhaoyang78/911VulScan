@@ -50,11 +50,11 @@ func TestPrintPatchSummary_FindingMode(t *testing.T) {
 		})
 	})
 
-	if !strings.Contains(out, "Patch Trust Report") {
-		t.Errorf("expected header %q in output, got:\n%s", "Patch Trust Report", out)
+	if !strings.Contains(out, "补丁可信度报告") {
+		t.Errorf("expected header %q in output, got:\n%s", "补丁可信度报告", out)
 	}
-	if !strings.Contains(out, "Finding") {
-		t.Errorf("expected label %q in output, got:\n%s", "Finding", out)
+	if !strings.Contains(out, "漏洞发现") {
+		t.Errorf("expected label %q in output, got:\n%s", "漏洞发现", out)
 	}
 	if strings.Contains(out, "CVE") {
 		t.Errorf("finding-mode output should not say CVE, got:\n%s", out)

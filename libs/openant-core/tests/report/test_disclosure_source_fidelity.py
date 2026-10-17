@@ -128,7 +128,7 @@ def test_pipeline_output_carries_vulnerable_code_section(pipeline_output: dict):
     for finding in findings:
         section = finding.get("vulnerable_code_section")
         assert section, f"vulnerable_code_section missing from {finding.get('id')}"
-        assert section.startswith("## Vulnerable Code"), (
+        assert section.startswith("## 漏洞代码"), (
             f"section must start with a markdown heading: {section[:80]!r}"
         )
         # File path is surfaced in the section so the reader can locate the code.

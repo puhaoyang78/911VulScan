@@ -34,7 +34,7 @@ def test_go2_null_reasoning_no_crash():
     html = Path(out).read_text(encoding="utf-8")
     # not just no-crash: the finding must actually render (else a refactor that skips
     # the row for a non-fix reason would keep the test green)
-    assert "a.py:f" in html and "vulnerable" in html
+    assert "a.py:f" in html and "存在漏洞" in html
 
 
 # --- GO-3: an 'error' (unanalyzed) unit must be surfaced, not invisible ---
@@ -43,8 +43,8 @@ def test_go3_error_verdict_surfaced():
     out = os.path.join(tempfile.mkdtemp(), "r.html")
     H.generate_html_report(exp, {"units": []}, "", out)
     html = Path(out).read_text(encoding="utf-8")
-    assert "Errored (unanalyzed)" in html          # stat card
-    assert '"error"' in html                        # AND the charts (not just the card)
+    assert "出错（未完成分析）" in html          # stat card
+    assert '"错误"' in html                        # AND the charts (not just the card)
 
 
 def test_go3_chart_does_not_reintroduce_injection():
@@ -57,7 +57,7 @@ def test_go3_chart_does_not_reintroduce_injection():
     out = os.path.join(tempfile.mkdtemp(), "r.html")
     H.generate_html_report(exp, {"units": []}, "", out)
     html = Path(out).read_text(encoding="utf-8")
-    assert '"error"' in html                        # sentinel charted
+    assert '"错误"' in html                        # sentinel charted
     assert "<svg onload=alert(1)>" not in html      # arbitrary verdict NOT injected
 
 

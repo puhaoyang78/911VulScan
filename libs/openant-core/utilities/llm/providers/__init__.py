@@ -31,6 +31,10 @@ def get_adapter_class(provider_type: str) -> Type[LLMAdapter]:
     discovery) so OSS contributors see the full provider list by
     grepping for ``get_adapter_class`` — no plugin magic to debug.
     """
+    if provider_type == "deepseek":
+        from .deepseek import DeepSeekAdapter
+
+        return DeepSeekAdapter
     if provider_type == "anthropic":
         from .anthropic import AnthropicAdapter
 
@@ -59,7 +63,7 @@ def get_adapter_class(provider_type: str) -> Type[LLMAdapter]:
     raise ValueError(
         f"Unknown provider type: {provider_type!r}. "
         f"Supported in this release: 'anthropic', 'openai', 'google', "
-        f"'bedrock', 'openrouter', 'ollama'. To add a provider, see "
+        f"'bedrock', 'openrouter', 'ollama', 'deepseek'. To add a provider, see "
         f"docs/features/llm-providers/HOW_TO_ADD_AN_ADAPTER.md."
     )
 
@@ -70,4 +74,4 @@ def known_provider_types() -> list[str]:
     Used by the Go CLI's ``llm-provider set`` to validate the
     ``type`` field before writing config.json.
     """
-    return ["anthropic", "openai", "google", "bedrock", "openrouter", "ollama"]
+    return ["deepseek", "anthropic", "openai", "google", "bedrock", "openrouter", "ollama"]

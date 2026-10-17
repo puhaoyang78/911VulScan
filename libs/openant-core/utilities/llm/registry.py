@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Optional
 
 from .adapter import LLMAdapter
-from .builtins import get_builtin_default
+from .builtins import BUILTIN_CONFIGS
 from .config import (
     ConfigError,
     ConfigFile,
@@ -105,23 +105,21 @@ def resolve_llm_config(cf: ConfigFile, name: Optional[str]) -> LLMConfig:
     1. Explicit ``name`` argument (typically from ``--llm-config`` or
        ``project.json:llm_config``).
     2. ``cf.default_llm``.
-    3. Built-in ``openant-default``.
+    3. Built-in ``deepseek-default`` (legacy Anthropic installs keep ``openant-default``).
 
     Raises:
         ConfigError: when an explicitly-named config doesn't exist.
     """
-    builtin = get_builtin_default()
-
     chosen_name = name or cf.default_llm
 
-    if chosen_name == "openant-default":
-        return builtin
+    if chosen_name in BUILTIN_CONFIGS:
+        return BUILTIN_CONFIGS[chosen_name]
     if chosen_name in cf.llm_configs:
         return cf.llm_configs[chosen_name]
 
     # Explicit name that doesn't exist is always an error. Falling
     # silently back to openant-default would mask typos.
-    available = ["openant-default"] + sorted(cf.llm_configs)
+    available = list(BUILTIN_CONFIGS) + sorted(cf.llm_configs)
     raise ConfigError(
         f"llm-config {chosen_name!r} not found. "
         f"Available: {', '.join(available)}."
@@ -134,7 +132,7 @@ def resolve_llm_config(cf: ConfigFile, name: Optional[str]) -> LLMConfig:
 
 
 def resolve_provider(cf: ConfigFile, name: str) -> ProviderConfig:
-    """Look up a provider by name, with a fallback for ``"anthropic"``.
+    """Look up a named provider, synthesising the two built-in provider entries.
 
     The fallback exists for upgrade-from-v1 users who have
     ``ANTHROPIC_API_KEY`` in their environment but no ``llm_providers``
@@ -149,9 +147,9 @@ def resolve_provider(cf: ConfigFile, name: str) -> ProviderConfig:
     """
     if name in cf.llm_providers:
         return cf.llm_providers[name]
-    if name == "anthropic":
-        # SDK reads ANTHROPIC_API_KEY from env when api_key is None.
-        return ProviderConfig(name="anthropic", type="anthropic")
+    if name in ("anthropic", "deepseek"):
+        # Adapters read their own provider-specific environment keys.
+        return ProviderConfig(name=name, type=name)
     raise ConfigError(
         f"Provider {name!r} is referenced by an llm-config but not defined "
         f"in llm_providers. Defined: {sorted(cf.llm_providers) or 'none'}."
@@ -259,7 +257,7 @@ def build_adapter(provider: ProviderConfig) -> LLMAdapter:
     """
     import inspect
 
-    from .adapter import LLMAuthError
+    from .adapter import LLMAuthError, LLMError
 
     adapter_cls = get_adapter_class(provider.type)
     kwargs: dict = {
@@ -283,13 +281,16 @@ def build_adapter(provider: ProviderConfig) -> LLMAdapter:
             _warn_unconsumed_thinking(provider.name, provider.type)
     try:
         return adapter_cls(**kwargs)
+    except LLMError:
+        raise
     except Exception as exc:  # noqa: BLE001 — re-raise as typed
         raise LLMAuthError(
             f"Failed to construct adapter for provider {provider.name!r} "
             f"(type {provider.type!r}): {type(exc).__name__}: {exc}. "
-            f"For the anthropic adapter, ensure either "
+            f"Ensure either "
             f"`llm_providers[{provider.name!r}].api_key` is set in "
-            f"config.json or `ANTHROPIC_API_KEY` is exported in the "
+            f"config.json or the provider-specific API key environment variable "
+            f"(e.g. DEEPSEEK_API_KEY or ANTHROPIC_API_KEY) is exported in the "
             f"environment."
         ) from exc
 
@@ -421,21 +422,26 @@ def build_phase_registry(
         if ref.provider not in unique_providers:
             unique_providers[ref.provider] = resolve_provider(cf, ref.provider)
 
+    # Enforce the product output language at the shared dispatch boundary.
+    from .language import ChineseOutputAdapter
+
     # Second pass: instantiate one adapter per provider.
     adapters: dict[str, LLMAdapter] = {
-        name: build_adapter(provider)
+        name: ChineseOutputAdapter(build_adapter(provider))
         for name, provider in unique_providers.items()
     }
 
     # Third pass: build phase bindings reusing the per-provider adapters.
     bindings: dict[str, PhaseBinding] = {}
     for phase, ref in llm_config.phases.items():
+        adapter_base_url = getattr(adapters[ref.provider], "base_url", None)
         bindings[phase] = PhaseBinding(
             phase=phase,
             adapter=adapters[ref.provider],
             model=ref.model,
             provider_name=ref.provider,
-            base_url=unique_providers[ref.provider].base_url,
+            base_url=(unique_providers[ref.provider].base_url
+                      or (adapter_base_url if isinstance(adapter_base_url, str) else None)),
         )
 
     # Tool-support gating (plan §5): enhance + verify require an

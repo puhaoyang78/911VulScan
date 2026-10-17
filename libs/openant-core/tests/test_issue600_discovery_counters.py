@@ -413,7 +413,7 @@ def test_summary_template_states_the_discovery_line():
     """The generated summary's prompt instructs the Discovery rendering —
     a disclosure nobody sees is the failure mode this fix targets."""
     src = (PROJECT_ROOT / "report" / "prompts" / "summary.txt").read_text()
-    assert "Discovery section" in src
+    assert "add a 发现范围 section" in src
     assert "unknown (not zero)" in src
     assert "excluded_dir_names" in src
     assert "directories_excluded" in src  # the flat count renders too

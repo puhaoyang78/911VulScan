@@ -30,6 +30,8 @@ import os
 from datetime import datetime
 
 from dotenv import load_dotenv
+from prompts.report_language import CHINESE_REPORT_INSTRUCTION
+from report.localization import display_label
 from core.verdict_taxonomy import fold_legacy_finding, FINDING_VERDICT_ORDER, ERROR_VERDICT
 from utilities.file_io import normalize_results, read_json
 from utilities.llm import (
@@ -115,9 +117,9 @@ def _build_header_subtitle(
     No metadata: "Generated <ts>" (preserves prior behavior)
     """
     if not repository:
-        return f"Generated on {html.escape(timestamp)}"
+        return f"生成时间：{html.escape(timestamp)}"
 
-    repo_name = html.escape(repository.get("name") or "unknown")
+    repo_name = html.escape(repository.get("name") or "未知")
 
     if diff and diff.get("mode") == "incremental":
         base = _short_sha(diff.get("base_sha"))
@@ -126,16 +128,16 @@ def _build_header_subtitle(
         units_total = diff.get("units_total_parsed")
         units_str = ""
         if units_in is not None and units_total is not None:
-            units_str = f" · {units_in}/{units_total} units"
+            units_str = f" · {units_in}/{units_total} 个代码单元"
         return (
-            f'<span class="incremental-badge">Incremental</span> '
+            f'<span class="incremental-badge">增量扫描</span> '
             f'{repo_name} · {html.escape(base)}..{html.escape(head)}{html.escape(units_str)} · '
-            f'Generated {html.escape(timestamp)}'
+            f'生成时间：{html.escape(timestamp)}'
         )
 
     sha = _short_sha(repository.get("commit_sha"))
     sha_str = f" @ {html.escape(sha)}" if sha else ""
-    return f"{repo_name}{sha_str} · Generated {html.escape(timestamp)}"
+    return f"{repo_name}{sha_str} · 生成时间：{html.escape(timestamp)}"
 
 
 def get_verdict_color(verdict: str) -> str:
@@ -203,9 +205,8 @@ def generate_remediation_guidance(findings: list) -> str:
     if not actionable:
         errored = sum(1 for f in findings if f['verdict'] == 'error')
         if errored:
-            return (f"<p>No confirmed vulnerabilities, but {errored} code unit(s) could not be "
-                    f"analyzed (errored) and need manual review.</p>")
-        return "<p>No vulnerabilities or security concerns found. All code units are either safe or properly protected.</p>"
+            return (f"<p>未确认任何漏洞，但有 {errored} 个代码单元分析出错，需要人工复核。</p>")
+        return "<p>未发现漏洞或安全问题，所有代码单元均安全或已有适当防护。</p>"
 
     # Build prompt
     findings_text = ""
@@ -217,7 +218,7 @@ def generate_remediation_guidance(findings: list) -> str:
 - **Analysis**: {f['stage2_explanation'][:500] if f['stage2_explanation'] else f['stage1_reasoning'][:500]}
 """
 
-    prompt = f"""Analyze these security findings and provide:
+    prompt = CHINESE_REPORT_INSTRUCTION + f"""Analyze these security findings and provide:
 
 1. **Executive Summary**: A brief overview of the security posture (2-3 sentences)
 
@@ -276,10 +277,10 @@ def _build_pipeline_costs_html(step_reports: list[dict]) -> str:
 
         rows += f"""
         <tr>
-            <td>{html.escape(step)}</td>
+            <td>{html.escape(display_label(step))}</td>
             <td>{dur_str}</td>
             <td>{cost_str}</td>
-            <td><span style="color: {status_color}">{html.escape(status)}</span></td>
+            <td><span style="color: {status_color}">{html.escape(display_label(status))}</span></td>
         </tr>"""
 
     # Total row
@@ -287,20 +288,21 @@ def _build_pipeline_costs_html(step_reports: list[dict]) -> str:
 
     return f"""
         <section class="section">
-            <h2>Pipeline Costs &amp; Timing</h2>
+            <h2>扫描步骤预估费用与耗时</h2>
+            <p>费用按配置中的模型费率估算，最终以供应商账单为准。</p>
             <table>
                 <thead>
                     <tr>
-                        <th>Step</th>
-                        <th>Duration</th>
-                        <th>Cost</th>
-                        <th>Status</th>
+                        <th>步骤</th>
+                        <th>耗时</th>
+                        <th>预估费用</th>
+                        <th>状态</th>
                     </tr>
                 </thead>
                 <tbody>
                     {rows}
                     <tr style="border-top: 2px solid var(--border); font-weight: bold">
-                        <td>Total</td>
+                        <td>合计</td>
                         <td>{total_dur_str}</td>
                         <td>${total_cost:.4f}</td>
                         <td></td>
@@ -407,11 +409,11 @@ def generate_html_report(
     # findings table with an html.escape'd badge.
     if ERROR_VERDICT in verdict_counts or ERROR_VERDICT in file_verdict_counts:
         verdict_order.append(ERROR_VERDICT)
-    unit_chart_labels = json.dumps([v for v in verdict_order if v in verdict_counts])
+    unit_chart_labels = json.dumps([display_label(v) for v in verdict_order if v in verdict_counts], ensure_ascii=False)
     unit_chart_data = json.dumps([verdict_counts.get(v, 0) for v in verdict_order if v in verdict_counts])
     unit_chart_colors = json.dumps([get_verdict_color(v) for v in verdict_order if v in verdict_counts])
 
-    file_chart_labels = json.dumps([v for v in verdict_order if v in file_verdict_counts])
+    file_chart_labels = json.dumps([display_label(v) for v in verdict_order if v in file_verdict_counts], ensure_ascii=False)
     file_chart_data = json.dumps([file_verdict_counts.get(v, 0) for v in verdict_order if v in file_verdict_counts])
     file_chart_colors = json.dumps([get_verdict_color(v) for v in verdict_order if v in file_verdict_counts])
 
@@ -420,7 +422,7 @@ def generate_html_report(
     for f in findings_data:
         findings_rows += f"""
         <tr>
-            <td><span class="verdict-badge" style="background-color: {f['color']}">{html.escape(f['verdict'])}</span></td>
+            <td><span class="verdict-badge" style="background-color: {f['color']}">{html.escape(display_label(f['verdict']))}</span></td>
             <td><code>{html.escape(f['file'])}</code></td>
             <td title="{html.escape(f['unit_id'])}">{html.escape(f['unit_id'].split(':')[-1] if ':' in f['unit_id'] else f['unit_id'])}</td>
             <td>{f['attack_vector'] or '-'}</td>
@@ -435,11 +437,11 @@ def generate_html_report(
 
     # Build HTML
     html_content = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Security Analysis Report</title>
+    <title>安全分析报告</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" integrity="sha256-SERKgtTty1vsDxll+qzd4Y2cF9swY9BCq62i9wXJ9Uo=" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js" integrity="sha256-IMCPPZxtLvdt9tam8RJ8ABMzn+Mq3SQiInbDmMYwjDg=" crossorigin="anonymous"></script>
     <style>
@@ -693,83 +695,83 @@ def generate_html_report(
 <body>
     <div class="container">
         <header>
-            <h1>Security Analysis Report</h1>
+            <h1>安全分析报告</h1>
             <p class="subtitle">{_build_header_subtitle(timestamp, repository, diff)}</p>
         </header>
 
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-value">{total_units}</div>
-                <div class="stat-label">Code Units</div>
+                <div class="stat-label">代码单元</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">{total_files}</div>
-                <div class="stat-label">Files</div>
+                <div class="stat-label">文件</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color: #dc3545">{verdict_counts.get('vulnerable', 0)}</div>
-                <div class="stat-label">Vulnerable</div>
+                <div class="stat-label">存在漏洞</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color: #fd7e14">{verdict_counts.get('bypassable', 0)}</div>
-                <div class="stat-label">Bypassable</div>
+                <div class="stat-label">防护可绕过</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color: #28a745">{verdict_counts.get('protected', 0) + verdict_counts.get('safe', 0)}</div>
-                <div class="stat-label">Secure</div>
+                <div class="stat-label">安全</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color: #6c757d">{verdict_counts.get('error', 0)}</div>
-                <div class="stat-label">Errored (unanalyzed)</div>
+                <div class="stat-label">出错（未完成分析）</div>
             </div>
         </div>
 
         <section class="section">
-            <h2>Distribution Overview</h2>
+            <h2>结果分布</h2>
             <div class="charts-grid">
                 <div class="chart-container">
-                    <div class="chart-title">By Code Unit</div>
+                    <div class="chart-title">按代码单元</div>
                     <canvas id="unitChart"></canvas>
                 </div>
                 <div class="chart-container">
-                    <div class="chart-title">By File (Worst Verdict)</div>
+                    <div class="chart-title">按文件（最高风险判定）</div>
                     <canvas id="fileChart"></canvas>
                 </div>
             </div>
             <table class="category-table">
                 <thead>
                     <tr>
-                        <th>Category</th>
-                        <th>Description</th>
+                        <th>类别</th>
+                        <th>说明</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
-                        <td><span class="verdict-badge" style="background-color: #dc3545">Vulnerable</span></td>
-                        <td>Code contains an exploitable security vulnerability with no effective protection. Immediate remediation required.</td>
+                        <td><span class="verdict-badge" style="background-color: #dc3545">存在漏洞</span></td>
+                        <td>代码存在可利用的安全漏洞，且缺少有效防护，需要立即修复。</td>
                     </tr>
                     <tr>
-                        <td><span class="verdict-badge" style="background-color: #fd7e14">Bypassable</span></td>
-                        <td>Security controls exist but can be circumvented under certain conditions. Review and strengthen protections.</td>
+                        <td><span class="verdict-badge" style="background-color: #fd7e14">防护可绕过</span></td>
+                        <td>已有安全控制可在特定条件下被绕过，需要检查并加强防护。</td>
                     </tr>
                     <tr>
-                        <td><span class="verdict-badge" style="background-color: #6c757d">Inconclusive</span></td>
-                        <td>Security posture could not be determined. Manual review recommended to assess risk.</td>
+                        <td><span class="verdict-badge" style="background-color: #6c757d">无法确定</span></td>
+                        <td>无法确定安全状态，建议人工复核风险。</td>
                     </tr>
                     <tr>
-                        <td><span class="verdict-badge" style="background-color: #28a745">Protected</span></td>
-                        <td>Code handles potentially dangerous operations but has effective security controls in place.</td>
+                        <td><span class="verdict-badge" style="background-color: #28a745">已防护</span></td>
+                        <td>代码涉及潜在危险操作，但已有有效安全控制。</td>
                     </tr>
                     <tr>
-                        <td><span class="verdict-badge" style="background-color: #20c997">Safe</span></td>
-                        <td>Code does not involve security-sensitive operations or poses no security risk.</td>
+                        <td><span class="verdict-badge" style="background-color: #20c997">安全</span></td>
+                        <td>代码不涉及安全敏感操作，或未发现安全风险。</td>
                     </tr>
                 </tbody>
             </table>
         </section>
 
         <section class="section">
-            <h2>Remediation Guidance</h2>
+            <h2>修复建议</h2>
             <div class="remediation">
                 {remediation_html}
             </div>
@@ -778,14 +780,14 @@ def generate_html_report(
         {_build_pipeline_costs_html(step_reports or [])}
 
         <section class="section">
-            <h2>All Findings</h2>
+            <h2>全部发现项</h2>
             <table>
                 <thead>
                     <tr>
-                        <th>Verdict</th>
-                        <th>File</th>
-                        <th>Function</th>
-                        <th>Attack Vector</th>
+                        <th>判定</th>
+                        <th>文件</th>
+                        <th>函数</th>
+                        <th>攻击方式</th>
                         <th>Analysis</th>
                     </tr>
                 </thead>
@@ -796,7 +798,7 @@ def generate_html_report(
         </section>
 
         <footer>
-            <p>Generated by OpenAnt Security Analysis Tool</p>
+            <p>由 OpenAnt 安全分析工具生成</p>
         </footer>
     </div>
 
@@ -865,7 +867,7 @@ def generate_html_report(
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
-    print(f"Report generated: {output_path}")
+    print(f"报告已生成： {output_path}")
 
 
 def _load_step_reports_from_dir(directory: str) -> list[dict]:
@@ -881,15 +883,15 @@ def _load_step_reports_from_dir(directory: str) -> list[dict]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate HTML security report')
-    parser.add_argument('experiment', help='Path to experiment results JSON')
-    parser.add_argument('dataset', help='Path to dataset JSON')
-    parser.add_argument('output', nargs='?', default='report.html', help='Output HTML path (default: report.html)')
-    parser.add_argument('--step-reports-dir', help='Directory containing *.report.json step reports')
+    parser = argparse.ArgumentParser(description='生成 HTML 安全报告')
+    parser.add_argument('experiment', help='实验结果 JSON 文件路径')
+    parser.add_argument('dataset', help='数据集 JSON 文件路径')
+    parser.add_argument('output', nargs='?', default='report.html', help='HTML 输出路径（默认：report.html）')
+    parser.add_argument('--step-reports-dir', help='包含 *.report.json 步骤报告的目录')
 
     args = parser.parse_args()
 
-    print("Loading data...")
+    print("正在加载数据…")
     experiment = load_json(args.experiment)
     # fa17 TRUST BOUNDARY: normalize model-supplied `results` to dicts-only once
     # at load. `experiment` is passed by reference into prepare_findings_summary
@@ -906,15 +908,15 @@ def main():
         exp_dir = os.path.dirname(os.path.abspath(args.experiment))
         step_reports = _load_step_reports_from_dir(exp_dir)
 
-    print("Preparing findings...")
+    print("正在整理发现项…")
     findings = prepare_findings_summary(experiment, dataset)
 
-    print("Generating remediation guidance (calling LLM)...")
+    print("正在调用大语言模型生成修复建议…")
     remediation_html = generate_remediation_guidance(findings)
 
     repository, diff = _load_pipeline_metadata(args.experiment)
 
-    print("Building HTML report...")
+    print("正在构建 HTML 报告…")
     generate_html_report(
         experiment,
         dataset,
@@ -930,7 +932,7 @@ def main():
     for f in findings:
         v = f['verdict']
         verdict_counts[v] = verdict_counts.get(v, 0) + 1
-    print(f"Summary: {verdict_counts}")
+    print("摘要：" + "，".join(f"{display_label(k)}：{v}" for k, v in verdict_counts.items()))
 
 
 if __name__ == '__main__':

@@ -22,30 +22,62 @@ var (
 
 // rootCmd represents the base command when called without any subcommands.
 var rootCmd = &cobra.Command{
-	Use:   "openant",
-	Short: "LLM-powered static analysis security testing",
-	Long: `OpenAnt is a two-stage SAST tool that uses Claude to find real vulnerabilities
-in Python, JavaScript, Go, and C/C++ codebases.
+	Use:               "openant",
+	Short:             "911VulScan：大语言模型驱动的代码漏洞扫描",
+	PersistentPreRunE: validateLegacyKeyFlag,
+	Long: `911VulScan 基于 OpenAnt，默认使用 DeepSeek 分析代码漏洞。
+支持 Python、JavaScript/TypeScript、Go、C/C++ 等语言。
 
-Stage 1: Detect potential vulnerabilities via code analysis
-Stage 2: Simulate an attacker to eliminate false positives
+第一阶段：分析代码并识别潜在漏洞
+第二阶段：模拟攻击者复核，减少误报
+动态验证：在 Docker 隔离环境中运行复现测试
 
-Commands:
-  scan              Full pipeline: parse → enhance → detect → verify → report
-  diff              Scan only code changed vs a base ref or GitHub PR
-  parse             Extract code units from a repository
-  generate-context  Generate application security context
-  enhance           Add security context to a parsed dataset
-  analyze           Run Stage 1 vulnerability detection
-  verify            Run Stage 2 attacker simulation
-  build-output      Assemble pipeline_output.json from verified results
-  dynamic-test      Docker-isolated exploit testing
-  report            Generate reports from analysis results
-  config            Manage CLI configuration (API key, etc.)`,
+常用命令：
+  serve             启动中文网页工作台
+  setup llm         配置模型供应商与 API 密钥
+  scan              完整扫描：解析 → 增强 → 检测 → 验证 → 报告
+  diff              扫描与基准提交或 GitHub PR 相比发生变化的代码
+  parse             从代码库提取代码单元
+  generate-context  生成应用安全上下文
+  enhance           增强已解析代码的安全上下文
+  analyze           执行第一阶段漏洞检测
+  verify            执行第二阶段攻击验证
+  build-output      汇总 pipeline_output.json
+  dynamic-test      在 Docker 中隔离执行动态验证
+  report            生成中文报告
+  config            管理配置
+
+首次使用建议：openant setup llm
+也可设置 DEEPSEEK_API_KEY 后运行扫描。`,
+}
+
+// validateLegacyKeyFlag keeps the historical flag provider-scoped. DeepSeek
+// credentials are configured separately, so an old flag cannot be silently
+// ignored or routed to an unintended provider.
+func validateLegacyKeyFlag(cmd *cobra.Command, _ []string) error {
+	if apiKeyFlag == "" || cmd.Name() == "patch" {
+		// Auto Patcher retains its own explicit legacy provider selector.
+		return nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	profile := ""
+	if flag := cmd.Flags().Lookup("llm-config"); flag != nil {
+		profile = flag.Value.String()
+	}
+	if phase, ok := cfg.LLMPhase(profile, "analyze"); ok {
+		if provider, ok := cfg.EffectiveProvider(phase.Provider); ok && provider.Type == "deepseek" {
+			return fmt.Errorf("--api-key 仅用于旧版 Anthropic 配置；DeepSeek 请使用 DEEPSEEK_API_KEY 或 openant set-api-key --provider deepseek")
+		}
+	}
+	return nil
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 func Execute() {
+	localizeCommandHelp(rootCmd)
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(2)
 	}
@@ -114,28 +146,29 @@ func requireAPIKey() string {
 		// stay out of the way.
 		return apiKeyFlag
 	}
+	// Provider SDKs read their own environment. Never pass a DeepSeek key
+	// through the legacy Anthropic-only positional apiKey argument.
+	if os.Getenv("DEEPSEEK_API_KEY") != "" || os.Getenv("ANTHROPIC_API_KEY") != "" {
+		return apiKeyFlag
+	}
 	// Reuse the loaded cfg — don't pay for a second config.Load().
 	key := resolveAPIKeyFor(cfg)
 	if key != "" {
 		return key
 	}
-	fmt.Fprintln(os.Stderr, "Error: No API key configured.")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Run:  openant set-api-key <your-anthropic-api-key>")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Or author an `llm_providers` section in ~/.config/openant/config.json")
-	fmt.Fprintln(os.Stderr, "  (see the OpenAnt documentation for adding new provider adapters)")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "You can get an Anthropic API key at https://console.anthropic.com/settings/keys")
+	fmt.Fprintln(os.Stderr, "错误：尚未配置模型 API 密钥。")
+	fmt.Fprintln(os.Stderr, "运行 openant setup llm 配置 DeepSeek，或设置 DEEPSEEK_API_KEY 环境变量。")
+	fmt.Fprintln(os.Stderr, "也可在 config.json 的 llm_providers 中配置其他供应商。")
+	fmt.Fprintln(os.Stderr, "DeepSeek API 密钥管理：https://platform.deepseek.com/api_keys")
 	os.Exit(2)
 	return "" // unreachable
 }
 
 func init() {
-	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output raw JSON (machine-readable)")
-	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress output")
-	rootCmd.PersistentFlags().StringVar(&apiKeyFlag, "api-key", "", "LLM API key (overrides config). On v1 configs this becomes ANTHROPIC_API_KEY in the Python subprocess; on v2 configs (llm_providers section present) Python reads per-provider keys from config.json and this flag is only used as the explicit-override path.")
-	rootCmd.PersistentFlags().StringVarP(&projectFlag, "project", "p", "", "Project to use (overrides active project, e.g. grafana/grafana)")
+	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "输出原始 JSON（供程序读取，字段名与枚举保持兼容）")
+	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "隐藏进度输出")
+	rootCmd.PersistentFlags().StringVar(&apiKeyFlag, "api-key", "", "旧版 Anthropic 密钥覆盖（仅传给 ANTHROPIC_API_KEY）；DeepSeek 请使用 DEEPSEEK_API_KEY 或 setup llm")
+	rootCmd.PersistentFlags().StringVarP(&projectFlag, "project", "p", "", "指定项目（覆盖当前项目，例如 grafana/grafana）")
 
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(serveCmd)

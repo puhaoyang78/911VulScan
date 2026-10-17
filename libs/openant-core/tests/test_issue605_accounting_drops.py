@@ -103,7 +103,7 @@ def test_the_handoff_failure_is_counted_and_named(monkeypatch, capsys):
         {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
         _Binding())
     err = capsys.readouterr().err
-    assert "accounting hand-off failed" in err
+    assert "用量记录传递失败" in err
     assert "RuntimeError" in err
     assert llm_client.get_global_tracker().get_totals()["accounting_errors"] == 1
 

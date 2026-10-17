@@ -9,7 +9,25 @@ import "testing"
 
 // Review blocker (#346): ollama was missing — every (provider, phase) the
 // wizard can prefill must resolve, including the local provider.
-var testProviderTypes = []string{"anthropic", "openai", "google", "ollama"}
+var testProviderTypes = []string{"deepseek", "anthropic", "openai", "google", "ollama"}
+
+func TestDeepSeekWizardDefaultsToFlashForEveryPhase(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for phase := range phaseTier {
+		id, err := cfg.DefaultModel("deepseek", phase)
+		if err != nil || id != "deepseek-flash" {
+			t.Fatalf("DeepSeek %s default = %q, %v", phase, id, err)
+		}
+	}
+	for _, id := range cfg.KnownModels("deepseek") {
+		if id == "deepseek-chat" || id == "deepseek-reasoner" {
+			t.Errorf("retired alias offered by wizard: %s", id)
+		}
+	}
+}
 
 // Every (provider, phase) the wizard can prefill must resolve to a NON-EMPTY id
 // whose registry record is "current" — never retired/unknown, which is exactly

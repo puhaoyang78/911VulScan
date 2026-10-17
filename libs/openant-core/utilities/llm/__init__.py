@@ -37,7 +37,7 @@ from .adapter import (
     ToolResultBlock,
     ToolUseBlock,
 )
-from .builtins import OPENANT_DEFAULT, get_builtin_default
+from .builtins import DEEPSEEK_DEFAULT, DEEPSEEK_PRO_DEFAULT, OPENANT_DEFAULT, get_builtin_default
 from .config import (
     PHASES,
     ConfigError,
@@ -84,6 +84,8 @@ __all__ = [
     "ToolResultBlock",
     "ToolUseBlock",
     # builtins
+    "DEEPSEEK_DEFAULT",
+    "DEEPSEEK_PRO_DEFAULT",
     "OPENANT_DEFAULT",
     "get_builtin_default",
     # config

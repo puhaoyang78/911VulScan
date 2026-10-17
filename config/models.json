@@ -810,6 +810,52 @@
       },
       "source": "verified against the live OpenRouter catalogue (GET https://openrouter.ai/api/v1/models, 2026-09-05), per-token rates converted to per-1M",
       "retrieved": "2026-09-05"
+    },
+    {
+      "id": "deepseek-flash",
+      "provider": "deepseek",
+      "status": "current",
+      "price": {
+        "input": 0.3,
+        "output": 1.2
+      },
+      "source": "https://api-docs.deepseek.com/quick_start/pricing/ (checked 2026-10-17). USD per 1M tokens; PEAK rates used as a conservative estimate. Actual off-peak rates are half these rates; this static registry does not determine Chinese public holidays or per-request billing windows.",
+      "retrieved": "2026-10-17",
+      "cache": {
+        "read": 0.02,
+        "source": "Same official pricing page: cache-hit/input-miss ratio; prompt_cache_hit_tokens is an inclusive subset of prompt_tokens."
+      }
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "status": "current",
+      "price": {
+        "input": 1.32,
+        "output": 3.96
+      },
+      "source": "https://api-docs.deepseek.com/quick_start/pricing/ (checked 2026-10-17). USD per 1M tokens; PEAK rates used as a conservative estimate. Actual off-peak rates are half these rates; this static registry does not determine Chinese public holidays or per-request billing windows.",
+      "retrieved": "2026-10-17",
+      "cache": {
+        "read": 0.03333333333333333,
+        "source": "Same official pricing page: cache-hit/input-miss ratio; prompt_cache_hit_tokens is an inclusive subset of prompt_tokens."
+      }
+    },
+    {
+      "id": "deepseek-chat",
+      "provider": "deepseek",
+      "status": "retired",
+      "price": null,
+      "source": "https://api-docs.deepseek.com/news/news260424/: retired 2026-07-24 15:59 UTC; use deepseek-flash or deepseek-v4-pro.",
+      "retrieved": "2026-10-17"
+    },
+    {
+      "id": "deepseek-reasoner",
+      "provider": "deepseek",
+      "status": "retired",
+      "price": null,
+      "source": "https://api-docs.deepseek.com/news/news260424/: retired 2026-07-24 15:59 UTC; use deepseek-flash or deepseek-v4-pro.",
+      "retrieved": "2026-10-17"
     }
   ]
 }

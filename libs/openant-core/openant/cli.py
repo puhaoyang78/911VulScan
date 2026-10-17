@@ -1140,18 +1140,17 @@ def _remediation_for_unrecognized(actionable, error_rows):
     suppressed when unclassifiable rows exist (either the canonical
     error verdict or an off-enum spelling)."""
     if not actionable and not error_rows:
-        return "<p>No vulnerabilities or security concerns found. All code units are either safe or properly protected.</p>"
+        return "<p>未发现漏洞或安全问题，所有代码单元均安全或已有适当防护。</p>"
     if not actionable and error_rows:
         n_err = sum(1 for f in error_rows if f.get("verdict") == "error")
         n_unknown = len(error_rows) - n_err
         parts = []
         if n_err:
-            parts.append(f"{n_err} errored")
+            parts.append(f"{n_err} 个分析出错")
         if n_unknown:
-            parts.append(f"{n_unknown} with an unrecognized verdict")
-        return ("<p>No actionable findings, but "
-                f"{', '.join(parts)} unit(s) were not classified. "
-                "Review them manually.</p>")
+            parts.append(f"{n_unknown} 个判定无法识别")
+        return ("<p>没有可直接处理的发现项，但仍有代码单元未完成分类："
+                f"{'，'.join(parts)}。请人工复核。</p>")
     return None  # the actionable path takes the LLM call
 
 
@@ -1165,6 +1164,7 @@ def cmd_report_data(args):
     and step reports — everything display-ready.
     """
     from core.schemas import success, error
+    from prompts.report_language import CHINESE_REPORT_INSTRUCTION
     from core.step_report import step_context
     from utilities.llm_client import get_global_tracker
     from utilities.llm import (
@@ -1178,7 +1178,7 @@ def cmd_report_data(args):
     dataset_path = args.dataset
 
     if not dataset_path:
-        _output_json(error("--dataset is required for report-data"))
+        _output_json(error("report-data 必须指定 --dataset"))
         return 2
 
     results_dir = os.path.dirname(os.path.abspath(results_path))
@@ -1237,7 +1237,7 @@ def cmd_report_data(args):
                     if route:
                         dt_by_route_key[route] = dr
 
-                print(f"[Report] Loaded {len(dt_by_route_key)} dynamic test results", file=sys.stderr)
+                print(f"[报告] 已加载 {len(dt_by_route_key)} 条动态测试结果", file=sys.stderr)
 
             # --- Prepare findings ---
             units_by_id = {u["id"]: u for u in dataset.get("units", [])}
@@ -1343,10 +1343,10 @@ def cmd_report_data(args):
 
             # --- Group findings by verdict, sub-grouped by dynamic test outcome ---
             dt_subgroup_defs = [
-                ("Confirmed", lambda s: s == "CONFIRMED"),
-                ("Not reproduced", lambda s: s in ("NOT_REPRODUCED", "BLOCKED")),
-                ("Test error", lambda s: s == "ERROR"),
-                ("Not tested", lambda s: s in ("", "INCONCLUSIVE")),
+                ("已确认", lambda s: s == "CONFIRMED"),
+                ("未复现", lambda s: s in ("NOT_REPRODUCED", "BLOCKED")),
+                ("测试错误", lambda s: s == "ERROR"),
+                ("未测试", lambda s: s in ("", "INCONCLUSIVE")),
             ]
 
             findings_by_verdict = []
@@ -1453,7 +1453,7 @@ def cmd_report_data(args):
 {_an}
 {_anf}
 """
-                prompt = f"""Analyze these security findings and provide:
+                prompt = CHINESE_REPORT_INSTRUCTION + f"""Analyze these security findings and provide:
 
 1. **Executive Summary**: A brief overview of the security posture (2-3 sentences)
 
@@ -1472,7 +1472,7 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
 ## Findings to Analyze:
 {findings_text}
 """
-                print("[Report] Generating remediation guidance (LLM)...", file=sys.stderr)
+                print("[报告] 正在调用大语言模型生成修复建议…", file=sys.stderr)
                 # The remediation-guidance call rides the report phase
                 # so a single ``--llm-config`` flips it together with
                 # the summary/disclosure generation in report/generator.py.
@@ -1516,11 +1516,11 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
 
             # --- Category descriptions (static) ---
             categories = [
-                {"verdict": "vulnerable", "color": "#dc3545", "description": "Code contains an exploitable security vulnerability with no effective protection. Immediate remediation required."},
-                {"verdict": "bypassable", "color": "#fd7e14", "description": "Security controls exist but can be circumvented under certain conditions. Review and strengthen protections."},
-                {"verdict": "inconclusive", "color": "#6c757d", "description": "Security posture could not be determined. Manual review recommended to assess risk."},
-                {"verdict": "protected", "color": "#28a745", "description": "Code handles potentially dangerous operations but has effective security controls in place."},
-                {"verdict": "safe", "color": "#20c997", "description": "Code does not involve security-sensitive operations or poses no security risk."},
+                {"verdict": "vulnerable", "color": "#dc3545", "description": "代码存在可利用的安全漏洞，且缺少有效防护，需要立即修复。"},
+                {"verdict": "bypassable", "color": "#fd7e14", "description": "已有安全控制可在特定条件下被绕过，需要检查并加强防护。"},
+                {"verdict": "inconclusive", "color": "#6c757d", "description": "无法确定安全状态，建议人工复核风险。"},
+                {"verdict": "protected", "color": "#28a745", "description": "代码涉及潜在危险操作，但已有有效安全控制。"},
+                {"verdict": "safe", "color": "#20c997", "description": "代码不涉及安全敏感操作，或未发现安全风险。"},
             ]
 
             from datetime import datetime
@@ -1565,7 +1565,7 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
                 total_cost_usd += sr.get("cost_usd", 0)
 
             report_data = {
-                "title": "Security Analysis Report",
+                "title": "安全分析报告",
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "repo_name": repo_name,
                 "commit_sha": commit_sha,

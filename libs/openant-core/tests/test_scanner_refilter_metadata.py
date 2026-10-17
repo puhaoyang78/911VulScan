@@ -22,11 +22,15 @@ import pytest
 
 import core.scanner as scanner_mod
 
-# Reuse the exact offline fixtures that already drive the loop body (repo,
-# fake_parsers, stub_llm_reachability, _offline). Loading the module as a
-# fixture plugin makes them available without a by-name import (which would
-# shadow the fixture parameters and trip ruff F811).
-pytest_plugins = ("test_scanner_refilter_loop_executes",)
+# Reuse fixtures only in this module. Registering the harness through
+# pytest_plugins would make its autouse adapter patch global to the whole
+# suite, silently replacing real registry construction in unrelated tests.
+from tests import test_scanner_refilter_loop_executes as _loop_harness
+
+_offline = _loop_harness._offline
+repo = _loop_harness.repo
+fake_parsers = _loop_harness.fake_parsers
+stub_llm_reachability = _loop_harness.stub_llm_reachability
 
 
 @pytest.fixture(autouse=True)

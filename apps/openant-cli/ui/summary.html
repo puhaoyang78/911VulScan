@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Scan Summary — Knostic OpenAnt</title>
+<title>扫描摘要 · 911VulScan</title>
 <style nonce="{{.Nonce}}">
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #1a1a1a; }
@@ -31,20 +31,25 @@
   .content th, .content td { padding: 8px 12px; border: 1px solid #e1e4e8; text-align: left; }
   .content th { background: #f8f8f8; font-weight: 600; }
   #loading { color: #888; font-size: 0.9rem; }
+  body { background:#f0f5f6; color:#152b3b; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  header { background:#132c3c; flex-wrap:wrap; } header a { color:#c6e8e3; } .main { max-width:1000px; } .content { border:1px solid #dbe5e9; border-radius:12px; overflow-wrap:anywhere; } .content pre { white-space:pre; overflow-x:auto; } .content table { display:block; overflow-x:auto; } footer { color:#5b7081; font-size:11px; padding-top:22px; }
+  @media(max-width:600px) { header { padding:16px; gap:10px; } .main { margin-top:20px; padding:0 16px 32px; } .content { padding:22px 18px; } .content h1 { font-size:1.3rem; } }
+  :focus-visible { outline:3px solid #e8a848; outline-offset:3px; }
 </style>
 </head>
 <body>
 <header>
-  <a href="/">← Home</a>
+  <a href="/">← 返回工作台</a>
   <span class="sep">/</span>
-  <a href="/scan/{{.ID}}">Scan</a>
+  <a href="/scan/{{.ID}}">扫描进度</a>
   <span class="sep">/</span>
-  <span class="title">Summary</span>
+  <span class="title">中文摘要</span>
 </header>
 <div class="main">
-  <div class="content" id="content">
-    <span id="loading">Loading summary…</span>
+  <div class="content" id="content" data-render-state="loading">
+    <span id="loading">正在加载扫描摘要…</span>
   </div>
+<footer>911VulScan · 基于 Knostic OpenAnt 构建</footer>
 </div>
 <script src="/assets/marked-18.1.1.min.js"></script>
 <script src="/assets/dompurify-3.4.17.min.js"></script>
@@ -64,7 +69,13 @@ const MD_SANITIZE = {
   ALLOW_DATA_ATTR: false
 };
 const markdown = {{.MarkdownJSON}};
-document.getElementById('content').innerHTML = DOMPurify.sanitize(marked.parse(markdown), MD_SANITIZE);
+try {
+  document.getElementById('content').innerHTML = DOMPurify.sanitize(marked.parse(markdown), MD_SANITIZE);
+  document.getElementById('content').dataset.renderState = 'ready';
+} catch (_) {
+  document.getElementById('content').textContent = '内容加载失败，请刷新页面重试。';
+  document.getElementById('content').dataset.renderState = 'error';
+}
 </script>
 </body>
 </html>

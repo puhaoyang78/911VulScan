@@ -197,11 +197,12 @@ class TestMigrationV1toV2:
         assert cf.llm_providers["anthropic"].api_key == "sk-new"
         assert cf.llm_providers["anthropic"].base_url == "https://openrouter.ai/api/v1"
 
-    def test_empty_file_yields_empty_config(self):
+    def test_empty_file_yields_empty_config(self, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         cf = parse_config({})
         assert cf.llm_providers == {}
         assert cf.llm_configs == {}
-        assert cf.default_llm == "openant-default"
+        assert cf.default_llm == "deepseek-default"
 
 
 # ---------------------------------------------------------------------------

@@ -142,6 +142,12 @@ func probeChatCompletionsAt(apiKey, endpoint, model string) error {
 		`{"model":%q,"messages":[{"role":"user","content":"hi"}],%q:1}`,
 		model, tokenKey,
 	)
+	return probeChatCompletionsPayloadAt(apiKey, endpoint, model, payload)
+}
+
+// probeChatCompletionsPayloadAt shares transport and status handling while
+// allowing provider-specific payload options, such as DeepSeek thinking.
+func probeChatCompletionsPayloadAt(apiKey, endpoint, model, payload string) error {
 	req, err := http.NewRequest("POST", endpoint, strings.NewReader(payload))
 	if err != nil {
 		return &AnthropicProbeError{

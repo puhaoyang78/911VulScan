@@ -256,7 +256,7 @@ def test_every_priced_spelling_carries_its_own_familys_cache_multiplier():
                 checked += 1
     # the census, asserted so a normalisation change that DROPS alias keys
     # cannot quietly shrink this row to nothing
-    assert checked == 17, f"expected 17 cache-carrying priced keys, got {checked}"
+    assert checked == 19, f"expected 19 cache-carrying priced keys (17 Anthropic + 2 DeepSeek), got {checked}"
 
 
 def test_the_documented_cache_exception_pair_is_exactly_two_models():
@@ -269,6 +269,8 @@ def test_the_documented_cache_exception_pair_is_exactly_two_models():
     reads = defaultdict(set)
     writes = set()
     for r in _priced_records(data):
+        if r.get("provider") != "anthropic":
+            continue
         mult = _cache_mult(r)
         if mult is not None:
             reads[mult[0]].add(r["id"])
@@ -278,16 +280,17 @@ def test_the_documented_cache_exception_pair_is_exactly_two_models():
     assert writes == {1.25}, writes
 
 
-def test_cache_block_lives_only_on_anthropic_records():
-    """#344's letter for the cache kind: the multipliers are Anthropic's
-    documented prompt-caching rates, so no other provider's record may claim
-    them (a bedrock/openrouter gateway reprices and would need its own
-    sourced block + the agreement row above)."""
+def test_cache_block_lives_only_on_verified_providers():
+    """Cache multipliers require provider-specific sourced documentation.
+
+    Anthropic and DeepSeek currently have verified blocks; gateways need
+    their own evidence rather than copying a direct-provider multiplier.
+    """
     conf = find_models_config()
     data = json.loads(conf.read_text(encoding="utf-8"))
     offenders = [r["id"] for r in _priced_records(data)
                  if _cache_mult(r) is not None
-                 and r.get("provider") != "anthropic"]
+                 and r.get("provider") not in ("anthropic", "deepseek")]
     assert offenders == [], offenders
     # non-vacuous: there ARE non-anthropic priced records to be wrong about
     others = [r["id"] for r in _priced_records(data)

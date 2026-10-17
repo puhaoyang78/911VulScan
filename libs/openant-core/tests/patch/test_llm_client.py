@@ -45,6 +45,8 @@ def _isolate_shared_infra(monkeypatch):
     monkeypatch.setattr(llm_client, "_call_metadata", {})
     monkeypatch.setattr(llm_client, "_call_history", {})
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENANT_DEEPSEEK_API_KEY_OVERRIDE", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
@@ -517,8 +519,8 @@ def test_model_unavailable_prompt_text_goes_to_stderr_not_stdout(monkeypatch, ca
     assert "The requested model could not be used" not in captured.out
 
 
-def test_non_interactive_unset_provider_uses_openant_default(monkeypatch, capsys):
-    """No config.json at all: falls back to the built-in openant-default,
+def test_non_interactive_unset_provider_uses_deepseek_default(monkeypatch, capsys):
+    """No config.json at all: falls back to the built-in deepseek-default,
     exactly like every other OpenAnt command -- there is no more "unset ->
     fail immediately" state for provider/model resolution itself. A run
     can still fail later, on the missing credential (see
@@ -528,20 +530,17 @@ def test_non_interactive_unset_provider_uses_openant_default(monkeypatch, capsys
 
     call_llm("prompt")
 
-    assert fake.calls  # provider/model resolved successfully via openant-default
-    assert llm_client._cached_provider == "anthropic"
+    assert fake.calls  # provider/model resolved successfully via deepseek-default
+    assert fake.calls[0]["model"] == "deepseek-flash"
+    assert llm_client._cached_provider == "deepseek"
 
 
 def test_no_config_no_credential_fails_clearly_never_mock(monkeypatch, capsys):
-    """No config.json, no credential anywhere: openant-default still
-    resolves a provider+model (matching normal OpenAnt), but the run fails
-    clearly on the missing credential -- never mock. See
-    test_anthropic_missing_credential_raises_clearly_never_mock for why
-    this is Anthropic's "construction succeeds, request fails" shape
-    rather than a construction-time ConfigError/LLMAuthError."""
+    """A fresh install resolves DeepSeek, then fails at construction when
+    its dedicated credential is missing; it must never substitute mock."""
     monkeypatch.setattr("sys.stdin", _FakeNonInteractiveStdin())
 
-    with pytest.raises(RuntimeError, match="Anthropic API call failed"):
+    with pytest.raises(RuntimeError, match="No usable credential for provider 'deepseek'"):
         call_llm("prompt")
     assert "mock" not in capsys.readouterr().err.lower()
 
@@ -960,7 +959,8 @@ def test_openai_live_calls_flow_through_shared_openai_adapter(monkeypatch):
     result = call_llm("prompt")
 
     assert result == "hello"
-    assert fake.calls[0]["system"] is None
+    from utilities.llm.language import CHINESE_OUTPUT_POLICY
+    assert fake.calls[0]["system"] == CHINESE_OUTPUT_POLICY
     assert fake.calls[0]["messages"][0].role == "user"
 
 
@@ -973,7 +973,8 @@ def test_anthropic_live_calls_flow_through_shared_anthropic_adapter(monkeypatch)
     result = call_llm("prompt")
 
     assert result == "hello"
-    assert fake.calls[0]["system"] is None
+    from utilities.llm.language import CHINESE_OUTPUT_POLICY
+    assert fake.calls[0]["system"] == CHINESE_OUTPUT_POLICY
     assert fake.calls[0]["messages"][0].role == "user"
 
 
@@ -1012,7 +1013,8 @@ def test_complete_preserves_system_and_user_concatenation(monkeypatch):
     client = LLMClient(model="claude-opus-4-6")
     client.complete("SYSTEM PROMPT TEXT", "USER MESSAGE TEXT", stage="patch_generation")
 
-    assert fake.calls[0]["system"] is None
+    from utilities.llm.language import CHINESE_OUTPUT_POLICY
+    assert fake.calls[0]["system"] == CHINESE_OUTPUT_POLICY
     sent_text = fake.calls[0]["messages"][0].content[0].text
     assert sent_text == "SYSTEM PROMPT TEXT" + "\n\n" + "USER MESSAGE TEXT"
 

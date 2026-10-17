@@ -30,6 +30,7 @@ import csv
 import json
 import os
 from utilities.file_io import normalize_results, read_json
+from report.localization import display_label
 
 from core.verdict_taxonomy import (SEVERITIES as _SEVERITIES, SEVERITY_FINDING_VERDICTS,
                                   severity_display_verdict)
@@ -108,9 +109,9 @@ def _format_diff_banner(diff: dict) -> str:
     scope = diff.get("scope") or ""
     units_str = ""
     if units_in is not None and units_total is not None:
-        units_str = f", {units_in}/{units_total} units"
-    scope_str = f", scope={scope}" if scope else ""
-    return f"# Incremental: {base}..{head}{scope_str}{units_str}"
+        units_str = f"，{units_in}/{units_total} 个代码单元"
+    scope_str = f"，范围={scope}" if scope else ""
+    return f"# 增量扫描：{base}..{head}{scope_str}{units_str}"
 
 
 def load_json(path: str) -> dict:
@@ -307,21 +308,21 @@ def export_csv(experiment_path: str, dataset_path: str, output_path: str):
         writer.writeheader()
         writer.writerows(rows)
 
-    print(f"Exported {len(rows)} rows to {output_path}")
+    print(f"已导出 {len(rows)} 行到 {output_path}")
 
     # Summary
     findings = {}
     for row in rows:
         f = row['stage2_verdict']
         findings[f] = findings.get(f, 0) + 1
-    print(f"Findings: {findings}")
+    print("发现项：" + "，".join(f"{display_label(k)}：{v}" for k, v in findings.items()))
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Export experiment results to CSV')
-    parser.add_argument('experiment', help='Path to experiment results JSON')
-    parser.add_argument('dataset', help='Path to dataset JSON')
-    parser.add_argument('output', nargs='?', default='results.csv', help='Output CSV path (default: results.csv)')
+    parser = argparse.ArgumentParser(description='将实验结果导出为 CSV')
+    parser.add_argument('experiment', help='实验结果 JSON 文件路径')
+    parser.add_argument('dataset', help='数据集 JSON 文件路径')
+    parser.add_argument('output', nargs='?', default='results.csv', help='CSV 输出路径（默认：results.csv）')
 
     args = parser.parse_args()
 

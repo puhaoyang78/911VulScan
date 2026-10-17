@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
+<html lang="zh-CN" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{.Title}}</title>
+    <title>{{displayLabel .Title}}</title>
     {{/* #540: the prebuilt CSS (the choice-1 migration; the runtime compiler was frozen at the dead Play-CDN channel). Same self-containment: template.CSS embed, no CDN. Cascade: this block comes BEFORE the hand-written <style> below — the hand-written rules win at equal specificity, the same order the runtime-injected stylesheet had (appended at head-end AFTER these blocks) reversed only for utility-vs-handcrafted collisions, none observed (one manual render checked). */}}
     <style>{{ vendorCSS "report.css" }}</style>
     <script>{{ vendorJS "chart-4.5.1.umd.min.js" }}</script>
@@ -58,11 +58,11 @@
     <!-- Section Nav Bar -->
     <nav class="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-knostic-border">
         <div class="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 flex items-center gap-6 overflow-x-auto text-sm py-3">
-            <a href="#overview" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">Overview</a>
-            <a href="#distribution" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">Distribution</a>
-            <a href="#remediation" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">Remediation</a>
-            {{if .HasStepReports}}<a href="#pipeline" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">Pipeline</a>{{end}}
-            {{if .HasFindings}}<a href="#findings" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">Findings</a>{{end}}
+            <a href="#overview" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">概览</a>
+            <a href="#distribution" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">分布</a>
+            <a href="#remediation" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">修复建议</a>
+            {{if .HasStepReports}}<a href="#pipeline" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">扫描流程</a>{{end}}
+            {{if .HasFindings}}<a href="#findings" class="text-knostic-muted hover:text-knostic-purple whitespace-nowrap transition-colors font-medium">发现项</a>{{end}}
         </div>
     </nav>
 
@@ -72,14 +72,14 @@
         <header id="overview" class="mb-10 sm:mb-12 pb-6 sm:pb-8 border-b border-knostic-border">
             <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                 <div>
-                    <h1 class="text-2xl sm:text-3xl lg:text-4xl font-bold text-knostic-navy mb-1">{{.Title}}</h1>
+                    <h1 class="text-2xl sm:text-3xl lg:text-4xl font-bold text-knostic-navy mb-1">{{displayLabel .Title}}</h1>
                     <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-knostic-muted mt-2">
-                        {{if .RepoName}}{{$u := .BrowseURL}}{{if $u}}<a href="{{$u}}" target="_blank" rel="noopener" title="Repository" class="text-knostic-navy font-semibold hover:underline">{{.RepoName}}</a>{{else}}<span title="Repository"><strong class="text-knostic-navy">{{.RepoName}}</strong></span>{{end}}{{end}}
+                        {{if .RepoName}}{{$u := .BrowseURL}}{{if $u}}<a href="{{$u}}" target="_blank" rel="noopener" title="代码仓库" class="text-knostic-navy font-semibold hover:underline">{{.RepoName}}</a>{{else}}<span title="代码仓库"><strong class="text-knostic-navy">{{.RepoName}}</strong></span>{{end}}{{end}}
                         {{if .IsIncremental}}
                             <span class="inline-flex items-center gap-2">
-                                <span class="text-xs font-bold uppercase tracking-wider bg-knostic-purple text-white px-2 py-0.5 rounded">Incremental</span>
-                                <code class="text-xs bg-knostic-card-bg border border-knostic-border-light px-2 py-0.5 rounded text-knostic-navy" title="base..head">{{.DiffRange}}</code>
-                                <span class="text-xs text-knostic-muted" title="Diff scope: {{.Diff.Scope}}, {{.Diff.ChangedFiles}} file(s) changed">{{.Diff.UnitsInDiff}}/{{.Diff.UnitsTotalParsed}} units</span>
+                                <span class="text-xs font-bold uppercase tracking-wider bg-knostic-purple text-white px-2 py-0.5 rounded">增量扫描</span>
+                                <code class="text-xs bg-knostic-card-bg border border-knostic-border-light px-2 py-0.5 rounded text-knostic-navy" title="基准提交..目标提交">{{.DiffRange}}</code>
+                                <span class="text-xs text-knostic-muted" title="差异范围：{{.Diff.Scope}}，{{.Diff.ChangedFiles}} 个文件已变更">{{.Diff.UnitsInDiff}}/{{.Diff.UnitsTotalParsed}} 个代码单元</span>
                             </span>
                         {{else if .ShortCommit}}
                             <code class="text-xs bg-knostic-card-bg border border-knostic-border-light px-2 py-0.5 rounded text-knostic-navy">{{.ShortCommit}}</code>
@@ -90,7 +90,7 @@
                 <div class="flex flex-col items-start sm:items-end gap-1 text-sm text-knostic-muted shrink-0">
                     {{if .FormatDuration}}<span class="text-knostic-navy font-semibold text-base">{{.FormatDuration}}</span>{{end}}
                     <span>{{.Timestamp}}</span>
-                    <span>Powered by <a href="https://knostic.ai" target="_blank" rel="noopener" class="text-knostic-purple font-semibold hover:text-knostic-purple-hover transition-colors">Knostic</a></span>
+                    <span>技术支持：<a href="https://knostic.ai" target="_blank" rel="noopener" class="text-knostic-purple font-semibold hover:text-knostic-purple-hover transition-colors">Knostic</a></span>
                 </div>
             </div>
         </header>
@@ -99,40 +99,40 @@
         <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4 mb-8">
             <div class="bg-knostic-card-bg border border-knostic-border rounded-card p-4 sm:p-6 text-center card-hover">
                 <div class="text-2xl sm:text-3xl font-bold text-knostic-navy">{{.Stats.TotalUnits}}</div>
-                <div class="text-knostic-muted text-xs sm:text-sm mt-1">Code Units</div>
+                <div class="text-knostic-muted text-xs sm:text-sm mt-1">代码单元</div>
             </div>
             <div class="bg-knostic-card-bg border border-knostic-border rounded-card p-4 sm:p-6 text-center card-hover">
                 <div class="text-2xl sm:text-3xl font-bold text-knostic-navy">{{.Stats.TotalFiles}}</div>
-                <div class="text-knostic-muted text-xs sm:text-sm mt-1">Files</div>
+                <div class="text-knostic-muted text-xs sm:text-sm mt-1">文件</div>
             </div>
             <div class="bg-knostic-card-bg border border-knostic-border rounded-card p-4 sm:p-6 text-center card-hover">
                 <div class="text-2xl sm:text-3xl font-bold text-red-500">{{.Stats.Vulnerable}}</div>
-                <div class="text-knostic-muted text-xs sm:text-sm mt-1">Vulnerable Units</div>
+                <div class="text-knostic-muted text-xs sm:text-sm mt-1">存在漏洞的单元</div>
             </div>
             <div class="bg-knostic-card-bg border border-knostic-border rounded-card p-4 sm:p-6 text-center card-hover">
                 <div class="text-2xl sm:text-3xl font-bold text-orange-500">{{.Stats.Bypassable}}</div>
-                <div class="text-knostic-muted text-xs sm:text-sm mt-1">Bypassable Units</div>
+                <div class="text-knostic-muted text-xs sm:text-sm mt-1">防护可绕过的单元</div>
             </div>
             <div class="bg-knostic-card-bg border border-knostic-border rounded-card p-4 sm:p-6 text-center card-hover">
                 <div class="text-2xl sm:text-3xl font-bold text-green-500">{{.Stats.Secure}}</div>
-                <div class="text-knostic-muted text-xs sm:text-sm mt-1">Secure Units</div>
+                <div class="text-knostic-muted text-xs sm:text-sm mt-1">安全单元</div>
             </div>
         </div>
 
         <!-- Distribution Overview -->
         <section id="distribution" class="mb-10 border-l-4 border-knostic-purple pl-4 sm:pl-6">
-            <h2 class="text-xl sm:text-2xl font-semibold text-knostic-navy mb-6">Distribution Overview</h2>
+            <h2 class="text-xl sm:text-2xl font-semibold text-knostic-navy mb-6">结果分布</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 mb-6">
                 <div class="bg-white border border-knostic-border rounded-card p-4 sm:p-6 card-hover">
-                    <h3 class="text-center text-knostic-muted mb-4 text-sm sm:text-base font-medium">By Code Unit</h3>
+                    <h3 class="text-center text-knostic-muted mb-4 text-sm sm:text-base font-medium">按代码单元</h3>
                     <div class="max-w-full sm:max-w-[350px] mx-auto">
-                        <canvas id="unitChart" aria-label="Pie chart showing verdict distribution by code unit" role="img"></canvas>
+                        <canvas id="unitChart" aria-label="代码单元判定分布饼图" role="img"></canvas>
                     </div>
                 </div>
                 <div class="bg-white border border-knostic-border rounded-card p-4 sm:p-6 card-hover">
-                    <h3 class="text-center text-knostic-muted mb-4 text-sm sm:text-base font-medium">By File (Worst Verdict)</h3>
+                    <h3 class="text-center text-knostic-muted mb-4 text-sm sm:text-base font-medium">按文件（最高风险判定）</h3>
                     <div class="max-w-full sm:max-w-[350px] mx-auto">
-                        <canvas id="fileChart" aria-label="Pie chart showing verdict distribution by file" role="img"></canvas>
+                        <canvas id="fileChart" aria-label="文件判定分布饼图" role="img"></canvas>
                     </div>
                 </div>
             </div>
@@ -140,23 +140,23 @@
             <!-- Category Legend -->
             <details open class="bg-white border border-knostic-border rounded-card">
                 <summary class="px-4 sm:px-6 py-3 text-knostic-navy font-medium text-sm sm:text-base hover:text-knostic-purple transition-colors">
-                    Verdict Categories
+                    判定类别
                 </summary>
                 <div class="px-4 sm:px-6 pb-4">
                     <table class="w-full text-sm">
                         <thead>
                             <tr class="border-b border-knostic-border">
-                                <th class="text-left py-3 px-4 text-knostic-muted font-medium">Category</th>
-                                <th class="text-left py-3 px-4 text-knostic-muted font-medium">Description</th>
+                                <th class="text-left py-3 px-4 text-knostic-muted font-medium">类别</th>
+                                <th class="text-left py-3 px-4 text-knostic-muted font-medium">说明</th>
                             </tr>
                         </thead>
                         <tbody>
                             {{range $i, $cat := .Categories}}
                             <tr class="border-b border-knostic-border-light {{if even $i}} bg-knostic-card-bg {{end}}">
                                 <td class="py-3 px-4">
-                                    <span class="inline-block px-3 py-1 rounded-full text-xs font-semibold text-white" style="background-color: {{$cat.Color}}">{{$cat.Verdict}}</span>
+                                    <span class="inline-block px-3 py-1 rounded-full text-xs font-semibold text-white" style="background-color: {{$cat.Color}}">{{displayLabel $cat.Verdict}}</span>
                                 </td>
-                                <td class="py-3 px-4 text-knostic-body">{{$cat.Description}}</td>
+                                <td class="py-3 px-4 text-knostic-body">{{displayLabel $cat.Description}}</td>
                             </tr>
                             {{end}}
                         </tbody>
@@ -167,7 +167,7 @@
 
         <!-- Remediation Guidance -->
         <section id="remediation" class="mb-10 border-l-4 border-knostic-purple pl-4 sm:pl-6">
-            <h2 class="text-xl sm:text-2xl font-semibold text-knostic-navy mb-6">Remediation Guidance</h2>
+            <h2 class="text-xl sm:text-2xl font-semibold text-knostic-navy mb-6">修复建议</h2>
             <div class="remediation-content bg-white border border-knostic-border rounded-card p-4 sm:p-6 card-hover max-w-none
                         [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:text-knostic-navy [&_h1]:mb-3
                         [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-knostic-navy [&_h2]:mb-3
@@ -198,33 +198,34 @@
         <section id="pipeline" class="mb-10 border-l-4 border-knostic-purple pl-4 sm:pl-6">
             <details>
                 <summary class="text-xl sm:text-2xl font-semibold text-knostic-navy mb-6 hover:text-knostic-purple transition-colors">
-                    Pipeline Costs &amp; Timing
+                    扫描步骤预估费用与耗时
                 </summary>
                 <div class="mt-4">
+                    <p class="text-sm mb-4">费用按配置中的模型费率估算；供应商的分时定价、缓存折扣及最终账单可能不同。</p>
                     <!-- Desktop: table -->
                     <div class="hidden sm:block overflow-x-auto bg-white border border-knostic-border rounded-card">
                         <table class="w-full text-sm">
                             <thead>
                                 <tr class="border-b border-knostic-border">
-                                    <th class="text-left py-3 px-4 text-knostic-muted font-medium">Step</th>
-                                    <th class="text-left py-3 px-4 text-knostic-muted font-medium">Duration</th>
-                                    <th class="text-left py-3 px-4 text-knostic-muted font-medium">Cost</th>
-                                    <th class="text-left py-3 px-4 text-knostic-muted font-medium">Status</th>
+                                    <th class="text-left py-3 px-4 text-knostic-muted font-medium">步骤</th>
+                                    <th class="text-left py-3 px-4 text-knostic-muted font-medium">耗时</th>
+                                    <th class="text-left py-3 px-4 text-knostic-muted font-medium">预估费用</th>
+                                    <th class="text-left py-3 px-4 text-knostic-muted font-medium">状态</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {{range $i, $step := .StepReports}}
                                 <tr class="border-b border-knostic-border-light {{if even $i}} bg-knostic-card-bg {{end}}">
-                                    <td class="py-3 px-4 font-mono text-knostic-navy">{{$step.Step}}</td>
+                                    <td class="py-3 px-4 font-mono text-knostic-navy">{{displayLabel $step.Step}}</td>
                                     <td class="py-3 px-4">{{$step.Duration}}</td>
                                     <td class="py-3 px-4">{{$step.Cost}}</td>
-                                    <td class="py-3 px-4 {{$step.StatusColor}} font-medium">{{$step.Status}}</td>
+                                    <td class="py-3 px-4 {{$step.StatusColor}} font-medium">{{displayLabel $step.Status}}</td>
                                 </tr>
                                 {{end}}
                             </tbody>
                             <tfoot>
                                 <tr class="border-t-2 border-knostic-border font-semibold text-knostic-navy">
-                                    <td class="py-3 px-4">Total</td>
+                                    <td class="py-3 px-4">合计</td>
                                     <td class="py-3 px-4">{{.FormatDuration}}</td>
                                     <td class="py-3 px-4">{{.FormatTotalCost}}</td>
                                     <td class="py-3 px-4"></td>
@@ -236,32 +237,32 @@
                     <div class="sm:hidden space-y-3">
                         {{range .StepReports}}
                         <div class="bg-white border border-knostic-border rounded-card p-4">
-                            <div class="font-mono font-semibold text-knostic-navy mb-2">{{.Step}}</div>
+                            <div class="font-mono font-semibold text-knostic-navy mb-2">{{displayLabel .Step}}</div>
                             <div class="grid grid-cols-2 gap-2 text-sm">
                                 <div>
-                                    <span class="text-knostic-muted">Duration</span>
+                                    <span class="text-knostic-muted">耗时</span>
                                     <div class="text-knostic-navy">{{.Duration}}</div>
                                 </div>
                                 <div>
-                                    <span class="text-knostic-muted">Cost</span>
+                                    <span class="text-knostic-muted">预估费用</span>
                                     <div class="text-knostic-navy">{{.Cost}}</div>
                                 </div>
                                 <div>
-                                    <span class="text-knostic-muted">Status</span>
-                                    <div class="{{.StatusColor}} font-medium">{{.Status}}</div>
+                                    <span class="text-knostic-muted">状态</span>
+                                    <div class="{{.StatusColor}} font-medium">{{displayLabel .Status}}</div>
                                 </div>
                             </div>
                         </div>
                         {{end}}
                         <div class="bg-knostic-card-bg border-2 border-knostic-border rounded-card p-4">
-                            <div class="font-semibold text-knostic-navy mb-2">Total</div>
+                            <div class="font-semibold text-knostic-navy mb-2">合计</div>
                             <div class="grid grid-cols-2 gap-2 text-sm">
                                 <div>
-                                    <span class="text-knostic-muted">Duration</span>
+                                    <span class="text-knostic-muted">耗时</span>
                                     <div class="text-knostic-navy font-semibold">{{.FormatDuration}}</div>
                                 </div>
                                 <div>
-                                    <span class="text-knostic-muted">Cost</span>
+                                    <span class="text-knostic-muted">预估费用</span>
                                     <div class="text-knostic-navy font-semibold">{{.FormatTotalCost}}</div>
                                 </div>
                             </div>
@@ -275,19 +276,19 @@
         <!-- All Findings (grouped by verdict) -->
         {{if .HasFindingGroups}}
         <section id="findings" class="mb-10 border-l-4 border-knostic-purple pl-4 sm:pl-6">
-            <h2 class="text-xl sm:text-2xl font-semibold text-knostic-navy mb-6">All Findings</h2>
+            <h2 class="text-xl sm:text-2xl font-semibold text-knostic-navy mb-6">全部发现项</h2>
             <div class="space-y-4">
                 {{range $g := .FindingsByVerdict}}
                 <details{{if $g.OpenByDefault}} open{{end}} class="bg-white border border-knostic-border rounded-card">
                     <summary class="flex items-center gap-3 px-4 sm:px-5 py-3 hover:bg-knostic-purple-light rounded-card transition-colors cursor-pointer">
-                        <span class="inline-block px-3 py-1 rounded-full text-xs font-semibold text-white capitalize" style="background-color: {{$g.VerdictColor}}">{{$g.Verdict}}</span>
-                        <span class="text-knostic-navy font-medium text-sm">{{$g.Count}} finding{{if ne $g.Count 1}}s{{end}}</span>
+                        <span class="inline-block px-3 py-1 rounded-full text-xs font-semibold text-white capitalize" style="background-color: {{$g.VerdictColor}}">{{displayLabel $g.Verdict}}</span>
+                        <span class="text-knostic-navy font-medium text-sm">{{$g.Count}} 个发现项</span>
                     </summary>
                     <div class="px-4 sm:px-5 pb-4 pt-2 space-y-3">
                         {{if $g.HasSubgroups}}{{range $sg := $g.Subgroups}}
                         <div class="space-y-3">
                             <div class="flex items-center gap-2 pt-2">
-                                <span class="text-xs font-semibold text-knostic-muted uppercase tracking-wide">{{$sg.Label}}</span>
+                                <span class="text-xs font-semibold text-knostic-muted uppercase tracking-wide">{{displayLabel $sg.Label}}</span>
                                 <span class="text-[10px] text-knostic-muted">({{len $sg.Findings}})</span>
                                 <div class="flex-1 border-t border-knostic-border-light"></div>
                             </div>
@@ -295,16 +296,16 @@
                             <details id="finding-{{$f.Number}}" class="bg-knostic-card-bg border border-knostic-border-light rounded-lg group card-hover">
                                 <summary class="flex flex-wrap items-center gap-2 sm:gap-3 px-4 sm:px-5 py-3 hover:bg-knostic-purple-light rounded-lg transition-colors">
                                     <span class="text-knostic-muted text-xs font-mono font-medium w-8">#{{$f.Number}}</span>
-                                    {{if $f.Severity}}<span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold text-white uppercase" style="background-color: {{$f.SeverityColor}}" title="severity source: {{$f.SeveritySource}}">{{$f.Severity}}</span>{{end}}
-                                    {{if $f.HasDynamicTest}}<span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{$f.DynamicTestStatus}}</span>{{end}}
+                                    {{if $f.Severity}}<span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold text-white uppercase" style="background-color: {{$f.SeverityColor}}" title="严重程度来源：{{displayLabel $f.SeveritySource}}">{{displayLabel $f.Severity}}</span>{{end}}
+                                    {{if $f.HasDynamicTest}}<span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{displayLabel $f.DynamicTestStatus}}</span>{{end}}
                                     {{$url := $.FileURL $f.File}}{{if $url}}<a href="{{$url}}" target="_blank" rel="noopener" class="text-xs bg-white border border-knostic-border-light px-2 py-1 rounded text-knostic-purple hover:text-knostic-purple-hover transition-colors" onclick="event.stopPropagation()">{{$f.File}}</a>{{else}}<code class="text-xs bg-white border border-knostic-border-light px-2 py-1 rounded text-knostic-navy">{{$f.File}}</code>{{end}}
                                     <span class="font-mono text-xs text-knostic-muted">{{$f.Function}}</span>
                                     {{if $f.AttackVector}}<span class="text-xs text-knostic-muted hidden sm:inline">— {{$f.AttackVector}}</span>{{end}}
                                 </summary>
                                 <div class="px-4 sm:px-5 pb-4 pt-2 border-t border-knostic-border-light">
-                                    {{if $f.AttackVector}}<div class="mb-3 sm:hidden"><span class="text-knostic-muted text-xs font-medium">Attack Vector</span><p class="text-knostic-body text-sm mt-0.5">{{$f.AttackVector}}</p></div>{{end}}
-                                    <div><span class="text-knostic-muted text-xs font-medium">Analysis</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{$f.Analysis}}</p></div>
-                                    {{if $f.HasDynamicTest}}<div class="mt-3 pt-3 border-t border-knostic-border-light"><span class="text-knostic-muted text-xs font-medium">Dynamic Test</span><div class="flex items-center gap-2 mt-1"><span class="inline-block px-2 py-0.5 rounded text-xs font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{$f.DynamicTestStatus}}</span>{{if $f.DynamicTestDetails}}<span class="text-knostic-muted text-xs">{{$f.DynamicTestDetails}}</span>{{end}}</div></div>{{end}}
+                                    {{if $f.AttackVector}}<div class="mb-3 sm:hidden"><span class="text-knostic-muted text-xs font-medium">攻击方式</span><p class="text-knostic-body text-sm mt-0.5">{{$f.AttackVector}}</p></div>{{end}}
+                                    <div><span class="text-knostic-muted text-xs font-medium">分析</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{$f.Analysis}}</p></div>
+                                    {{if $f.HasDynamicTest}}<div class="mt-3 pt-3 border-t border-knostic-border-light"><span class="text-knostic-muted text-xs font-medium">动态测试</span><div class="flex items-center gap-2 mt-1"><span class="inline-block px-2 py-0.5 rounded text-xs font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{displayLabel $f.DynamicTestStatus}}</span>{{if $f.DynamicTestDetails}}<span class="text-knostic-muted text-xs">{{$f.DynamicTestDetails}}</span>{{end}}</div></div>{{end}}
                                 </div>
                             </details>
                             {{end}}
@@ -313,16 +314,16 @@
                         <details id="finding-{{$f.Number}}" class="bg-knostic-card-bg border border-knostic-border-light rounded-lg group card-hover">
                             <summary class="flex flex-wrap items-center gap-2 sm:gap-3 px-4 sm:px-5 py-3 hover:bg-knostic-purple-light rounded-lg transition-colors">
                                 <span class="text-knostic-muted text-xs font-mono font-medium w-8">#{{$f.Number}}</span>
-                                {{if $f.Severity}}<span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold text-white uppercase" style="background-color: {{$f.SeverityColor}}" title="severity source: {{$f.SeveritySource}}">{{$f.Severity}}</span>{{end}}
-                                {{if $f.HasDynamicTest}}<span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{$f.DynamicTestStatus}}</span>{{end}}
+                                {{if $f.Severity}}<span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold text-white uppercase" style="background-color: {{$f.SeverityColor}}" title="严重程度来源：{{displayLabel $f.SeveritySource}}">{{displayLabel $f.Severity}}</span>{{end}}
+                                {{if $f.HasDynamicTest}}<span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{displayLabel $f.DynamicTestStatus}}</span>{{end}}
                                 {{$url := $.FileURL $f.File}}{{if $url}}<a href="{{$url}}" target="_blank" rel="noopener" class="text-xs bg-white border border-knostic-border-light px-2 py-1 rounded text-knostic-purple hover:text-knostic-purple-hover transition-colors" onclick="event.stopPropagation()">{{$f.File}}</a>{{else}}<code class="text-xs bg-white border border-knostic-border-light px-2 py-1 rounded text-knostic-navy">{{$f.File}}</code>{{end}}
                                 <span class="font-mono text-xs text-knostic-muted">{{$f.Function}}</span>
                                 {{if $f.AttackVector}}<span class="text-xs text-knostic-muted hidden sm:inline">— {{$f.AttackVector}}</span>{{end}}
                             </summary>
                             <div class="px-4 sm:px-5 pb-4 pt-2 border-t border-knostic-border-light">
-                                {{if $f.AttackVector}}<div class="mb-3 sm:hidden"><span class="text-knostic-muted text-xs font-medium">Attack Vector</span><p class="text-knostic-body text-sm mt-0.5">{{$f.AttackVector}}</p></div>{{end}}
-                                <div><span class="text-knostic-muted text-xs font-medium">Analysis</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{$f.Analysis}}</p></div>
-                                {{if $f.HasDynamicTest}}<div class="mt-3 pt-3 border-t border-knostic-border-light"><span class="text-knostic-muted text-xs font-medium">Dynamic Test</span><div class="flex items-center gap-2 mt-1"><span class="inline-block px-2 py-0.5 rounded text-xs font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{$f.DynamicTestStatus}}</span>{{if $f.DynamicTestDetails}}<span class="text-knostic-muted text-xs">{{$f.DynamicTestDetails}}</span>{{end}}</div></div>{{end}}
+                                {{if $f.AttackVector}}<div class="mb-3 sm:hidden"><span class="text-knostic-muted text-xs font-medium">攻击方式</span><p class="text-knostic-body text-sm mt-0.5">{{$f.AttackVector}}</p></div>{{end}}
+                                <div><span class="text-knostic-muted text-xs font-medium">分析</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{$f.Analysis}}</p></div>
+                                {{if $f.HasDynamicTest}}<div class="mt-3 pt-3 border-t border-knostic-border-light"><span class="text-knostic-muted text-xs font-medium">动态测试</span><div class="flex items-center gap-2 mt-1"><span class="inline-block px-2 py-0.5 rounded text-xs font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{displayLabel $f.DynamicTestStatus}}</span>{{if $f.DynamicTestDetails}}<span class="text-knostic-muted text-xs">{{$f.DynamicTestDetails}}</span>{{end}}</div></div>{{end}}
                             </div>
                         </details>
                         {{end}}{{end}}
@@ -335,7 +336,7 @@
 
         <!-- Footer -->
         <footer class="mt-10 sm:mt-12 pt-6 sm:pt-8 border-t border-knostic-border text-knostic-muted text-xs sm:text-sm text-center">
-            <p>Generated by <a href="https://knostic.ai" target="_blank" rel="noopener" class="text-knostic-purple font-semibold hover:text-knostic-purple-hover transition-colors">OpenAnt</a></p>
+            <p>生成工具：<a href="https://knostic.ai" target="_blank" rel="noopener" class="text-knostic-purple font-semibold hover:text-knostic-purple-hover transition-colors">OpenAnt</a></p>
         </footer>
     </main>
 
@@ -365,7 +366,7 @@
         new Chart(document.getElementById('unitChart'), {
             type: 'pie',
             data: {
-                labels: {{toJSON .UnitChart.Labels}},
+                labels: {{toJSON (displayLabels .UnitChart.Labels)}},
                 datasets: [{
                     data: {{toJSON .UnitChart.Data}},
                     backgroundColor: {{toJSON .UnitChart.Colors}},
@@ -379,7 +380,7 @@
         new Chart(document.getElementById('fileChart'), {
             type: 'pie',
             data: {
-                labels: {{toJSON .FileChart.Labels}},
+                labels: {{toJSON (displayLabels .FileChart.Labels)}},
                 datasets: [{
                     data: {{toJSON .FileChart.Data}},
                     backgroundColor: {{toJSON .FileChart.Colors}},

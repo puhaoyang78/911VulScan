@@ -26,8 +26,11 @@ import core.scanner as scanner_mod
 from core.schemas import AnalysisMetrics, ScanResult
 from tests.test_pr69_report_llmconfig_forwarding import _install_minimal_pipeline
 
-# brings the autouse _offline_registry fixture (probe neutered, config resolves)
-pytest_plugins = ("tests.test_pr69_report_llmconfig_forwarding",)
+# Import the autouse fixture locally; pytest_plugins would activate it for
+# every collected test, including registry tests that need real construction.
+from tests import test_pr69_report_llmconfig_forwarding as _report_harness
+
+_offline_registry = _report_harness._offline_registry
 
 _OFFLINE_FLAGS = dict(
     generate_context=False, enhance=False, verify=False,

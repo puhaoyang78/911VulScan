@@ -54,6 +54,8 @@ var (
 
 func init() {
 	funcMap := template.FuncMap{
+		"displayLabel":  displayLabel,
+		"displayLabels": displayLabels,
 		"toJSON": func(v any) template.JS {
 			b, _ := json.Marshal(v)
 			return template.JS(b)

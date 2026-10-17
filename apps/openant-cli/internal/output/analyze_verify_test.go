@@ -88,7 +88,7 @@ func analyzeResultData() map[string]any {
 // Stage-2 verification outcome.
 func TestPrintAnalyzeResult_VerifyOutcomeNotDropped(t *testing.T) {
 	out := captureHeaders(func() { PrintAnalyzeResult(verifyResultData(), true) })
-	if !strings.Contains(out, "Verification Results (Stage 2)") {
+	if !strings.Contains(out, "验证结果（第二阶段）") {
 		t.Fatalf("analyze --verify dropped the Stage-2 outcome; expected the "+
 			"verification summary, got output:\n%q", out)
 	}
@@ -98,7 +98,7 @@ func TestPrintAnalyzeResult_VerifyOutcomeNotDropped(t *testing.T) {
 // path: a normal analyze result must still render the analysis summary.
 func TestPrintAnalyzeResult_PlainAnalyzeUsesAnalyzeSummary(t *testing.T) {
 	out := captureHeaders(func() { PrintAnalyzeResult(analyzeResultData(), false) })
-	if !strings.Contains(out, "Analysis Results") {
+	if !strings.Contains(out, "分析结果") {
 		t.Fatalf("plain analyze should render the analysis summary, got:\n%q", out)
 	}
 }
@@ -109,7 +109,7 @@ func TestPrintAnalyzeResult_PlainAnalyzeUsesAnalyzeSummary(t *testing.T) {
 // summary is the correct renderer even though verify==true.
 func TestPrintAnalyzeResult_VerifySkippedFallsBackToAnalyze(t *testing.T) {
 	out := captureHeaders(func() { PrintAnalyzeResult(analyzeResultData(), true) })
-	if !strings.Contains(out, "Analysis Results") {
+	if !strings.Contains(out, "分析结果") {
 		t.Fatalf("verify-skipped path should fall back to the analysis summary, got:\n%q", out)
 	}
 }
@@ -125,14 +125,14 @@ func TestPrintVerifySummary_622CompanionLines(t *testing.T) {
 	data["disagreed_protected"] = float64(1)
 	data["disagreed_inconclusive"] = float64(1)
 	out := captureAll(t, func() { PrintVerifySummary(data) })
-	if !strings.Contains(out, "Disagreed (eliminated): 1") {
+	if !strings.Contains(out, "已排除：1") {
 		t.Fatalf("the residual disagreement must still render, got:\n%q", out)
 	}
-	if !strings.Contains(out, "Reclassified protected (verified protected-by-controls): 1") {
+	if !strings.Contains(out, "重新归类为已防护（已验证控制措施）：1") {
 		t.Fatalf("the protected companion line is missing (a protected-by-controls "+
 			"correction is NOT an eliminated false positive), got:\n%q", out)
 	}
-	if !strings.Contains(out, "Reclassified inconclusive (explicitly unconfirmable): 1") {
+	if !strings.Contains(out, "重新归类为结论不明确（无法确认）：1") {
 		t.Fatalf("the #509 sibling's companion line is missing, got:\n%q", out)
 	}
 }
@@ -143,17 +143,17 @@ func TestPrintVerifySummary_622CompanionLines(t *testing.T) {
 // pre-split residual in `disagreed`).
 func TestPrintVerifySummary_622OldEnvelopeDefaults(t *testing.T) {
 	out := captureAll(t, func() { PrintVerifySummary(verifyResultData()) })
-	if !strings.Contains(out, "Disagreed (eliminated): 1") {
+	if !strings.Contains(out, "已排除：1") {
 		t.Fatalf("old envelope must render the residual, got:\n%q", out)
 	}
-	if strings.Contains(out, "Reclassified protected") {
+	if strings.Contains(out, "重新归类为已防护") {
 		t.Fatalf("no sibling keys -> no companion lines (absent is 0, not a "+
 			"guess), got:\n%q", out)
 	}
 }
 
 // TestPrintScanSummary_622CompanionLine: the scan summary's
-// "False positives eliminated" shrinks by exactly the protected split, so the
+// "已排除误报" shrinks by exactly the protected split, so the
 // companion line must name where they went. The fixture is internally
 // consistent: verified=4 = agreed(1) + to-safe(2) + to-protected(1), with
 // stage2_disagreed=2 (the residual) and the split=1.
@@ -174,10 +174,10 @@ func TestPrintScanSummary_622CompanionLine(t *testing.T) {
 	// PrintKeyValue routes the label through color.Output and the value
 	// through os.Stdout — assert the labels on the one stream and the
 	// ordered values (Safe 5, eliminated 2, reclassified 1) on the other.
-	if !strings.Contains(out, "False positives eliminated") {
+	if !strings.Contains(out, "已排除误报") {
 		t.Fatalf("the residual eliminated count must render, got:\n%q", out)
 	}
-	if !strings.Contains(out, "Reclassified protected (verified protected-by-controls)") {
+	if !strings.Contains(out, "重新归类为已防护（已验证控制措施）") {
 		t.Fatalf("the scan-summary companion line is missing, got:\n%q", out)
 	}
 	if !strings.Contains(out, "5\n2\n1\n") {
@@ -187,7 +187,7 @@ func TestPrintScanSummary_622CompanionLine(t *testing.T) {
 }
 
 // TestPrintScanSummaryV2_622SplitLine: the V2 scan summary's
-// "Verified (Stage 2)" line must disclose the protected split — disjointly
+// "已验证（第二阶段）" line must disclose the protected split — disjointly
 // (the split is carved OUT of the disagreed figure, not a subset of it).
 func TestPrintScanSummaryV2_622SplitLine(t *testing.T) {
 	data := map[string]any{
@@ -203,10 +203,10 @@ func TestPrintScanSummaryV2_622SplitLine(t *testing.T) {
 		},
 	}
 	out := captureAll(t, func() { PrintScanSummaryV2(data) })
-	if !strings.Contains(out, "Reclassified protected") {
+	if !strings.Contains(out, "重新归类为已防护") {
 		t.Fatalf("the V2 split line is missing, got:\n%q", out)
 	}
-	if !strings.Contains(out, "1 (verified protected-by-controls; not counted in disagreed)") {
+	if !strings.Contains(out, "1（已验证控制措施；未计入已排除项）") {
 		t.Fatalf("the V2 split line must state the disjoint count, got:\n%q", out)
 	}
 }

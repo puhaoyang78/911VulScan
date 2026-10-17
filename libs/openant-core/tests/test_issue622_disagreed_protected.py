@@ -18,9 +18,9 @@ existing test_pr69 fold "test" re-types the arithmetic, which tests
 nothing). The e2e drives the real ``run_verification`` + ``FindingVerifier``
 conversation loop with a scripted finish-tool adapter, the real recount, the
 real pipeline-output build — $0, no network (Layer A passes registry=
-directly, the #212 convention; Layer B stubs the probe, the test_scanner.py
-convention — scan_repository takes no registry parameter and would otherwise
-run the real 1-token billed probe).
+directly, the #212 convention; Layer B injects the same offline registry and
+stubs the probe — scan_repository takes no registry parameter and would otherwise
+construct a credential-dependent adapter and run the real 1-token billed probe).
 """
 import json
 import sys
@@ -243,6 +243,8 @@ class _FinishScriptedAdapter:
 
 
 class _OfflineRegistry:
+    config_name = "offline-test"
+
     def __init__(self, adapter):
         self._adapter = adapter
 
@@ -295,10 +297,14 @@ def _install_hermetic_scan(monkeypatch):
     autouse fixture): scan_repository takes NO registry parameter — it
     unconditionally builds one from the host config and runs
     probe_registry_or_raise (a REAL 1-token billed call per provider/model).
-    Neutralize the probe exactly as the sibling scan tests do; the registry
-    still builds (from the dummy key) and threads through every stage as in
-    production."""
+    Inject the existing offline registry and neutralize the probe, so the
+    test has no host credentials or test-order dependency. Real scanner
+    bucketing and recount logic remains in use; Layer A separately drives
+    the real verifier with its scripted adapter."""
     import utilities.llm as llm_mod
+    registry = _OfflineRegistry(_FinishScriptedAdapter([]))
+    monkeypatch.setattr(
+        llm_mod, "build_phase_registry", lambda *a, **k: registry, raising=True)
     monkeypatch.setattr(
         llm_mod, "probe_registry_or_raise", lambda *a, **k: None, raising=True)
 
@@ -451,7 +457,8 @@ def test_off_enum_row_is_reported_not_false_clean():
         "spelling is 'unrecognized' (the T1 F1 split)")
     # the honest message names both counts
     msg = _remediation_for_unrecognized([], [{"verdict": "error"}, {"verdict": "Probably Fine"}])
-    assert "1 errored" in msg and "1 with an unrecognized verdict" in msg
+    assert "1 个分析出错" in msg and "1 个判定无法识别" in msg
+    assert "未发现漏洞或安全问题" not in msg
 
 
 # --- #679's report half: the extracted helpers, guarded at the reader site ---
@@ -474,10 +481,11 @@ def test_unrecognized_verdict_rows_helper():
 def test_remediation_message_honest_when_unrecognized():
     """The false-clean message is suppressed when unparseable rows exist."""
     from openant.cli import _remediation_for_unrecognized
-    # the clean case: the legacy message
-    assert "No vulnerabilities or security concerns" in _remediation_for_unrecognized([], [])
+    # the clean case: the localized clean message
+    assert "未发现漏洞或安全问题" in _remediation_for_unrecognized([], [])
     # the off-enum case: the honest message
     msg = _remediation_for_unrecognized([], [{"verdict": "Probably Fine"}])
-    assert "unrecognized verdict" in msg and "No vulnerabilities or security concerns" not in msg
+    assert "1 个判定无法识别" in msg and "未发现漏洞或安全问题" not in msg
+    assert "分析出错" not in msg  # an off-enum row is not a canonical error
     # the actionable case: the LLM path (None)
     assert _remediation_for_unrecognized([{"verdict": "vulnerable"}], []) is None

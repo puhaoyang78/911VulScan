@@ -28,7 +28,7 @@ func PrintJSON(envelope types.Envelope) {
 
 // PrintError outputs an error message to stderr.
 func PrintError(msg string) {
-	red.Fprintf(os.Stderr, "Error: ")
+	red.Fprintf(os.Stderr, "错误：")
 	fmt.Fprintln(os.Stderr, msg)
 }
 
@@ -47,7 +47,7 @@ func PrintSuccess(msg string) {
 
 // PrintWarning outputs a warning message to stderr.
 func PrintWarning(msg string) {
-	yellow.Fprintf(os.Stderr, "Warning: ")
+	yellow.Fprintf(os.Stderr, "警告：")
 	fmt.Fprintln(os.Stderr, msg)
 }
 
@@ -131,31 +131,31 @@ func renderCostBlock(usage map[string]any) {
 	// The cost label names the condition(s) that actually hold. The
 	// pricing-absent wording is unchanged from #598 so that case renders
 	// byte-identically to before.
-	costLabel := "Cost"
+	costLabel := "预估费用"
 	switch {
 	case len(unpriced) > 0 && len(cacheUnpriced) > 0:
-		costLabel = "Cost (incomplete — at least one model unpriced; " +
-			"cache rates not configured)"
+		costLabel = "预估费用（估算不完整：部分模型无定价；" +
+			"缓存费率未配置）"
 	case len(unpriced) > 0:
-		costLabel = "Cost (incomplete — at least one model unpriced)"
+		costLabel = "预估费用（估算不完整：部分模型无定价）"
 	case len(cacheUnpriced) > 0:
-		costLabel = "Cost (incomplete — cache rates not configured)"
+		costLabel = "预估费用（估算不完整：缓存费率未配置）"
 	case incomplete:
 		// cost_incomplete without either id list: keep the #598 promise
 		// that an incomplete figure never reads as complete.
-		costLabel = "Cost (incomplete — at least one model unpriced)"
+		costLabel = "预估费用（估算不完整：部分模型无定价）"
 	}
 	PrintKeyValue(costLabel, fmt.Sprintf("$%.4f", cost))
 
 	if len(unpriced) > 0 {
-		PrintKeyValue("Unpriced models", strings.Join(unpriced, ", "))
+		PrintKeyValue("未定价模型", strings.Join(unpriced, ", "))
 	}
 	if len(cacheUnpriced) > 0 {
-		PrintKeyValue("Cache rates not configured",
+		PrintKeyValue("未配置缓存费率",
 			strings.Join(cacheUnpriced, ", ")+
-				" (these models ARE priced; their cached traffic was not "+
-				"priced at a cache rate, so this figure may be under- or "+
-				"over-stated)")
+				"（这些模型已有基础定价；缓存用量尚未按缓存费率"+
+				"计算，因此当前估算可能偏低"+
+				"或偏高）")
 	}
 }
 
@@ -177,18 +177,18 @@ func renderCostBlock(usage map[string]any) {
 // does not assert a cache-write zero it never measured (the FIX-1 rule).
 func renderTokensLine(usage map[string]any) {
 	segments := []string{
-		fmt.Sprintf("%d input", intFromAny(usage["total_input_tokens"])),
-		fmt.Sprintf("%d output", intFromAny(usage["total_output_tokens"])),
+		fmt.Sprintf("输入 %d", intFromAny(usage["total_input_tokens"])),
+		fmt.Sprintf("输出 %d", intFromAny(usage["total_output_tokens"])),
 	}
 	if _, present := usage["total_cache_read_tokens"]; present {
-		segments = append(segments, fmt.Sprintf("%d cache read",
+		segments = append(segments, fmt.Sprintf("缓存读取 %d",
 			intFromAny(usage["total_cache_read_tokens"])))
 	}
 	if _, present := usage["total_cache_write_tokens"]; present {
-		segments = append(segments, fmt.Sprintf("%d cache write",
+		segments = append(segments, fmt.Sprintf("缓存写入 %d",
 			intFromAny(usage["total_cache_write_tokens"])))
 	}
-	PrintKeyValue("Tokens", strings.Join(segments, " / "))
+	PrintKeyValue("令牌用量", strings.Join(segments, " / "))
 }
 
 // PrintScanSummary outputs a formatted summary of scan results.
@@ -198,7 +198,7 @@ func PrintScanSummary(data map[string]any) {
 		return
 	}
 
-	PrintHeader("Scan Results")
+	PrintHeader("扫描结果")
 
 	total := intFromAny(metrics["total"])
 	vulnerable := intFromAny(metrics["vulnerable"])
@@ -211,45 +211,45 @@ func PrintScanSummary(data map[string]any) {
 	// line the "eliminated" number silently shrinks when they split out.
 	reclassifiedProtected := intFromAny(metrics["stage2_disagreed_protected"])
 
-	PrintKeyValue("Total units analyzed", fmt.Sprintf("%d", total))
+	PrintKeyValue("已分析代码单元", fmt.Sprintf("%d", total))
 
 	if vulnerable > 0 {
-		red.Printf("  Vulnerable: ")
+		red.Printf("  存在漏洞：")
 		fmt.Printf("%d", vulnerable)
 		if verified > 0 {
-			fmt.Printf(" (%d verified)", verified)
+			fmt.Printf("（已验证 %d 个）", verified)
 		}
 		fmt.Println()
 	} else {
-		green.Printf("  Vulnerable: ")
+		green.Printf("  存在漏洞：")
 		fmt.Println("0")
 	}
 
-	PrintKeyValue("Safe", fmt.Sprintf("%d", safe))
+	PrintKeyValue("未发现漏洞", fmt.Sprintf("%d", safe))
 
 	if unclear > 0 {
-		yellow.Printf("  Unclear: ")
+		yellow.Printf("  尚不明确：")
 		fmt.Printf("%d\n", unclear)
 	}
 
 	if falsePos > 0 {
-		PrintKeyValue("False positives eliminated", fmt.Sprintf("%d", falsePos))
+		PrintKeyValue("已排除误报", fmt.Sprintf("%d", falsePos))
 	}
 	if reclassifiedProtected > 0 {
-		PrintKeyValue("Reclassified protected (verified protected-by-controls)",
+		PrintKeyValue("重新归类为已防护（已验证控制措施）",
 			fmt.Sprintf("%d", reclassifiedProtected))
 	}
 
 	// Usage info
 	if usage, ok := data["usage"].(map[string]any); ok {
-		PrintHeader("Usage")
+		PrintHeader("用量")
 		renderCostBlock(usage)
 		renderTokensLine(usage)
 	}
 
 	// Report paths
 	if reports, ok := data["reports"].(map[string]any); ok {
-		PrintHeader("Reports")
+		PrintHeader("报告")
 		if html, ok := reports["html_path"].(string); ok && html != "" {
 			PrintKeyValue("HTML", html)
 		}
@@ -257,7 +257,7 @@ func PrintScanSummary(data map[string]any) {
 			PrintKeyValue("CSV", csv)
 		}
 		if summary, ok := reports["summary_path"].(string); ok && summary != "" {
-			PrintKeyValue("Summary", summary)
+			PrintKeyValue("摘要", summary)
 		}
 	}
 
@@ -265,31 +265,26 @@ func PrintScanSummary(data map[string]any) {
 
 	// Final verdict
 	if vulnerable > 0 {
-		red.Printf("⚠ Found %d vulnerabilit", vulnerable)
-		if vulnerable == 1 {
-			red.Println("y")
-		} else {
-			red.Println("ies")
-		}
+		red.Printf("⚠ 发现 %d 个漏洞\n", vulnerable)
 	} else {
-		green.Println("✓ No vulnerabilities found")
+		green.Println("✓ 本次扫描未发现漏洞")
 	}
 }
 
 // PrintParseSummary outputs a formatted summary of parse results.
 func PrintParseSummary(data map[string]any) {
-	PrintHeader("Parse Results")
+	PrintHeader("解析结果")
 	if lang, ok := data["language"].(string); ok {
-		PrintKeyValue("Language", lang)
+		PrintKeyValue("语言", lang)
 	}
 	if level, ok := data["processing_level"].(string); ok {
-		PrintKeyValue("Processing level", level)
+		PrintKeyValue("处理层级", level)
 	}
 	if units := intFromAny(data["units_count"]); units > 0 {
-		PrintKeyValue("Units extracted", fmt.Sprintf("%d", units))
+		PrintKeyValue("已提取代码单元", fmt.Sprintf("%d", units))
 	}
 	if path, ok := data["dataset_path"].(string); ok {
-		PrintKeyValue("Output", path)
+		PrintKeyValue("输出位置", path)
 	}
 	fmt.Println()
 }
@@ -301,7 +296,7 @@ func PrintAnalyzeSummary(data map[string]any) {
 		return
 	}
 
-	PrintHeader("Analysis Results")
+	PrintHeader("分析结果")
 	total := intFromAny(metrics["total"])
 	vulnerable := intFromAny(metrics["vulnerable"])
 	bypassable := intFromAny(metrics["bypassable"])
@@ -310,25 +305,25 @@ func PrintAnalyzeSummary(data map[string]any) {
 	inconclusive := intFromAny(metrics["inconclusive"])
 	errors := intFromAny(metrics["errors"])
 
-	PrintKeyValue("Total units", fmt.Sprintf("%d", total))
+	PrintKeyValue("代码单元总数", fmt.Sprintf("%d", total))
 
 	combined := vulnerable + bypassable
 	if combined > 0 {
-		red.Printf("  Vulnerable: %d\n", combined)
+		red.Printf("  存在漏洞：%d\n", combined)
 	} else {
-		green.Printf("  Vulnerable: 0\n")
+		green.Printf("  存在漏洞：0\n")
 	}
-	PrintKeyValue("Protected", fmt.Sprintf("%d", protected))
-	PrintKeyValue("Safe", fmt.Sprintf("%d", safe))
+	PrintKeyValue("已有防护", fmt.Sprintf("%d", protected))
+	PrintKeyValue("未发现漏洞", fmt.Sprintf("%d", safe))
 	if inconclusive > 0 {
-		yellow.Printf("  Inconclusive: %d\n", inconclusive)
+		yellow.Printf("  结论不明确：%d\n", inconclusive)
 	}
 	if errors > 0 {
-		yellow.Printf("  Errors: %d\n", errors)
+		yellow.Printf("  错误：%d\n", errors)
 	}
 
 	if path, ok := data["results_path"].(string); ok {
-		PrintKeyValue("Output", path)
+		PrintKeyValue("输出位置", path)
 	}
 	fmt.Println()
 }
@@ -350,15 +345,15 @@ func PrintAnalyzeResult(data map[string]any, verify bool) {
 
 // PrintReportSummary outputs a formatted summary of report generation.
 func PrintReportSummary(data map[string]any) {
-	PrintHeader("Report Generated")
+	PrintHeader("报告已生成")
 	if format, ok := data["format"].(string); ok && format != "" {
-		PrintKeyValue("Format", format)
+		PrintKeyValue("格式", format)
 	}
 	if path, ok := data["output_path"].(string); ok && path != "" {
-		PrintKeyValue("Output", path)
+		PrintKeyValue("输出位置", path)
 	}
 	if path, ok := data["reskin_path"].(string); ok && path != "" {
-		PrintKeyValue("Reskin", path)
+		PrintKeyValue("新版报告", path)
 	}
 	if usage, ok := data["usage"].(map[string]any); ok {
 		// #598: the report envelope's usage carries the incompleteness
@@ -371,31 +366,31 @@ func PrintReportSummary(data map[string]any) {
 
 // PrintEnhanceSummary outputs a formatted summary of enhancement results.
 func PrintEnhanceSummary(data map[string]any) {
-	PrintHeader("Enhancement Results")
+	PrintHeader("上下文增强结果")
 
 	units := intFromAny(data["units_enhanced"])
 	errors := intFromAny(data["error_count"])
-	PrintKeyValue("Units enhanced", fmt.Sprintf("%d", units))
+	PrintKeyValue("已增强代码单元", fmt.Sprintf("%d", units))
 	if errors > 0 {
-		yellow.Printf("  Errors: %d\n", errors)
+		yellow.Printf("  错误：%d\n", errors)
 	}
 
 	if classifications, ok := data["classifications"].(map[string]any); ok {
-		PrintHeader("Classifications")
+		PrintHeader("分类")
 		for cls, count := range classifications {
 			PrintKeyValue(cls, fmt.Sprintf("%d", intFromAny(count)))
 		}
 	}
 
 	if path, ok := data["enhanced_dataset_path"].(string); ok {
-		PrintKeyValue("Output", path)
+		PrintKeyValue("输出位置", path)
 	}
 	fmt.Println()
 }
 
 // PrintVerifySummary outputs a formatted summary of verification results.
 func PrintVerifySummary(data map[string]any) {
-	PrintHeader("Verification Results (Stage 2)")
+	PrintHeader("验证结果（第二阶段）")
 
 	input := intFromAny(data["findings_input"])
 	verified := intFromAny(data["findings_verified"])
@@ -409,45 +404,40 @@ func PrintVerifySummary(data map[string]any) {
 	reclassifiedProtected := intFromAny(data["disagreed_protected"])
 	reclassifiedInconclusive := intFromAny(data["disagreed_inconclusive"])
 
-	PrintKeyValue("Findings input", fmt.Sprintf("%d", input))
-	PrintKeyValue("Findings verified", fmt.Sprintf("%d", verified))
+	PrintKeyValue("待验证发现", fmt.Sprintf("%d", input))
+	PrintKeyValue("已验证发现", fmt.Sprintf("%d", verified))
 
 	if agreed > 0 {
-		red.Printf("  Agreed (confirmed): %d\n", agreed)
+		red.Printf("  确认存在：%d\n", agreed)
 	}
 	if disagreed > 0 {
-		green.Printf("  Disagreed (eliminated): %d\n", disagreed)
+		green.Printf("  已排除：%d\n", disagreed)
 	}
 	if reclassifiedProtected > 0 {
-		green.Printf("  Reclassified protected (verified protected-by-controls): %d\n",
+		green.Printf("  重新归类为已防护（已验证控制措施）：%d\n",
 			reclassifiedProtected)
 	}
 	if reclassifiedInconclusive > 0 {
-		yellow.Printf("  Reclassified inconclusive (explicitly unconfirmable): %d\n",
+		yellow.Printf("  重新归类为结论不明确（无法确认）：%d\n",
 			reclassifiedInconclusive)
 	}
 
 	fmt.Println()
 	if confirmed > 0 {
-		red.Printf("⚠ %d confirmed vulnerabilit", confirmed)
-		if confirmed == 1 {
-			red.Println("y")
-		} else {
-			red.Println("ies")
-		}
+		red.Printf("⚠ 已确认 %d 个漏洞\n", confirmed)
 	} else {
-		green.Println("✓ No confirmed vulnerabilities")
+		green.Println("✓ 暂无已确认漏洞")
 	}
 
 	if path, ok := data["verified_results_path"].(string); ok {
-		PrintKeyValue("Output", path)
+		PrintKeyValue("输出位置", path)
 	}
 	fmt.Println()
 }
 
 // PrintDynamicTestSummary outputs a formatted summary of dynamic test results.
 func PrintDynamicTestSummary(data map[string]any) {
-	PrintHeader("Dynamic Test Results")
+	PrintHeader("动态测试结果")
 
 	tested := intFromAny(data["findings_tested"])
 	confirmed := intFromAny(data["confirmed"])
@@ -456,39 +446,39 @@ func PrintDynamicTestSummary(data map[string]any) {
 	inconclusive := intFromAny(data["inconclusive"])
 	errors := intFromAny(data["errors"])
 
-	PrintKeyValue("Findings tested", fmt.Sprintf("%d", tested))
+	PrintKeyValue("已测试发现", fmt.Sprintf("%d", tested))
 
 	if confirmed > 0 {
-		red.Printf("  Confirmed: %d\n", confirmed)
+		red.Printf("  已确认：%d\n", confirmed)
 	}
 	if notReproduced > 0 {
-		green.Printf("  Not reproduced: %d\n", notReproduced)
+		green.Printf("  未复现：%d\n", notReproduced)
 	}
 	if blocked > 0 {
-		yellow.Printf("  Blocked: %d\n", blocked)
+		yellow.Printf("  受阻：%d\n", blocked)
 	}
 	if inconclusive > 0 {
-		yellow.Printf("  Inconclusive: %d\n", inconclusive)
+		yellow.Printf("  结论不明确：%d\n", inconclusive)
 	}
 	if errors > 0 {
-		red.Printf("  Errors: %d\n", errors)
+		red.Printf("  错误：%d\n", errors)
 	}
 
 	if path, ok := data["results_json_path"].(string); ok {
-		PrintKeyValue("Results", path)
+		PrintKeyValue("结果文件", path)
 	}
 	fmt.Println()
 }
 
 // PrintPatchSummary outputs a formatted summary of a patch-trust run.
 func PrintPatchSummary(data map[string]any) {
-	PrintHeader("Patch Trust Report")
+	PrintHeader("补丁可信度报告")
 
 	// finding_id holds either a Finding id or a CVE id (backward-compatible
 	// field reuse -- see core/patch.py's PatchStepResult); input_type
 	// discriminates which, so the label printed here matches what's
-	// actually in it instead of always saying "Finding".
-	label := "Finding"
+	// actually in it instead of always saying "漏洞发现".
+	label := "漏洞发现"
 	if inputType, ok := data["input_type"].(string); ok && inputType == "cve" {
 		label = "CVE"
 	}
@@ -496,20 +486,20 @@ func PrintPatchSummary(data map[string]any) {
 		PrintKeyValue(label, id)
 	}
 	if path, ok := data["trust_report_path"].(string); ok {
-		PrintKeyValue("Report", path)
+		PrintKeyValue("报告", path)
 	}
 	fmt.Println()
 }
 
 // PrintBuildOutputSummary outputs a formatted summary of pipeline output generation.
 func PrintBuildOutputSummary(data map[string]any) {
-	PrintHeader("Pipeline Output")
+	PrintHeader("流水线输出")
 
 	findings := intFromAny(data["findings_count"])
-	PrintKeyValue("Findings included", fmt.Sprintf("%d", findings))
+	PrintKeyValue("已收录发现", fmt.Sprintf("%d", findings))
 
 	if path, ok := data["pipeline_output_path"].(string); ok {
-		PrintKeyValue("Output", path)
+		PrintKeyValue("输出位置", path)
 	}
 	fmt.Println()
 }
@@ -524,7 +514,7 @@ func PrintScanSummaryV2(data map[string]any) {
 		return
 	}
 
-	PrintHeader("Scan Results")
+	PrintHeader("扫描结果")
 
 	// Mode line: surfaces incremental-scan range so the user sees
 	// "what was compared" without diving into pipeline_output.json.
@@ -534,10 +524,10 @@ func PrintScanSummaryV2(data map[string]any) {
 			head := shortSHA8(diff["head_sha"])
 			unitsIn := intFromAny(diff["units_in_diff"])
 			unitsTotal := intFromAny(diff["units_total_parsed"])
-			modeLine := fmt.Sprintf("Incremental (%s..%s, %d/%d units)", base, head, unitsIn, unitsTotal)
-			PrintKeyValue("Mode", modeLine)
+			modeLine := fmt.Sprintf("增量扫描（%s..%s，%d/%d 个代码单元）", base, head, unitsIn, unitsTotal)
+			PrintKeyValue("模式", modeLine)
 		} else {
-			PrintKeyValue("Mode", "Full")
+			PrintKeyValue("模式", "完整扫描")
 		}
 	}
 
@@ -550,7 +540,7 @@ func PrintScanSummaryV2(data map[string]any) {
 	errors := intFromAny(metrics["errors"])
 	verified := intFromAny(metrics["verified"])
 
-	PrintKeyValue("Total units analyzed", fmt.Sprintf("%d", total))
+	PrintKeyValue("已分析代码单元", fmt.Sprintf("%d", total))
 
 	// #323: the reachability advisory, in the Scan Results section (wave r1:
 	// it landed under Output Files before — a coverage number beside the
@@ -571,10 +561,10 @@ func PrintScanSummaryV2(data map[string]any) {
 			if f, ok := reach["reachability_reduction_percentage"].(float64); ok {
 				pct = f
 			}
-			PrintKeyValue("Reachability", fmt.Sprintf(
-				"%d of %d units in scope (%.1f%% reduction)", reachable, original, pct))
+			PrintKeyValue("可达性范围", fmt.Sprintf(
+				"纳入 %d/%d 个代码单元（减少 %.1f%%）", reachable, original, pct))
 		} else {
-			PrintKeyValue("Reachability", fmt.Sprintf("%d units in scope", reachable))
+			PrintKeyValue("可达性范围", fmt.Sprintf("纳入 %d 个代码单元", reachable))
 		}
 		if warns, ok := reach["reachability_warnings"].([]any); ok {
 			for _, wn := range warns {
@@ -587,50 +577,50 @@ func PrintScanSummaryV2(data map[string]any) {
 
 	combined := vulnerable + bypassable
 	if combined > 0 {
-		red.Printf("  Vulnerable: %d\n", combined)
+		red.Printf("  存在漏洞：%d\n", combined)
 	} else {
-		green.Printf("  Vulnerable: 0\n")
+		green.Printf("  存在漏洞：0\n")
 	}
-	PrintKeyValue("Protected", fmt.Sprintf("%d", protected))
-	PrintKeyValue("Safe", fmt.Sprintf("%d", safe))
+	PrintKeyValue("已有防护", fmt.Sprintf("%d", protected))
+	PrintKeyValue("未发现漏洞", fmt.Sprintf("%d", safe))
 	if inconclusive > 0 {
-		yellow.Printf("  Inconclusive: %d\n", inconclusive)
+		yellow.Printf("  结论不明确：%d\n", inconclusive)
 	}
 	if errors > 0 {
-		yellow.Printf("  Errors: %d\n", errors)
+		yellow.Printf("  错误：%d\n", errors)
 	}
 	if verified > 0 {
 		agreed := intFromAny(metrics["stage2_agreed"])
 		disagreed := intFromAny(metrics["stage2_disagreed"])
-		PrintKeyValue("Verified (Stage 2)", fmt.Sprintf("%d (%d agreed, %d disagreed)",
+		PrintKeyValue("已验证（第二阶段）", fmt.Sprintf("%d（确认 %d，排除 %d）",
 			verified, agreed, disagreed))
 		// #622: the companion line states the split DISJOINTLY — the
 		// reclassified figure is carved OUT of the disagreed count above,
 		// so "of which" would wrongly imply a subset.
 		if reclassifiedProtected := intFromAny(metrics["stage2_disagreed_protected"]); reclassifiedProtected > 0 {
-			PrintKeyValue("Reclassified protected",
-				fmt.Sprintf("%d (verified protected-by-controls; not counted in disagreed)",
+			PrintKeyValue("重新归类为已防护",
+				fmt.Sprintf("%d（已验证控制措施；未计入已排除项）",
 					reclassifiedProtected))
 		}
 	}
 
 	// Usage info
 	if usage, ok := data["usage"].(map[string]any); ok {
-		PrintHeader("Usage")
+		PrintHeader("用量")
 		renderCostBlock(usage)
 		renderTokensLine(usage)
 	}
 
 	// Output paths
-	PrintHeader("Output Files")
+	PrintHeader("输出文件")
 	if dir, ok := data["output_dir"].(string); ok {
-		PrintKeyValue("Directory", dir)
+		PrintKeyValue("目录", dir)
 	}
 	if path, ok := data["pipeline_output_path"].(string); ok && path != "" {
-		PrintKeyValue("Pipeline output", path)
+		PrintKeyValue("流水线输出", path)
 	}
 	if path, ok := data["summary_path"].(string); ok && path != "" {
-		PrintKeyValue("Summary report", path)
+		PrintKeyValue("摘要报告", path)
 	}
 
 	// Skipped steps
@@ -642,7 +632,7 @@ func PrintScanSummaryV2(data map[string]any) {
 			}
 		}
 		if len(names) > 0 {
-			dim.Printf("  Skipped: %s\n", strings.Join(names, ", "))
+			dim.Printf("  已跳过：%s\n", strings.Join(names, ", "))
 		}
 	}
 
@@ -650,20 +640,15 @@ func PrintScanSummaryV2(data map[string]any) {
 
 	// Final verdict
 	if combined > 0 {
-		red.Printf("⚠ Found %d vulnerabilit", combined)
-		if combined == 1 {
-			red.Println("y")
-		} else {
-			red.Println("ies")
-		}
+		red.Printf("⚠ 发现 %d 个漏洞\n", combined)
 	} else {
-		green.Println("✓ No vulnerabilities found")
+		green.Println("✓ 本次扫描未发现漏洞")
 	}
 }
 
 // PrintVersion outputs version info.
 func PrintVersion(version, goVersion, pythonVersion string) {
-	bold.Printf("openant ")
+	bold.Printf("911VulScan（基于 OpenAnt） ")
 	fmt.Println(version)
 	dim.Printf("  Go:     %s\n", goVersion)
 	if pythonVersion != "" {

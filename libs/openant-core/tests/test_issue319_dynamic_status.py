@@ -89,10 +89,10 @@ def test_tested_only_when_a_container_ran():
     never happened — the string appears ONLY in the CONFIRMED block."""
     out = _run_merge(_FINDINGS, _RESULTS)
     by_id = {f["id"]: f for f in out}
-    assert "Docker container" in by_id["VULN-003"]["dynamic_testing"]["tested"]
+    assert "Docker 容器" in by_id["VULN-003"]["dynamic_testing"]["tested"]
     for fid in ("VULN-001", "VULN-002"):
         blk = by_id[fid].get("dynamic_testing_attempted", {})
-        assert "Docker container" not in str(blk), fid
+        assert "Docker 容器" not in str(blk), fid
 
 
 def test_identity_gate_unchanged():
@@ -117,25 +117,25 @@ def test_disclosure_header_stamps_the_dynamic_dimension():
                  "dynamic_testing": {"status": "CONFIRMED"},
                  "stage1_verdict": "vulnerable"}
     h = _disclosure_verdict_header(confirmed)
-    assert "dynamic testing" in h.lower() and "CONFIRMED" in h
+    assert "动态测试" in h and "已通过动态测试确认" in h
 
     failed = {"stage2_verdict": "confirmed",
              "dynamic_testing_attempted": {"status": "ERROR"},
              "stage1_verdict": "vulnerable"}
     h2 = _disclosure_verdict_header(failed)
-    assert "NOT confirmed by dynamic testing" in h2, h2
-    assert "ERROR" in h2
+    assert "动态测试未确认" in h2, h2
+    assert "错误" in h2
     # deep-refute (fable, ship-fix stage 7): the Stage-2 stamp must SURVIVE
     # the dynamic-failure line — the #210/#283 regression (an early-return
     # dropped the Stage-2 confirmation from a harness-errored finding) must
     # be pinned by assertion, not just by the compose code being correct.
-    assert "CONFIRMED" in h2 or "ADJUDICATED" in h2, (
+    assert "已通过第 2 阶段攻击者模拟确认" in h2 or "已由第 2 阶段攻击者模拟判定" in h2, (
         "the Stage-2 confirmation stamp must be retained alongside the "
         "NOT-confirmed dynamic line: " + h2)
 
     static_only = {"stage2_verdict": "confirmed", "stage1_verdict": "vulnerable"}
     h3 = _disclosure_verdict_header(static_only)
-    assert "dynamic" not in h3.lower(), h3
+    assert "动态测试" not in h3, h3
 
 
 def test_templates_branch_on_the_two_blocks():
@@ -202,7 +202,7 @@ def test_null_status_normalised_both_surfaces_agree():
     h = _disclosure_verdict_header({
         "stage2_verdict": "confirmed", "stage1_verdict": "vulnerable",
         "dynamic_testing_attempted": att})
-    assert "UNKNOWN" in h  # the header agrees with the attempted block
+    assert "未知" in h  # the header agrees with the attempted block
 
 
 def test_preexisting_dynamic_blocks_are_cleared_by_merge(tmp_path):

@@ -1,27 +1,16 @@
-"""The frozen ``openant-default`` llm-config.
+"""Immutable built-in profiles.
 
-Properties (per plan §7):
-
-* **Source-defined, not on disk.** ``openant-default`` is the
-  baked-in baseline that always resolves, even on a fresh install
-  with no config.json.
-* **Immutable.** ``parse_config()`` rejects any user attempt to
-  redefine it. Users customise by copying it under a different name
-  (``openant llm-config copy openant-default my-config``).
-* **References provider name "anthropic".** The provider entry IS
-  user-editable; this lets ``openant set-api-key`` write the key to
-  ``llm_providers["anthropic"].api_key`` and have ``openant-default``
-  pick it up automatically.
-
-If Anthropic deprecates a model ID listed here, this file is the
-single place we update — every other module reads through the
-registry.
+Fresh installations use deepseek-default (Flash); deepseek-pro is the optional
+Pro profile. openant-default and get_builtin_default() retain historical Claude
+bindings so explicit legacy selections never silently switch providers.
+Provider credentials/endpoints remain user-configurable. Model IDs come from
+utilities.model_config and pricing from config/models.json.
 """
 
 from __future__ import annotations
 
-from ..model_config import CLAUDE_OPUS, CLAUDE_SONNET
-from .config import LLMConfig, PhaseRef
+from ..model_config import CLAUDE_OPUS, CLAUDE_SONNET, DEEPSEEK_FLASH, DEEPSEEK_PRO
+from .config import LLMConfig, PhaseRef, PHASES
 
 
 # Provider name referenced by every phase. Synthesised from the
@@ -65,4 +54,20 @@ OPENANT_DEFAULT = LLMConfig(
 # foot-gun is mostly hypothetical, but this gives us a single hook
 # if we ever want to load the default from disk for testing.
 def get_builtin_default() -> LLMConfig:
+    """Historical named profile accessor; use resolve_llm_config for selection."""
     return OPENANT_DEFAULT
+
+
+# Keep openant-default immutable for existing Anthropic users. Fresh installs
+# select deepseek-default in config.py; a named profile always wins.
+DEEPSEEK_DEFAULT = LLMConfig(
+    name="deepseek-default",
+    phases={phase: PhaseRef(provider="deepseek", model=DEEPSEEK_FLASH) for phase in PHASES},
+)
+DEEPSEEK_PRO_DEFAULT = LLMConfig(
+    name="deepseek-pro",
+    phases={phase: PhaseRef(provider="deepseek", model=DEEPSEEK_PRO) for phase in PHASES},
+)
+BUILTIN_CONFIGS = {config.name: config for config in (
+    DEEPSEEK_DEFAULT, DEEPSEEK_PRO_DEFAULT, OPENANT_DEFAULT,
+)}

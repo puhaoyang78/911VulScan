@@ -69,14 +69,33 @@ func (w *lineWriter) flush() {
 // child processes (e.g. parallel workers) are killed.
 // Returns the exit code and any error (cancelled runs return exit code -1, nil).
 func InvokeCtx(ctx context.Context, pythonPath string, args []string, workDir, apiKey string, onLog func(string)) (int, error) {
-	_, code, err := invokeCtxInner(ctx, pythonPath, args, workDir, apiKey, onLog, false)
+	_, code, err := invokeCtxInner(ctx, pythonPath, args, workDir, legacyAPIKeyEnv(apiKey), onLog, false)
 	return code, err
 }
 
 // InvokeCtxCapture runs `python -m openant <args>` like InvokeCtx but also
 // captures and returns the full stdout content (e.g. JSON output).
 func InvokeCtxCapture(ctx context.Context, pythonPath string, args []string, workDir, apiKey string, onLog func(string)) (stdout string, exitCode int, err error) {
-	return invokeCtxInner(ctx, pythonPath, args, workDir, apiKey, onLog, true)
+	return invokeCtxInner(ctx, pythonPath, args, workDir, legacyAPIKeyEnv(apiKey), onLog, true)
+}
+
+// InvokeCtxEnv runs a cancellable subprocess with per-job environment overrides.
+// It never changes the server environment or writes provider credentials to disk.
+func InvokeCtxEnv(ctx context.Context, pythonPath string, args []string, workDir string, extraEnv map[string]string, onLog func(string)) (int, error) {
+	_, code, err := invokeCtxInner(ctx, pythonPath, args, workDir, extraEnv, onLog, false)
+	return code, err
+}
+
+// InvokeCtxCaptureEnv is InvokeCtxEnv with captured stdout for JSON envelopes.
+func InvokeCtxCaptureEnv(ctx context.Context, pythonPath string, args []string, workDir string, extraEnv map[string]string, onLog func(string)) (stdout string, exitCode int, err error) {
+	return invokeCtxInner(ctx, pythonPath, args, workDir, extraEnv, onLog, true)
+}
+
+func legacyAPIKeyEnv(apiKey string) map[string]string {
+	if apiKey == "" {
+		return nil
+	}
+	return map[string]string{"ANTHROPIC_API_KEY": apiKey}
 }
 
 // deadlineOutcome is the #320 deadline surface, with the #433
@@ -143,7 +162,7 @@ func deadlineOutcome(stdoutBuf *bytes.Buffer, invokeTimeout time.Duration, onLog
 		invokeTimeout, ErrInvokeDeadline)
 }
 
-func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workDir, apiKey string, onLog func(string), captureStdout bool) (string, int, error) {
+func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workDir string, extraEnv map[string]string, onLog func(string), captureStdout bool) (string, int, error) {
 	// #320: bound the subprocess with the operator-tunable invoke deadline —
 	// the same budget the CLI's Invoke applies (invoke.go:91). Derived from
 	// the CALLER's context so the job cancel still propagates (the parent);
@@ -165,10 +184,7 @@ func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workD
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
-	cmd.Env = os.Environ()
-	if apiKey != "" {
-		cmd.Env = setEnv(cmd.Env, "ANTHROPIC_API_KEY", apiKey)
-	}
+	cmd.Env = mergeEnv(os.Environ(), extraEnv)
 	// New process group so we can kill all descendants at once (unix; no-op
 	// elsewhere). os/exec drives cancellation: its watch goroutine calls Cancel
 	// once and stops before Wait reaps the child, so there is no window to SIGKILL

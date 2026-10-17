@@ -51,17 +51,30 @@ def test_file_lock_is_bounded():
     assert "deadline" in src.lower() or "timeout" in src.lower(), "no retry deadline"
 
 
-def test_reporter_subprocesses_bounded():
+@pytest.mark.parametrize("report_format", ["html", "csv"])
+def test_reporter_subprocesses_bounded(report_format, monkeypatch):
     """The issue's item 3: the two reporter subprocess calls (the HTML and
     CSV generation) carry the bound too."""
-    import inspect
+    from types import SimpleNamespace
 
-    src = inspect.getsource(reporter)
-    for fragment in ("HTML report generation failed", "CSV report: "):
-        i = src.find(fragment)
-        assert i > 0, fragment
-        call_text = src[max(0, i - 600):i]
-        assert "timeout=" in call_text, f"the {fragment[:20]} call carries no timeout"
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(reporter.subprocess, "run", fake_run)
+    output_path = f"report.{report_format}"
+    result = getattr(reporter, f"generate_{report_format}_report")(
+        "results.json", "dataset.json", output_path)
+
+    assert len(calls) == 1
+    cmd, kwargs = calls[0]
+    module = "report.html_report" if report_format == "html" else "report.csv_export"
+    assert cmd[:4] == [sys.executable, "-P", "-m", module]
+    assert kwargs["timeout"] == 1800, "the reporter subprocess must remain bounded"
+    assert result.output_path == output_path
+    assert result.format == report_format
 
 
 def test_npm_install_timeout_error_is_diagnosable(tmp_path, monkeypatch):

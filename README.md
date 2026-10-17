@@ -1,3 +1,10 @@
+# 911VulScan · 911-dev
+
+本分支提供中文扫描工作台、默认 DeepSeek 和 C/C++ 动态验证模板。
+安装、配置、支持边界和测试方法请先阅读 [中文使用说明](README.zh-CN.md)。
+
+以下保留上游 OpenAnt 项目介绍和历史说明；本分支默认值以中文说明为准。
+
 <p align="center">
   <img src="assets/open-ant-black.png" alt="OpenAnt" width="180" />
 </p>

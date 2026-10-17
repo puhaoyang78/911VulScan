@@ -39,18 +39,22 @@ from core.schemas import AnalysisMetrics, ScanResult  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _stub_registry_probe(monkeypatch):
-    """Neutralize the real Anthropic credential probe.
+    """Build the historical registry with a mocked SDK and skip its probe.
 
-    Post-#69, ``scan_repository`` calls ``probe_registry_or_raise(registry)``
-    (core/scanner.py) which issues a real 1-token Anthropic request to
-    validate credentials before any work begins. These orchestration tests
-    run fully offline, so we replace the probe with a no-op. The registry is
-    still built (from the dummy key) and threaded through every stage exactly
-    as in production; only the network round-trip is removed. ``scan_repository``
-    does ``from utilities.llm import ... probe_registry_or_raise`` at call time,
-    so patching the attribute on ``utilities.llm`` takes effect.
+    Registry construction and threading still run as in production, while an
+    explicit profile and mocked adapter keep these orchestration tests offline
+    regardless of the fresh-install provider or locally saved credentials.
+    ``scan_repository`` imports these helpers at call time, so patching the
+    attributes on ``utilities.llm`` takes effect.
     """
     import utilities.llm as llm_mod
+    import utilities.llm.registry as registry_mod
+    from tests._llm_factories.anthropic import make_adapter
+
+    # Keep this orchestration fixture independent of the fresh-install default.
+    monkeypatch.setattr(llm_mod, "load_config_file", lambda: llm_mod.parse_config(
+        {"default_llm": "openant-default"}))
+    monkeypatch.setattr(registry_mod, "build_adapter", lambda provider: make_adapter("text"))
 
     monkeypatch.setattr(
         llm_mod, "probe_registry_or_raise", lambda *a, **k: None, raising=True

@@ -10,6 +10,7 @@ import pytest
 
 from utilities.llm import (
     PHASES,
+    DEEPSEEK_DEFAULT,
     ConfigError,
     ConfigFile,
     LLMAuthError,
@@ -84,7 +85,7 @@ class TestResolveLLMConfig:
     def test_default_returns_builtin(self):
         cf = empty_config()
         resolved = resolve_llm_config(cf, None)
-        assert resolved is get_builtin_default()
+        assert resolved is DEEPSEEK_DEFAULT
 
     def test_explicit_openant_default_returns_builtin(self):
         cf = empty_config()
@@ -330,7 +331,7 @@ class TestLoadConfigFile:
         assert cf.llm_providers == {}
         assert cf.llm_configs == {}
         # Built-in default still resolves through the registry.
-        assert resolve_llm_config(cf, None) is get_builtin_default()
+        assert resolve_llm_config(cf, None) is DEEPSEEK_DEFAULT
 
     def test_v1_file_migrates_in_memory(self, tmp_path: Path):
         path = tmp_path / "config.json"

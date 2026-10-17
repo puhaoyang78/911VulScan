@@ -118,6 +118,14 @@ def _offline_registry(monkeypatch):
     (mirrors tests/test_pr69_report_llmconfig_forwarding.py's fixture).
     """
     import utilities.llm as llm_mod
+    # Keep this historical scanner harness offline and provider-explicit.
+    # Fresh DeepSeek selection is covered separately; these tests exercise
+    # stage wiring, accounting, and error handling without any API calls.
+    import utilities.llm.registry as registry_mod
+    from tests._llm_factories.anthropic import make_adapter
+    monkeypatch.setattr(llm_mod, "load_config_file", lambda: llm_mod.parse_config(
+        {"default_llm": "openant-default"}))
+    monkeypatch.setattr(registry_mod, "build_adapter", lambda provider: make_adapter("text"))
 
     monkeypatch.setattr(
         llm_mod, "probe_registry_or_raise", lambda *a, **k: None, raising=True

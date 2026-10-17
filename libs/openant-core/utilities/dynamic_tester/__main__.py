@@ -7,29 +7,31 @@ from utilities.dynamic_tester import run_dynamic_tests
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Dynamic vulnerability testing using Docker containers",
+        description="使用 Docker 容器执行动态漏洞验证",
     )
     parser.add_argument(
         "pipeline_output",
-        help="Path to pipeline_output.json from the static analysis pipeline",
+        help="静态分析流程产生的 pipeline_output.json 路径",
     )
     parser.add_argument(
         "--output-dir", "-o",
         default=None,
-        help="Output directory for results (default: same as input file)",
+        help="结果输出目录（默认与输入文件同目录）",
     )
     parser.add_argument(
         "--max-retries",
         type=int,
         default=3,
-        help="Maximum retries per finding on ERROR status (default: 3)",
+        help="每项发现出现 ERROR 后的最大重试次数（默认 3）",
     )
+
+    parser.add_argument("--repo-path", default=None, help="真实目标仓库路径（C/C++ 验证必需）")
 
     args = parser.parse_args()
 
     results = run_dynamic_tests(
         args.pipeline_output, args.output_dir,
-        max_retries=args.max_retries,
+        max_retries=args.max_retries, repo_path=args.repo_path,
     )
 
     counts = {}
@@ -37,12 +39,12 @@ def main():
         counts[r.status] = counts.get(r.status, 0) + 1
 
     print("\n" + "=" * 50)
-    print("DYNAMIC TEST SUMMARY")
+    print("动态测试汇总")
     print("=" * 50)
     for status in ["CONFIRMED", "NOT_REPRODUCED", "BLOCKED", "INCONCLUSIVE", "ERROR", "SKIPPED"]:
         if status in counts:
             print(f"  {status}: {counts[status]}")
-    print(f"  TOTAL: {len(results)}")
+    print(f"  总计： {len(results)}")
     print("=" * 50)
 
 

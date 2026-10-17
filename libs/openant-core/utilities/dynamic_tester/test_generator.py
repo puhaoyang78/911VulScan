@@ -1,4 +1,4 @@
-"""LLM-based dynamic test generation using Claude Sonnet.
+"""LLM-based dynamic test generation using the configured provider.
 
 For each finding, generates:
 - A Dockerfile that installs the target library/app at the correct version
@@ -44,8 +44,9 @@ def resolve_docker_template(file_path: str, scan_language: str | None = None) ->
     ever fail. Skipping with a recorded reason is both cheaper and honest.
     """
     language = language_for_path(file_path)
-    if language is None and scan_language:
-        language = scan_language.lower()
+    if language is None and isinstance(scan_language, str):
+        language = scan_language.strip().lower()
+        language = {"c++": "c", "cpp": "c", "c/c++": "c", "cxx": "c"}.get(language, language)
     if language is None:
         return None
     return docker_template_for(language)
@@ -63,6 +64,10 @@ RULES:
 3. Do NOT print anything else to stdout. Use stderr for debug logging.
 4. Keep tests minimal and focused on the specific vulnerability.
 5. Set appropriate timeouts — tests should complete within 60 seconds.
+6. 所有自然语言说明、details、测试日志和注释均使用简体中文。JSON 键名、status 枚举、
+   代码标识符、原始诊断证据和协议值保持原样。不得翻译机器字段。
+7. 对于 C/C++，必须遵循提示中的固定编译运行模板，不得通过 Python 模拟目标代码。
+8. CONFIRMED 必须附带非空且可核对的 evidence；只有状态字符串或无内容证据不能确认漏洞。
 
 DEPENDENCY INSTALLATION:
 - Do NOT pin exact versions unless the vulnerability is version-specific. Use >= or no version pin.
@@ -134,7 +139,7 @@ DOCKER-COMPOSE (only if the test needs multiple services):
 OUTPUT FORMAT:
 Return a JSON object with these keys:
 - "dockerfile": string — Complete Dockerfile content
-- "test_script": string — Complete test script content (Python/JS/Go depending on language)
+- "test_script": string — Complete test source content (Python/JS/Go/C/C++ depending on language)
 - "test_filename": string — Filename for the test script (e.g., "test_exploit.py")
 - "requirements": string — Dependencies file content (requirements.txt / package.json / go.mod)
 - "requirements_filename": string — Filename for dependencies (e.g., "requirements.txt")
@@ -156,7 +161,8 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
     loc_for_lang = finding.get("location")
     _ff = loc_for_lang.get("file") if isinstance(loc_for_lang, dict) else None
     finding_file = _ff if isinstance(_ff, str) else ""  # location.file may be non-str (JSON)
-    language = language_for_path(finding_file) or repo_info.get("language") or "unknown"
+    language = (resolve_native_language(finding_file, repo_info.get("language"))
+                or language_for_path(finding_file) or repo_info.get("language") or "unknown")
 
     # Derive the staged source filename so the LLM can reference it in COPY.
     source_basename = ""
@@ -238,7 +244,67 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
     if guidance:
         parts.extend(["", "CWE-SPECIFIC GUIDANCE:", guidance])
 
+    native_language = resolve_native_language(finding_file, repo_info.get("language"))
+    if native_language:
+        parts.extend(["", _native_guidance(native_language)])
     return "\n".join(parts)
+
+
+def resolve_native_language(file_path: str, scan_language: str | None = None) -> str | None:
+    """选择真实 C 或 C++ 编译器；已识别文件扩展名优先于扫描默认值。"""
+    if resolve_docker_template(file_path, scan_language) != "c":
+        return None
+    suffix = os.path.splitext(file_path)[1]
+    alias = scan_language.strip().lower() if isinstance(scan_language, str) else ""
+    if suffix == ".C" or suffix.lower() in {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"}:
+        return "cpp"
+    if suffix.lower() == ".c":
+        return "c"
+    return "cpp" if alias in {"c++", "cpp", "c/c++", "cxx"} else "c"
+
+
+def _native_dockerfile() -> str:
+    from pathlib import Path
+    return (Path(__file__).parent / "docker_templates" / "c.Dockerfile").read_text(encoding="utf-8")
+
+
+def _native_guidance(language: str) -> str:
+    filename = "test_exploit.cpp" if language == "cpp" else "test_exploit.c"
+    compiler = "g++ -std=c++17" if language == "cpp" else "gcc -std=c11"
+    return f"""C/C++ 固定编译运行模板：
+- test_script 必须是可编译的 {language} 源码，test_filename 使用 {filename}。
+- 测试必须调用真实目标函数。若已提供目标源文件，用 #include 引入该文件；
+  如目标包含 main，可用临时宏重命名 main。不得复制并改写目标逻辑来伪造复现。
+- 仅支持单编译单元和标准库。缺失项目头文件、链接库或构建参数时，说明覆盖限制，
+  不得编造替代依赖、声称已验证完整项目或自动关闭 sanitizer。
+- 执行器使用 {compiler} -O1 -g -fno-omit-frame-pointer
+  -fsanitize=address,undefined -fno-sanitize-recover=all 编译，并捕获崩溃诊断。
+- 程序的 main 必须主动调用测试入口、构造触发输入；不能只定义函数。
+- 当前 C/C++ 模板仅根据指向真实目标的 sanitizer 诊断和错误终止自动确认。
+  程序自行打印的 CONFIRMED 不构成验证，非 sanitizer 逻辑漏洞应说明需人工核验。
+- 正常退出时，程序应打印 schema 要求的单个 JSON 结果（details 使用简体中文）。
+  未触发特定攻击仅可声明 NOT_REPRODUCED，不代表证明安全。崩溃由执行器收集。
+- requirements、requirements_filename、docker_compose 均置空，needs_attacker_server=false。
+- dockerfile 直接使用下方固定模板；执行器会强制应用它。只在 /tmp 写入运行时文件。
+{_native_dockerfile()}"""
+
+
+def _finalize_native_generation(parsed: dict, finding: dict, repo_info: dict) -> dict | None:
+    location = finding.get("location")
+    filename = location.get("file", "") if isinstance(location, dict) else ""
+    filename = filename if isinstance(filename, str) else ""
+    language = resolve_native_language(filename, repo_info.get("language"))
+    if not language:
+        # Never trust an LLM-supplied execution mode on another language.
+        parsed.pop("native_language", None)
+        return parsed
+    if parsed.get("requirements") or parsed.get("docker_compose") or parsed.get("needs_attacker_server"):
+        return None
+    parsed.update(dockerfile=_native_dockerfile(), native_language=language,
+                  test_filename="test_exploit.cpp" if language == "cpp" else "test_exploit.c",
+                  requirements="", requirements_filename="", docker_compose="",
+                  needs_attacker_server=False)
+    return parsed
 
 
 def _get_cwe_guidance(cwe_id: int) -> str:
@@ -316,7 +382,7 @@ def generate_test(
     )
 
     parsed = _parse_generation_response(raw)
-    if not parsed:
+    if not isinstance(parsed, dict) or not parsed:
         return None
 
     # Validate required fields
@@ -350,7 +416,7 @@ def generate_test(
         if k in parsed and not isinstance(parsed[k], str):
             return None
 
-    return parsed
+    return _finalize_native_generation(parsed, finding, repo_info)
 
 
 def regenerate_test(
@@ -415,7 +481,7 @@ def regenerate_test(
     )
 
     parsed = _parse_generation_response(raw)
-    if not parsed:
+    if not isinstance(parsed, dict) or not parsed:
         return None
 
     required = ["dockerfile", "test_script", "test_filename"]
@@ -448,7 +514,7 @@ def regenerate_test(
         if k in parsed and not isinstance(parsed[k], str):
             return None
 
-    return parsed
+    return _finalize_native_generation(parsed, finding, repo_info)
 
 
 def _generate_one(finding, repo_info, binding, tracker):
@@ -491,14 +557,14 @@ def generate_tests_batch(
     tracker = tracker or TokenTracker()
     total = len(findings)
 
-    mode = "sequential" if workers <= 1 else f"parallel ({workers} workers)"
-    print(f"[DynamicTest] Generating tests for {total} findings, mode: {mode}", file=sys.stderr, flush=True)
+    mode = "顺序" if workers <= 1 else f"并行（{workers} 个工作线程）"
+    print(f"[动态测试] 正在为 {total} 项发现生成测试，模式：{mode}", file=sys.stderr, flush=True)
 
     if workers <= 1:
         results = []
         for i, finding in enumerate(findings):
             _finding, result, cost, _worker = _generate_one(finding, repo_info, binding, tracker)
-            print(f"[DynamicTest] {i+1}/{total}  ${cost:.2f}", file=sys.stderr, flush=True)
+            print(f"[动态测试] {i+1}/{total}  ${cost:.2f}", file=sys.stderr, flush=True)
             results.append((_finding, result, cost))
         return results
 
@@ -510,7 +576,7 @@ def generate_tests_batch(
         for future in as_completed(futures):
             _finding, result, cost, worker = future.result()
             completed += 1
-            print(f"[DynamicTest] {completed}/{total}  ${cost:.2f}  [{worker}]", file=sys.stderr, flush=True)
+            print(f"[动态测试] {completed}/{total}  ${cost:.2f}  [{worker}]", file=sys.stderr, flush=True)
             results.append((_finding, result, cost))
 
     return results

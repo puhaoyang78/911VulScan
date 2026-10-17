@@ -43,45 +43,86 @@ func validateAPIKey(key string) error {
 	return err
 }
 
+var setAPIKeyProvider string
+
 var setAPIKeyCmd = &cobra.Command{
 	Use:   "set-api-key [key]",
-	Short: "Save your Anthropic API key",
-	Long: `Save your Anthropic API key to the OpenAnt config file.
+	Short: "保存 DeepSeek 或 Anthropic API 密钥",
+	Long: `保存当前模型服务商的 API 密钥。
 
-Run without an argument to be prompted for the key interactively. The
-prompt does NOT echo what you type/paste, so the key never lands in your
-terminal scrollback:
+首次使用默认选择 DeepSeek；已有 Anthropic 配置继续使用 Anthropic。
+使用 --provider 可明确指定服务商或已配置的服务商名称：
 
-  openant set-api-key
+  openant set-api-key --provider deepseek
+  openant set-api-key --provider anthropic
 
-The key is stored in ~/.config/openant/config.json with restricted
-permissions (0600). This is required before running enhance, analyze,
-verify, or scan.
+不传 key 参数时，交互提示不会回显密钥。密钥保存在
+~/.config/openant/config.json，文件权限为 0600。
+也可设置 DEEPSEEK_API_KEY 或 ANTHROPIC_API_KEY 环境变量。
+DeepSeek 自定义端点可通过 DEEPSEEK_BASE_URL 设置。
 
-Get an API key at https://console.anthropic.com/settings/keys
+API 密钥：https://platform.deepseek.com/api_keys
+Anthropic：https://console.anthropic.com/settings/keys
 
-You may also pass the key as an argument for back-compat:
-
-  openant set-api-key sk-ant-api03-...
-
-WARNING: passing the key as an argument exposes it to your shell history
-and to other users via process listings (e.g. ` + "`ps`" + `). Prefer the
-interactive no-echo prompt above.`,
+兼容位置参数传入密钥，但这会暴露在 shell 历史和进程列表中。
+建议使用不回显的交互输入。验证会发起一个最小 API 请求，可能计费。`,
 	Args: cobra.MaximumNArgs(1),
 	Run:  runSetAPIKey,
 }
 
+func init() {
+	setAPIKeyCmd.Flags().StringVar(&setAPIKeyProvider, "provider", "", "服务商名称（默认使用当前配置，首次使用为 deepseek）")
+}
+
+// resolveKeyProvider never infers a provider from secret contents. Explicit
+// provider names win; otherwise use the active analyze-phase binding.
+func resolveKeyProvider(cfg *config.Config, requested string) (string, config.ProviderEntry, error) {
+	name := strings.TrimSpace(requested)
+	if name == "" {
+		// Credential setup for a built-in profile must not require finding
+		// the external model registry, which older standalone installs may
+		// not have shipped next to the binary.
+		switch cfg.DefaultLLM() {
+		case config.DeepSeekDefaultLLM, config.DeepSeekProLLM:
+			name = "deepseek"
+		case config.LegacyDefaultLLM:
+			name = "anthropic"
+		default:
+			ref, ok := cfg.LLMPhase("", "analyze")
+			if !ok {
+				return "", config.ProviderEntry{}, fmt.Errorf("无法解析默认模型配置 %q；请使用 --provider deepseek 或 --provider anthropic", cfg.DefaultLLM())
+			}
+			name = ref.Provider
+		}
+	}
+	entry, exists := cfg.GetProvider(name)
+	if !exists && (name == "deepseek" || name == "anthropic") {
+		entry.Type = name
+		exists = true
+	}
+	if !exists || (entry.Type != "deepseek" && entry.Type != "anthropic") {
+		return "", config.ProviderEntry{}, fmt.Errorf("服务商 %q 不支持此密钥命令；请使用 openant setup llm 配置", name)
+	}
+	return name, entry, nil
+}
+
 func runSetAPIKey(cmd *cobra.Command, args []string) {
+	cfg, err := config.Load()
+	if err != nil {
+		output.PrintError(err.Error())
+		os.Exit(1)
+	}
+	providerName, provider, err := resolveKeyProvider(cfg, setAPIKeyProvider)
+	if err != nil {
+		output.PrintError(err.Error())
+		os.Exit(1)
+	}
 	var key string
 	if len(args) == 1 {
-		// Back-compat: key passed as an argv. Exposed to shell history /
-		// `ps`; the command help warns against this.
 		key = strings.TrimSpace(args[0])
 	} else {
-		// No argv: read the key interactively WITHOUT echo (falls back to
-		// a plain line read when stdin is not a terminal — pipes, CI).
 		reader := bufio.NewReader(os.Stdin)
-		k, err := promptSecret(reader, "Anthropic API key")
+		k, err := promptSecret(reader, providerName+" API 密钥")
 		if err != nil {
 			output.PrintError(err.Error())
 			os.Exit(1)
@@ -89,40 +130,34 @@ func runSetAPIKey(cmd *cobra.Command, args []string) {
 		key = strings.TrimSpace(k)
 	}
 	if key == "" {
-		output.PrintError("API key cannot be empty")
+		output.PrintError("API 密钥不能为空")
 		os.Exit(1)
 	}
 
-	// Validate against Anthropic BEFORE saving — a bad key should never
-	// be persisted, otherwise `openant scan` silently produces zero results
-	// that look like a clean repo.
-	fmt.Fprintf(os.Stderr, "Validating API key with Anthropic... ")
-	if err := validateAPIKey(key); err != nil {
-		fmt.Fprintf(os.Stderr, "\n")
-		output.PrintError(err.Error())
-		os.Exit(1)
+	fmt.Fprintf(os.Stderr, "正在向 %s 验证 API 密钥（最小请求，可能计费）... ", providerName)
+	if provider.Type == "deepseek" {
+		err = probeDeepSeek(key, provider.BaseURL, config.DeepSeekModel)
+	} else if provider.BaseURL != "" || providerName != "anthropic" {
+		err = probeAnthropic(key, provider.BaseURL, "claude-haiku-4-5-20251001")
+	} else {
+		err = validateAPIKey(key)
 	}
-	fmt.Fprintf(os.Stderr, "OK\n")
-
-	cfg, err := config.Load()
 	if err != nil {
+		fmt.Fprintln(os.Stderr)
 		output.PrintError(err.Error())
 		os.Exit(1)
 	}
+	fmt.Fprintln(os.Stderr, "完成")
 
-	// SetAPIKey updates the v1 ``api_key`` AND the v2
-	// ``llm_providers["anthropic"].api_key`` entry (if present) so
-	// users who have authored an explicit anthropic provider see
-	// the rotation applied to their actual provider, not just the
-	// legacy field. See config.Config.SetAPIKey.
-	cfg.SetAPIKey(key)
-
+	if err := cfg.SetProviderAPIKey(providerName, provider.Type, key); err != nil {
+		output.PrintError(err.Error())
+		os.Exit(1)
+	}
 	if err := config.Save(cfg); err != nil {
 		output.PrintError(err.Error())
 		os.Exit(1)
 	}
-
-	fmt.Fprintf(os.Stderr, "\n")
-	output.PrintSuccess(fmt.Sprintf("API key saved (%s)", config.MaskKey(key)))
-	fmt.Fprintf(os.Stderr, "\n")
+	fmt.Fprintln(os.Stderr)
+	output.PrintSuccess(fmt.Sprintf("%s API 密钥已保存（%s）", providerName, config.MaskKey(key)))
+	fmt.Fprintln(os.Stderr)
 }

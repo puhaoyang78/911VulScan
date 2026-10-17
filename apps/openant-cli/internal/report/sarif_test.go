@@ -530,10 +530,10 @@ func TestSARIFScanMirrorRowDoesNotDuplicateNotifications(t *testing.T) {
 	texts := notificationTexts(t, inv)
 	verifyNotifs := 0
 	for _, txt := range texts {
-		if len(txt) >= 11 && txt[:11] == "step verify" {
+		if strings.HasPrefix(txt, "步骤 漏洞验证") {
 			verifyNotifs++
 		}
-		if len(txt) >= 10 && txt[:10] == "step scan:" {
+		if strings.HasPrefix(txt, "步骤 扫描：") {
 			t.Errorf("the scan mirror row must not emit notifications; got %q", txt)
 		}
 	}
@@ -570,10 +570,10 @@ func TestSARIFPartialWithoutCountsDegradesVisibly(t *testing.T) {
 	texts := notificationTexts(t, inv)
 	found := false
 	for _, txt := range texts {
-		if txt == "step verify: degraded (status partial)" {
+		if txt == "步骤 漏洞验证：未完整完成（状态：部分完成）" {
 			found = true
 		}
-		if txt == "step verify: 0 unit error(s)" {
+		if txt == "步骤 漏洞验证：0 个代码单元出错" {
 			t.Errorf("the misleading 0-error text must not appear; got %q", txt)
 		}
 	}

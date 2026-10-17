@@ -171,18 +171,18 @@ def test_fold_consistency_update_carried_and_banner_attributes():
               consistency_update={"from": "vulnerable", "to": "bypassable",
                                   "reason": "peer units disagree"})
     header = _disclosure_verdict_header(vd)
-    assert "Stage-2 explanation (pre-dating the consistency update" in header, (
+    assert "第 2 阶段解释（一致性更新前的分析" in header, (
         "the banner must attribute the pre-update explanation when an update occurred")
-    assert "**Consistency update:** vulnerable → bypassable — peer units disagree" in header
+    assert "**一致性更新：** 存在漏洞 → 防护可绕过 — peer units disagree" in header
 
 
 def test_fold_no_update_no_attribution():
     """The negative: without a consistency update, the plain label stays."""
     vd = dict(_base_vd(), verification_explanation="The path is fully reachable.")
     header = _disclosure_verdict_header(vd)
-    assert "> **Stage-2 explanation:** " in header
-    assert "pre-dating" not in header
-    assert "Consistency update:" not in header
+    assert "> **第 2 阶段解释：** " in header
+    assert "一致性更新前" not in header
+    assert "一致性更新：" not in header
 
 
 def test_fold_crlf_and_cr_stay_inside_the_banner():
@@ -200,5 +200,5 @@ def test_fold_gt_leading_line_and_link_contained():
     containment — the same trust model as every model-text line)."""
     vd = dict(_base_vd(), verification_explanation="> nested quote\n[link](http://x)")
     header = _disclosure_verdict_header(vd)
-    assert "> **Stage-2 explanation:** > nested quote" in header
+    assert "> **第 2 阶段解释：** > nested quote" in header
     assert "> [link](http://x)" in header

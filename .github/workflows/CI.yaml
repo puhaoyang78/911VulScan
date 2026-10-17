@@ -1,7 +1,7 @@
 name: CI Workflow
 on:
   push:
-    branches: [master]
+    branches: [master, 911-dev]
   pull_request:
 
 permissions:

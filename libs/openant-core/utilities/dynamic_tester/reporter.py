@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from utilities.dynamic_tester.models import DynamicTestResult
+from report.localization import display_label
 
 
 def generate_report(
@@ -35,28 +36,31 @@ def generate_report(
     total = len(results)
 
     lines = [
-        f"# Dynamic Test Results: {repo_name}",
+        f"# 动态测试结果： {repo_name}",
         "",
-        f"**Date:** {now}",
-        f"**Total Findings Tested:** {total - skipped}",
-        f"**Skipped (no Docker template for language):** {skipped}",
-        f"**Total Cost:** ${total_cost_usd:.4f}",
+        f"**日期：** {now}",
+        f"**已测试的发现项总数：** {total - skipped}",
+        f"**已跳过（该语言没有 Docker 模板）：** {skipped}",
+        f"**预估总费用：** ${total_cost_usd:.4f}",
         "",
-        "## Summary",
+        "费用按配置中的模型费率估算，最终以供应商账单为准。",
         "",
-        "| Status | Count |",
+        "## 摘要",
+        "",
+        "| 状态 | 数量 |",
         "|--------|-------|",
-        f"| CONFIRMED | {confirmed} |",
-        f"| NOT_REPRODUCED | {not_reproduced} |",
-        f"| BLOCKED | {blocked} |",
-        f"| INCONCLUSIVE | {inconclusive} |",
-        f"| ERROR | {error} |",
-        f"| **Total** | **{total}** |",
+        f"| 已确认 | {confirmed} |",
+        f"| 未复现 | {not_reproduced} |",
+        f"| 测试受阻 | {blocked} |",
+        f"| 无法确定 | {inconclusive} |",
+        f"| 错误 | {error} |",
+        f"| 已跳过 | {skipped} |",
+        f"| **合计** | **{total}** |",
         "",
     ]
 
     # Detail sections by status priority
-    status_order = ["CONFIRMED", "NOT_REPRODUCED", "BLOCKED", "INCONCLUSIVE", "ERROR"]
+    status_order = ["CONFIRMED", "NOT_REPRODUCED", "BLOCKED", "INCONCLUSIVE", "ERROR", "SKIPPED"]
 
     for status in status_order:
         status_results = [r for r in results if r.status == status]
@@ -64,7 +68,7 @@ def generate_report(
             continue
 
         lines.extend([
-            f"## {status} ({len(status_results)})",
+            f"## {display_label(status)} ({len(status_results)})",
             "",
         ])
 
@@ -72,19 +76,19 @@ def generate_report(
             lines.extend([
                 f"### {r.finding_id}",
                 "",
-                f"**Status:** {r.status}",
-                f"**Details:** {r.details}",
-                f"**Time:** {r.elapsed_seconds:.1f}s",
-                f"**Generation Cost:** ${r.generation_cost_usd:.4f}",
+                f"**状态：** {display_label(r.status)}",
+                f"**详情：** {r.details}",
+                f"**耗时：** {r.elapsed_seconds:.1f} 秒",
+                f"**生成预估费用：** ${r.generation_cost_usd:.4f}",
                 "",
             ])
 
             if r.evidence:
-                lines.append("**Evidence:**")
+                lines.append("**证据：**")
                 lines.append("")
                 for e in r.evidence:
                     lines.extend([
-                        f"- **{e.type}:**",
+                        f"- **{display_label(e.type)}：**",
                         "```",
                         e.content[:2000],
                         "```",
@@ -94,7 +98,7 @@ def generate_report(
             if r.test_code:
                 lines.extend([
                     "<details>",
-                    "<summary>Generated Test Code</summary>",
+                    "<summary>生成的测试代码</summary>",
                     "",
                     "```python",
                     r.test_code,

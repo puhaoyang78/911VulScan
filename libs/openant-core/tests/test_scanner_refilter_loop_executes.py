@@ -21,6 +21,13 @@ LOOP_MARKER: list[str] = []
 @pytest.fixture(autouse=True)
 def _offline(monkeypatch):
     import utilities.llm as llm_mod
+    import utilities.llm.registry as registry_mod
+    from tests._llm_factories.anthropic import make_adapter
+
+    # Keep this orchestration fixture independent of the fresh-install default.
+    monkeypatch.setattr(llm_mod, "load_config_file", lambda: llm_mod.parse_config(
+        {"default_llm": "openant-default"}))
+    monkeypatch.setattr(registry_mod, "build_adapter", lambda provider: make_adapter("text"))
     monkeypatch.setattr(llm_mod, "probe_registry_or_raise", lambda *a, **k: None)
 
 

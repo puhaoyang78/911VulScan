@@ -1,225 +1,155 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="csrf" content="{{.CSRF}}">
-<title>Knostic OpenAnt — Security Scanner</title>
+<title>安全扫描工作台 · 911VulScan</title>
 <style nonce="{{.Nonce}}">
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; }
-  header { background: #0d1117; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
-  header h1 { color: #fff; font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em; }
-  header span { color: #8b949e; font-size: 0.85rem; }
-  .main { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
-  .grid { display: grid; grid-template-columns: 1fr 340px; gap: 24px; margin-bottom: 32px; }
-  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
-  .card { background: #fff; border: 1px solid #e1e4e8; border-radius: 8px; padding: 24px; }
-  .card h2 { font-size: 1rem; font-weight: 700; margin-bottom: 18px; color: #1a1a1a; }
-  label { display: block; font-size: 0.85rem; font-weight: 600; color: #444; margin-bottom: 5px; margin-top: 14px; }
-  label:first-of-type { margin-top: 0; }
-  input[type="text"], input[type="password"], select {
-    width: 100%; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 6px;
-    font-size: 0.9rem; background: #fff; color: #1a1a1a; outline: none;
-    transition: border-color 0.15s;
-  }
-  input:focus, select:focus { border-color: #0969da; box-shadow: 0 0 0 3px rgba(9,105,218,0.1); }
-  .hint { font-size: 0.78rem; color: #666; margin-top: 4px; }
-  .hint code { font-family: monospace; background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
-  .checkrow { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-  .checkrow input[type="checkbox"] { width: 16px; height: 16px; accent-color: #1a1a1a; }
-  .checkrow label { margin: 0; font-weight: 400; color: #333; font-size: 0.875rem; }
-  .btn-primary {
-    display: block; width: 100%; margin-top: 20px; padding: 10px 16px;
-    background: #1a1a1a; color: #fff; border: none; border-radius: 6px;
-    font-size: 0.95rem; font-weight: 600; cursor: pointer; text-align: center;
-    transition: background 0.15s;
-  }
-  .btn-primary:hover { background: #333; }
-  .how-it-works ol { padding-left: 20px; }
-  .how-it-works li { font-size: 0.875rem; color: #444; margin-bottom: 8px; line-height: 1.5; }
-  .how-it-works li strong { color: #1a1a1a; }
-  .how-it-works .note { font-size: 0.8rem; color: #666; margin-top: 14px; padding: 10px; background: #f8f8f8; border-radius: 6px; border-left: 3px solid #d0d7de; }
-  .scans-section h2 { font-size: 1rem; font-weight: 700; margin-bottom: 14px; }
-  .scans-table { background: #fff; border: 1px solid #e1e4e8; border-radius: 8px; overflow: hidden; }
-  .scan-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid #f0f0f0; }
-  .scan-row:last-child { border-bottom: none; }
-  .scan-repo { font-family: monospace; font-size: 0.85rem; color: #1a1a1a; word-break: break-all; }
-  .scan-meta { font-size: 0.78rem; color: #888; margin-top: 2px; }
-  .scan-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
-  .badge-running { background: #fff8c5; color: #9a6700; }
-  .badge-done    { background: #dafbe1; color: #1a7f37; }
-  .badge-error   { background: #ffebe9; color: #cf222e; }
-  .badge-timeout { background: #fff8c5; color: #9a6700; } /* #320: timed-out — the amber warn, not the red error */
-  .link-btn { font-size: 0.8rem; color: #0969da; text-decoration: none; padding: 3px 8px; border-radius: 4px; border: 1px solid #d0d7de; white-space: nowrap; }
-  .link-btn:hover { background: #f3f8ff; }
-  .delete-btn {
-    background: none; border: 1px solid #d0d7de; border-radius: 4px;
-    cursor: pointer; color: #888; padding: 3px 7px; font-size: 0.8rem;
-    transition: color 0.15s, border-color 0.15s;
-  }
-  .delete-btn:hover { color: #cf222e; border-color: #cf222e; }
-  .copy-btn {
-    background: none; border: none; cursor: pointer; color: #bbb; padding: 2px 4px;
-    line-height: 1; transition: color 0.15s; vertical-align: middle; flex-shrink: 0;
-    display: inline-flex; align-items: center;
-  }
-  .copy-btn:hover { color: #1a1a1a; }
-  .copy-btn.copied { color: #1a7f37; }
-  .scan-repo-wrap { display: flex; align-items: flex-start; gap: 4px; }
-  .empty-state { padding: 32px; text-align: center; color: #888; font-size: 0.9rem; }
-  .local-chip {
-    margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
-    padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;
-    background: #161b22; color: #8b949e; border: 1px solid #30363d; cursor: default;
-  }
+  :root { --ink:#152b3b; --muted:#5b7081; --line:#dbe5e9; --accent:#087d78; --paper:#fff; --bg:#f0f5f6; }
+  *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--ink); line-height:1.6; }
+  a { color:var(--accent); } button,input,select { font:inherit; } button,a,input,select,summary { -webkit-tap-highlight-color:transparent; }
+  :focus-visible { outline:3px solid #e8a848; outline-offset:3px; }
+  header { background:#132c3c; color:white; padding:20px max(24px,calc((100vw - 1200px)/2)); display:flex; align-items:center; gap:16px; }
+  .brand-mark { background:#34d0b3; color:#103c3a; font-size:18px; font-weight:900; border-radius:10px; padding:8px 10px; }
+  header h1 { font-size:21px; letter-spacing:.02em; } header p { color:#b4c8d2; font-size:12px; }
+  .local-chip { margin-left:auto; border:1px solid #486473; border-radius:30px; padding:5px 12px; font-size:12px; white-space:nowrap; color:#cee6e1; }
+  .main { max-width:1248px; margin:auto; padding:30px 24px 20px; }
+  .intro { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:22px; } .intro h2 { font-size:28px; letter-spacing:-.03em; } .intro p { color:var(--muted); font-size:14px; margin-top:6px; }
+  .eyebrow { color:var(--accent); font-size:12px; font-weight:700; letter-spacing:.12em; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:24px; } .stat { background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:16px 20px; } .stat strong { display:block; font-size:28px; font-variant-numeric:tabular-nums; line-height:1.2; } .stat span { font-size:12px; color:var(--muted); } .stat-running strong { color:#9c650c; } .stat-done strong { color:var(--accent); }
+  .grid { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:22px; align-items:start; }
+  .card { background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:24px; box-shadow:0 3px 14px #193a4b04; min-width:0; }
+  .card h2,.scans-section h2 { font-size:18px; } .subtle { color:var(--muted); font-size:13px; margin-top:5px; }
+  fieldset { border:0; padding:20px 0; border-bottom:1px solid #e8eef0; min-width:0; } legend { float:left; width:100%; font-weight:700; font-size:14px; margin-bottom:12px; } legend+* { clear:both; } .section-no { color:var(--accent); margin-right:8px; font-variant-numeric:tabular-nums; }
+  label { display:block; font-size:13px; font-weight:600; margin:12px 0 6px; } input[type="text"], input[type="password"],select { width:100%; padding:10px 12px; background:#fff; border:1px solid #bdcdd5; border-radius:7px; color:var(--ink); font-size:14px; min-width:0; } input:focus,select:focus { border-color:var(--accent); } input[readonly] { background:#f4f7f8; color:var(--muted); }
+  .hint { color:var(--muted); font-size:12px; margin-top:7px; line-height:1.7; overflow-wrap:anywhere; } code { background:#eef3f5; padding:1px 4px; border-radius:3px; font-size:.93em; }
+  .language-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:8px; } .language-grid label { display:flex; align-items:center; gap:8px; font-weight:400; border:1px solid var(--line); border-radius:7px; padding:8px 10px; margin:0; } input[type="checkbox"] { width:16px; height:16px; accent-color:var(--accent); flex-shrink:0; }
+  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:16px; } .checkrow { display:flex; gap:10px; margin-top:14px; align-items:flex-start; } .checkrow input { margin-top:4px; } .checkrow label { margin:0; font-size:14px; } .checkrow .hint { display:block; font-weight:400; margin-top:2px; }
+  .privacy { background:#eff8f6; border:1px solid #cfe8e1; border-radius:8px; padding:12px 14px; color:#305e59; font-size:12px; margin-top:18px; } .btn-primary { width:100%; padding:13px 18px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; margin-top:18px; } .btn-primary:hover { background:#056661; } button:disabled { opacity:.6; cursor:wait; }
+  .workflow { list-style:none; counter-reset:stages; } .workflow li { position:relative; padding:0 0 20px 36px; counter-increment:stages; } .workflow li::before { content:counter(stages); position:absolute; left:0; top:0; width:24px; height:24px; border-radius:7px; background:#e8f5f1; color:var(--accent); text-align:center; font-size:12px; font-weight:700; line-height:24px; } .workflow strong { font-size:13px; } .workflow p { font-size:12px; color:var(--muted); margin-top:3px; } .aside-title { margin-bottom:18px; } .side-note { border-top:1px solid var(--line); padding-top:16px; font-size:12px; color:var(--muted); } .side-note strong { color:var(--ink); display:block; margin-bottom:4px; }
+  .scans-section { margin-top:28px; } .section-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:16px; } .section-heading p { color:var(--muted); font-size:12px; }
+  .scans-table { background:white; border:1px solid var(--line); border-radius:12px; overflow:hidden; } .scan-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:16px; padding:17px 20px; border-bottom:1px solid #e8eef0; } .scan-row:last-child { border-bottom:0; } .scan-repo-wrap { display:flex; gap:6px; align-items:center; min-width:0; } .scan-repo { overflow-wrap:anywhere; font-size:14px; font-weight:600; } .scan-meta { font-size:12px; color:var(--muted); margin-top:4px; }
+  .badge { border-radius:20px; padding:4px 10px; font-size:12px; white-space:nowrap; background:#eef3f5; } .badge-running,.badge-timeout { background:#fff3d6; color:#865600; } .badge-done { background:#dff4eb; color:#116747; } .badge-error { background:#ffebea; color:#b52b35; } .scan-actions { display:flex; flex-wrap:wrap; gap:7px; } .link-btn,.delete-btn { border:1px solid var(--line); background:white; padding:5px 9px; border-radius:6px; font-size:12px; text-decoration:none; white-space:nowrap; cursor:pointer; } .delete-btn { color:#ad3440; } .link-btn:hover { background:#eef8f5; } .copy-btn { border:0; background:none; color:var(--muted); cursor:pointer; padding:4px; font-size:12px; flex-shrink:0; } .copied { color:var(--accent); }
+  .empty-state { padding:36px 20px; text-align:center; color:var(--muted); font-size:14px; } .empty-state strong { display:block; color:var(--ink); margin-bottom:5px; } .feedback { margin-top:12px; color:#b52b35; font-size:13px; } .feedback:empty { display:none; } [hidden] { display:none!important; }
+  footer { font-size:11px; color:var(--muted); display:flex; justify-content:space-between; gap:12px; padding:24px 0 6px; } footer a { color:inherit; }
+  @media(max-width:920px) { .grid { grid-template-columns:minmax(0,1fr) 250px; gap:16px; } .card { padding:20px; } .scan-row { grid-template-columns:minmax(0,1fr) auto; } .scan-actions { grid-column:1/-1; } }
+  @media(max-width:700px) { header { padding:16px; gap:10px; } header h1 { font-size:18px; } header p { display:none; } .brand-mark { font-size:14px; } .main { padding:22px 16px; } .intro h2 { font-size:24px; } .grid { grid-template-columns:1fr; } .stats { grid-template-columns:repeat(2,1fr); gap:10px; } .stat { padding:12px 16px; } .stat strong { font-size:24px; } .two-col { grid-template-columns:1fr; gap:0; } .language-grid { grid-template-columns:repeat(2,1fr); } .section-heading { align-items:flex-start; flex-direction:column; gap:2px; } footer { flex-direction:column; } }
+  @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; transition:none!important; } }
 </style>
 </head>
 <body>
-<header>
-  <h1>Knostic OpenAnt</h1>
-  <span>LLM-powered security scanner</span>
-  <span class="local-chip" title="Only reachable from this machine (loopback); not exposed to your network.">🔒 Local only</span>
-</header>
-<div class="main">
+<header><div class="brand-mark" aria-hidden="true">911</div><div><h1>911VulScan</h1><p>代码安全分析 · 验证 · 中文报告</p></div><span class="local-chip" title="服务仅监听本机回环地址，不向局域网开放">仅限本机访问</span></header>
+<main class="main">
+  <div class="intro"><div><span class="eyebrow">安全扫描工作台</span><h2>从代码到可验证的安全发现</h2><p>选择代码仓库和分析模型，跟踪扫描进度并查看中文报告。</p></div></div>
+  <section class="stats" aria-label="扫描任务概览"><div class="stat"><strong id="stat-total">{{len .Jobs}}</strong><span>全部任务</span></div><div class="stat stat-running"><strong id="stat-running">{{.RunningCount}}</strong><span>进行中 / 排队中</span></div><div class="stat stat-done"><strong id="stat-done">{{.DoneCount}}</strong><span>已完成</span></div><div class="stat"><strong id="stat-attention">{{.AttentionCount}}</strong><span>需处理</span></div></section>
   <div class="grid">
-    <!-- New Scan Form -->
-    <div class="card">
-      <h2>New Scan</h2>
-      <form method="POST" action="/scan">
+    <section class="card"><h2>新建扫描</h2><p class="subtle">默认使用 DeepSeek；所有选项仅对本次任务生效。</p>
+      <form method="POST" action="/scan" id="scan-form">
         <input type="hidden" name="csrf" value="{{.CSRF}}">
-        <label for="repo">Repository URL or local path</label>
-        <input type="text" id="repo" name="repo" required autofocus
-               placeholder="https://github.com/org/repo  or  /path/to/project">
-
-        <label>Languages to scan</label>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px 16px;margin:6px 0 4px;">
-          <label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" name="languages" value="go"> Go</label>
-          <label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" name="languages" value="python"> Python</label>
-          <label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" name="languages" value="javascript"> JavaScript</label>
-          <label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" name="languages" value="c"> C / C++</label>
-          <label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" name="languages" value="ruby"> Ruby</label>
-          <label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" name="languages" value="php"> PHP</label>
-          <label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" name="languages" value="rust"> Rust</label>
-          <label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" name="languages" value="swift"> Swift</label>
-          <label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" name="languages" value="zig"> Zig</label>
-        </div>
-        <div class="hint">Leave all unchecked to scan <strong>every detected language</strong> (a size threshold skips trivial single-file languages). Check specific languages to limit the scan to just those — lower cost and time.</div>
-
-        <label for="api_key">Anthropic API Key</label>
-        <input type="password" id="api_key" name="api_key"
-               placeholder="sk-ant-…">
-        {{if .HasAPIKey}}
-          <div class="hint">Leave blank to use the key configured in {{.APIKeySource}}.</div>
-        {{else}}
-          <div class="hint">Run <code>openant set-api-key &lt;key&gt;</code> to configure a key, or paste one here.</div>
-        {{end}}
-
-        <div class="checkrow">
-          <input type="checkbox" id="verify" name="verify" checked>
-          <label for="verify">Attacker simulation — Stage 2; probes whether findings are exploitable (--verify)</label>
-        </div>
-        <div class="checkrow">
-          <input type="checkbox" id="dynamic_test" name="dynamic_test">
-          <label for="dynamic_test">Dynamic testing — Docker-isolated; runs candidate exploits to confirm (--dynamic-test)</label>
-        </div>
-        <div class="checkrow">
-          <input type="checkbox" id="library_mode" name="library_mode">
-          <label for="library_mode">Library mode — analyze exported API surface (--library-mode; for libraries with no main/CLI/routes). Note: seeds the whole public API, so it can substantially increase analysis time and LLM cost on large libraries.</label>
-        </div>
-
-        <button type="submit" class="btn-primary">Start Scan</button>
+        <fieldset><legend><span class="section-no">01</span>扫描目标</legend>
+          <label for="repo">仓库地址或本机项目路径</label><input type="text" id="repo" name="repo" required placeholder="https://github.com/org/repo 或 /path/to/project" autocomplete="off" aria-describedby="repo-hint">
+          <p class="hint" id="repo-hint">仅扫描你有权测试的项目。私有仓库请使用本机 Git 凭据，不要把密码或令牌放进地址。</p>
+          <label id="language-label">扫描语言</label><div class="language-grid" role="group" aria-labelledby="language-label">
+            <label><input type="checkbox" name="languages" value="c"> C / C++</label><label><input type="checkbox" name="languages" value="python"> Python</label><label><input type="checkbox" name="languages" value="javascript"> JavaScript</label><label><input type="checkbox" name="languages" value="go"> Go</label><label><input type="checkbox" name="languages" value="rust"> Rust</label><label><input type="checkbox" name="languages" value="php"> PHP</label><label><input type="checkbox" name="languages" value="ruby"> Ruby</label><label><input type="checkbox" name="languages" value="swift"> Swift</label><label><input type="checkbox" name="languages" value="zig"> Zig</label>
+          </div><p class="hint">不勾选时自动分析达到规模阈值的全部已检测语言。指定语言可缩小范围，减少时间与模型费用。</p>
+        </fieldset>
+        <fieldset><legend><span class="section-no">02</span>模型配置</legend>
+          <div class="two-col"><div><label for="provider">模型来源</label><select name="provider" id="provider"><option value="deepseek" selected>DeepSeek（默认）</option><option value="configured">使用已有模型配置</option></select></div><div id="deepseek-model"><label for="model">分析模型</label><select name="model" id="model" aria-describedby="model-hint"><option value="deepseek-flash" selected>deepseek-flash（默认）</option><option value="deepseek-v4-pro">deepseek-v4-pro</option></select></div></div>
+          <div id="deepseek-settings"><label for="api_key">DeepSeek API 密钥（可选）</label><input type="password" id="api_key" name="api_key" placeholder="输入本次扫描使用的密钥" autocomplete="off" spellcheck="false" aria-describedby="key-hint"><p class="hint" id="key-hint">{{if .HasAPIKey}}已检测到 {{.APIKeySource}} 中的 DeepSeek 密钥；留空即可使用。{{else}}留空时读取 DEEPSEEK_API_KEY 或已有 DeepSeek 配置。尚未配置时，请在此输入密钥。{{end}} 手动输入的密钥优先于已有配置，只用于本次任务，不写入配置、日志或任务文件。</p><p class="privacy" id="endpoint-hint">请求接收方：<strong>{{.DeepSeekEndpoint}}</strong>。代码和密钥将发送至该服务地址；自定义网关地址来自已有配置或 DEEPSEEK_BASE_URL，请确认可信。</p><p class="hint" id="model-hint">内置配置 deepseek-default 使用 deepseek-flash；deepseek-pro 使用 deepseek-v4-pro。其他模型与服务商可通过 <code>openant setup llm</code> 配置后选择下方的已有配置模式。</p></div>
+          <div id="configured-settings" hidden><label for="llm_config">已有配置</label><select name="llm_config" id="llm_config" disabled><option value="">沿用配置文件中的默认值</option>{{range .LLMConfigs}}<option value="{{.}}">{{.}}</option>{{end}}</select><p class="hint">按已有配置选择各阶段的服务商、模型和凭据；此模式不使用上方 DeepSeek 密钥。未显式设置默认值时兼容已有配置；全新配置默认 deepseek-default。</p></div>
+        </fieldset>
+        <fieldset><legend><span class="section-no">03</span>验证与扫描范围</legend>
+          <div class="checkrow"><input type="checkbox" id="verify" name="verify" checked><label for="verify">攻击者模拟验证<span class="hint">对初步发现进行第二阶段验证，降低误报。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="dynamic_test" name="dynamic_test"><label for="dynamic_test">Docker 隔离动态测试<span class="hint">执行候选验证用例，包括 C / C++ 测试模板；需要本机 Docker 可用，耗时与资源开销更高。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="library_mode" name="library_mode"><label for="library_mode">库项目模式<span class="hint">将公开 API 作为入口，适合没有主程序或路由的库；大型库会明显增加分析时间和模型费用。</span></label></div>
+        </fieldset>
+        <p class="privacy">数据提示：界面仅在本机提供服务。扫描会将相关源代码发送给所选模型服务商，并产生相应 API 费用；启用动态测试还会在本机 Docker 中运行测试代码。</p>
+        <button type="submit" class="btn-primary" id="start-button">开始安全扫描 →</button><p class="feedback" id="form-feedback" role="alert"></p>
       </form>
-    </div>
-
-    <!-- How It Works -->
-    <div class="card how-it-works">
-      <h2>How It Works</h2>
-      <ol>
-        <li><strong>Parse</strong> — Extract functions and call graphs from the repository</li>
-        <li><strong>Enhance</strong> — Add security context to each code unit</li>
-        <li><strong>Analyze</strong> — Stage 1 LLM vulnerability detection</li>
-        <li><strong>Verify</strong> — Stage 2 attacker simulation to eliminate false positives</li>
-        <li><strong>Report</strong> — Generate interactive HTML vulnerability report</li>
-      </ol>
-      <div class="note">The server is loopback-only (127.0.0.1). Note: analysis sends source code to your configured LLM provider.</div>
-    </div>
+    </section>
+    <aside class="card"><h2 class="aside-title">扫描流程</h2><ol class="workflow"><li><strong>代码解析</strong><p>提取函数、调用关系与可达入口。</p></li><li><strong>上下文增强</strong><p>补充项目背景与代码安全语义。</p></li><li><strong>漏洞分析</strong><p>由模型识别风险与潜在攻击路径。</p></li><li><strong>复核与动态测试</strong><p>按选项模拟攻击、运行隔离测试。</p></li><li><strong>结果报告</strong><p>查看中文摘要、风险详情和披露材料。</p></li></ol><div class="side-note"><strong>结果需要人工复核</strong>模型发现不等于已确认漏洞。请结合证据、适用前提和动态测试结果判断，避免直接用于生产环境。</div></aside>
   </div>
-
-  <!-- Recent Scans -->
-  <div class="scans-section">
-    <h2>Recent Scans</h2>
-    <div class="scans-table" id="scans-list">
-      {{if .Jobs}}
-        {{range .Jobs}}
-        <div class="scan-row" id="row-{{.ID}}">
-          <div>
-            <div class="scan-repo-wrap">
-              <span class="scan-repo" title="{{.Repo}}">{{.Repo}}</span>
-              <button class="copy-btn" title="Copy URL/path" data-repo="{{.Repo}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg></button>
-            </div>
-            <div class="scan-meta">{{.StartedAt}}</div>
-          </div>
-          <span class="badge badge-{{.Status}}">
-            {{if eq .Status "running"}}Running{{else if eq .Status "done"}}Done{{else if eq .Status "timeout"}}Timed out{{else}}Error{{end}}
-          </span>
-          <div class="scan-actions">
-            {{if eq .Status "running"}}
-              <a class="link-btn" href="/scan/{{.ID}}">View →</a>
-            {{else if eq .Status "done"}}
-              <a class="link-btn" href="/scan/{{.ID}}">Logs →</a>
-              {{if .HasSummary}}<a class="link-btn" href="/summary/{{.ID}}" target="_blank">Summary →</a>{{end}}
-              <a class="link-btn" href="/report/{{.ID}}" target="_blank">Report →</a>
-            {{else}}
-              <a class="link-btn" href="/scan/{{.ID}}">View →</a>
-            {{end}}
-            <button class="delete-btn" title="Delete" data-id="{{.ID}}">🗑</button>
-          </div>
-        </div>
-        {{end}}
-      {{else}}
-        <div class="empty-state" id="empty-state">No scans yet. Submit a repo above to get started.</div>
-      {{end}}
-    </div>
-  </div>
-</div>
-
+  <section class="scans-section"><div class="section-heading"><h2>最近扫描</h2><p>任务时间为 UTC · 打开任务查看实时进度</p></div>
+    <div class="scans-table" id="scans-list">{{if .Jobs}}{{range .Jobs}}<div class="scan-row" id="row-{{.ID}}" data-status="{{.Status}}"><div><div class="scan-repo-wrap"><span class="scan-repo" title="{{.Repo}}">{{.Repo}}</span><button class="copy-btn" type="button" title="复制仓库地址或路径" aria-label="复制仓库地址或路径" data-repo="{{.Repo}}">复制</button></div><div class="scan-meta">{{.StartedAt}} · {{.ID}}</div></div><span class="badge badge-{{.Status}}">{{if eq .Status "running"}}进行中{{else if eq .Status "done"}}已完成{{else if eq .Status "timeout"}}已超时{{else}}失败{{end}}</span><div class="scan-actions"><a class="link-btn" href="/scan/{{.ID}}">{{if eq .Status "running"}}查看进度{{else}}查看日志{{end}}</a>{{if .HasSummary}}<a class="link-btn" href="/summary/{{.ID}}" target="_blank" rel="noopener">摘要</a>{{end}}{{if .HasReport}}<a class="link-btn" href="/report/{{.ID}}" target="_blank" rel="noopener">报告</a>{{end}}<button class="delete-btn" type="button" title="删除扫描与产物" data-id="{{.ID}}">删除</button></div></div>{{end}}{{else}}<div class="empty-state" id="empty-state"><strong>还没有扫描任务</strong>填写上方项目地址，开始第一次安全分析。</div>{{end}}</div><p class="feedback" id="list-feedback" role="status" aria-live="polite"></p>
+  </section>
+  <footer><span>911VulScan · 中文安全扫描工作台</span><span>基于 Knostic OpenAnt 开源项目构建</span></footer>
+</main>
 <script nonce="{{.Nonce}}">
-// #578 follow-up A: CSP nonces forbid inline event handlers — the scan
-// list's buttons use delegated listeners with data-* attributes instead.
+const provider = document.getElementById('provider');
+function updateProvider() {
+  const configured = provider.value === 'configured';
+  document.getElementById('deepseek-settings').hidden = configured;
+  document.getElementById('deepseek-model').hidden = configured;
+  document.getElementById('configured-settings').hidden = !configured;
+  document.getElementById('llm_config').disabled = !configured;
+  document.getElementById('api_key').disabled = configured;
+  document.getElementById('model').disabled = configured;
+}
+provider.addEventListener('change', updateProvider);
+updateProvider();
+// Do not cache the key in localStorage, cookies, or task metadata.
+let submitting = false;
+document.getElementById('scan-form').addEventListener('submit', async function(event) {
+  event.preventDefault();
+  if (submitting) return;
+  submitting = true;
+  const button = document.getElementById('start-button');
+  const feedback = document.getElementById('form-feedback');
+  button.disabled = true; button.textContent = '正在创建扫描任务…'; feedback.textContent = '';
+  try {
+    const response = await fetch('/scan', { method:'POST', body:new URLSearchParams(new FormData(this)) });
+    if (!response.ok) throw new Error((await response.text()).trim() || '无法创建扫描，请稍后重试。');
+    const destination = new URL(response.url, location.href);
+    if (!response.redirected || destination.origin !== location.origin || !destination.pathname.startsWith('/scan/')) throw new Error('任务响应异常，请刷新任务列表确认状态。');
+    document.getElementById('api_key').value = '';
+    location.assign(destination.href);
+  } catch (error) {
+    feedback.textContent = error instanceof TypeError ? '连接中断，任务可能已创建。请先刷新查看最近扫描，再决定是否重试。' : error.message;
+    button.disabled = false; button.textContent = '开始安全扫描 →'; submitting = false;
+  }
+});
+window.addEventListener('pageshow', function() {
+  submitting = false;
+  document.getElementById('start-button').disabled = false;
+  document.getElementById('start-button').textContent = '开始安全扫描 →';
+  document.getElementById('api_key').value = '';
+  updateProvider();
+});
 document.getElementById('scans-list').addEventListener('click', function(e) {
   const btn = e.target.closest('button');
   if (!btn) return;
   if (btn.classList.contains('copy-btn')) copyRepo(btn);
-  if (btn.classList.contains('delete-btn')) deleteScan(btn.dataset.id);
+  if (btn.classList.contains('delete-btn')) deleteScan(btn.dataset.id, btn);
 });
-
-function copyRepo(btn) {
-  const text = btn.dataset.repo;
-  navigator.clipboard.writeText(text).then(function() {
-    btn.classList.add('copied');
-    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg>';
-    setTimeout(function() {
-      btn.classList.remove('copied');
-      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>';
-    }, 1500);
-  });
+async function copyRepo(btn) {
+  try {
+    await navigator.clipboard.writeText(btn.dataset.repo);
+    btn.classList.add('copied'); btn.textContent = '已复制';
+    setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '复制'; }, 1500);
+  } catch (_) { document.getElementById('list-feedback').textContent = '复制失败，请选中仓库地址后手动复制。'; }
 }
-
-function deleteScan(id) {
-  if (!confirm('Delete this scan and all its output?')) return;
-  const csrf = document.querySelector('meta[name="csrf"]').content;
-  fetch('/scan/' + id, { method: 'DELETE', headers: { 'X-CSRF-Token': csrf } }).then(r => {
-    if (r.ok || r.status === 204 || r.status === 404) {
-      const row = document.getElementById('row-' + id);
-      if (row) row.remove();
-      const list = document.getElementById('scans-list');
-      if (list && list.querySelectorAll('.scan-row').length === 0) {
-        list.innerHTML = '<div class="empty-state">No scans yet. Submit a repo above to get started.</div>';
-      }
-    }
-  });
+function updateStats() {
+  const rows = [...document.querySelectorAll('.scan-row')];
+  document.getElementById('stat-total').textContent = rows.length;
+  document.getElementById('stat-running').textContent = rows.filter(r => r.dataset.status === 'running').length;
+  document.getElementById('stat-done').textContent = rows.filter(r => r.dataset.status === 'done').length;
+  document.getElementById('stat-attention').textContent = rows.filter(r => r.dataset.status !== 'running' && r.dataset.status !== 'done').length;
+}
+async function deleteScan(id, button) {
+  if (!confirm('确定删除此扫描及其全部结果文件？正在运行的任务将被取消，此操作无法撤销。')) return;
+  const feedback = document.getElementById('list-feedback');
+  if (button) button.disabled = true;
+  feedback.textContent = '';
+  try {
+    const csrf = document.querySelector('meta[name="csrf"]').content;
+    const response = await fetch('/scan/' + encodeURIComponent(id), { method:'DELETE', headers:{'X-CSRF-Token':csrf} });
+    if (!response.ok && response.status !== 404) throw new Error();
+    const row = document.getElementById('row-' + id); if (row) row.remove();
+    if (!document.querySelector('#scans-list .scan-row')) document.getElementById('scans-list').innerHTML = '<div class="empty-state"><strong>还没有扫描任务</strong>填写上方项目地址，开始第一次安全分析。</div>';
+    updateStats(); feedback.textContent = '扫描及其结果已删除。';
+  } catch (_) { feedback.textContent = '未能确认删除结果，请刷新任务列表检查。'; if (button) button.disabled = false; }
 }
 </script>
 </body>

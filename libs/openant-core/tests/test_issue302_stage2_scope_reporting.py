@@ -225,8 +225,8 @@ def test_summary_template_states_stage2_scope():
         "findings_input": 4, "units_analyzed_total": 120,
         "downgraded": 1, "upgraded": 0}}
     block = _summary_statistics_block(stats)
-    assert "Adjudicated in Stage 2: 4 of 120 analyzed units" in block
-    assert "1 downgraded, 0 upgraded" in block
+    assert "第 2 阶段已判定：4/120 个已分析代码单元" in block
+    assert "1 个降级，0 个升级" in block
 
 def test_same_model_caveat_rendered_server_side():
     """#535: the independence caveat is deterministic — the prompt can no
@@ -234,7 +234,7 @@ def test_same_model_caveat_rendered_server_side():
     from report.generator import _summary_statistics_block
     block = _summary_statistics_block({"pipeline_stats": {
         "units_analyzed": 5, "same_model_verification": True}})
-    assert "not an independent instrument" in block
+    assert "不属于独立验证工具" in block
     clean = _summary_statistics_block({"pipeline_stats": {
         "units_analyzed": 5, "same_model_verification": False}})
     assert "independent instrument" not in clean

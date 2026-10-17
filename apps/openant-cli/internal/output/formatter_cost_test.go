@@ -42,7 +42,7 @@ func TestReportSummaryRendersIncompleteness(t *testing.T) {
 			},
 		})
 	})
-	if !strings.Contains(out, "Cost (incomplete — at least one model unpriced)") {
+	if !strings.Contains(out, "预估费用（估算不完整：部分模型无定价）") {
 		t.Fatalf("the incomplete label missing: %q", out)
 	}
 	if !strings.Contains(out, "claude-sonnet-4-6, mystery/model") {
@@ -58,10 +58,10 @@ func TestReportSummaryCompleteHasNoLabel(t *testing.T) {
 			"usage": map[string]any{"total_cost_usd": 0.0012},
 		})
 	})
-	if strings.Contains(out, "incomplete") {
+	if strings.Contains(out, "估算不完整") {
 		t.Fatalf("a complete figure must not carry the label: %q", out)
 	}
-	if !strings.Contains(out, "Cost") {
+	if !strings.Contains(out, "预估费用") {
 		t.Fatalf("the cost line missing: %q", out)
 	}
 }
@@ -82,17 +82,17 @@ func TestScanSummaryRendersIncompleteness(t *testing.T) {
 			},
 		})
 	})
-	if !strings.Contains(out, "Cost (incomplete — at least one model unpriced)") {
+	if !strings.Contains(out, "预估费用（估算不完整：部分模型无定价）") {
 		t.Fatalf("the incomplete label missing: %q", out)
 	}
-	if !strings.Contains(out, "Unpriced models") {
+	if !strings.Contains(out, "未定价模型") {
 		t.Fatalf("the unpriced ids line missing: %q", out)
 	}
 }
 
 // F661-2 (the #626 review): a cache-only incompleteness (unpriced_cache_models
 // set, unpriced_models empty) must still name its models — the terminal
-// printed "at least one model unpriced" with NO model before.
+// printed "部分模型无定价" with NO model before.
 func TestRenderCostBlockNamesCacheUnpricedModels(t *testing.T) {
 	usage := map[string]any{
 		"total_cost_usd":        0.00976,
@@ -118,14 +118,14 @@ func TestRenderCostBlockNamesCacheUnpricedModels(t *testing.T) {
 //	                          provider's field shape (see F1 below).
 //
 // Before this fix renderCostBlock merged both id lists into one slice under
-// one "Unpriced models:" label, so a priced model (gpt-4o: input $2.50 /
+// one "未定价模型:" label, so a priced model (gpt-4o: input $2.50 /
 // output $10.00) was announced to the operator as unpriced, and a bounded
 // error was indistinguishable in shape from a missing figure.
 //
 // RE-POINTED by PR#661 hunt F1, not deleted (the round-1 pattern for a guard
 // whose fixture outlived its claim). This test's own assertion that the
 // operator "must be told the direction" used to demand the literal string
-// "upper bound". For THIS fixture — gpt-4o, an INCLUSIVE shape — an upper
+// "上界". For THIS fixture — gpt-4o, an INCLUSIVE shape — an upper
 // bound happens to be the true direction, which is exactly why the claim
 // survived round 1: the fixture could not discriminate. The renderer cannot
 // tell the two shapes apart (the envelope carries no inclusion-shape
@@ -142,18 +142,18 @@ func TestCacheUnpricedNotLabelledUnpriced(t *testing.T) {
 		"unpriced_cache_models": []any{"gpt-4o"},
 	}
 	out := captureUsageOutput(func() { renderCostBlock(usage) })
-	if strings.Contains(out, "Unpriced models") {
+	if strings.Contains(out, "未定价模型") {
 		t.Fatalf("gpt-4o IS priced — calling it unpriced is a false statement "+
 			"to the operator:\n%s", out)
 	}
 	if !strings.Contains(out, "gpt-4o") {
 		t.Fatalf("the cache-unpriced model must still be named:\n%s", out)
 	}
-	if !strings.Contains(out, "ARE priced") {
+	if !strings.Contains(out, "已有基础定价") {
 		t.Fatalf("the operator must be told this model IS priced (only its "+
 			"cache rates are missing) — that is the whole F661-2 fix:\n%s", out)
 	}
-	if !strings.Contains(out, "Cache rates not configured") {
+	if !strings.Contains(out, "未配置缓存费率") {
 		t.Fatalf("the cache kind needs its own named line:\n%s", out)
 	}
 }
@@ -169,13 +169,13 @@ func TestTrulyUnpricedStillLabelledUnpriced(t *testing.T) {
 		"unpriced_models": []any{"mystery-model"},
 	}
 	out := captureUsageOutput(func() { renderCostBlock(usage) })
-	if !strings.Contains(out, "Unpriced models: mystery-model") {
+	if !strings.Contains(out, "未定价模型: mystery-model") {
 		t.Fatalf("the #216/#598 unpriced line regressed:\n%s", out)
 	}
-	if strings.Contains(out, "Cache rates not configured") {
+	if strings.Contains(out, "未配置缓存费率") {
 		t.Fatalf("no cache kind is present — the cache line must not print:\n%s", out)
 	}
-	if !strings.Contains(out, "incomplete") {
+	if !strings.Contains(out, "估算不完整") {
 		t.Fatalf("the cost label must stay marked incomplete:\n%s", out)
 	}
 }
@@ -191,10 +191,10 @@ func TestBothUnpricedKindsRenderSeparately(t *testing.T) {
 		"unpriced_cache_models": []any{"gpt-4o"},
 	}
 	out := captureUsageOutput(func() { renderCostBlock(usage) })
-	if !strings.Contains(out, "Unpriced models: mystery-model") {
+	if !strings.Contains(out, "未定价模型: mystery-model") {
 		t.Fatalf("the pricing-absent line missing:\n%s", out)
 	}
-	if !strings.Contains(out, "Cache rates not configured: gpt-4o") {
+	if !strings.Contains(out, "未配置缓存费率: gpt-4o") {
 		t.Fatalf("the cache-absent line missing:\n%s", out)
 	}
 	// and the two ids must never appear on the same line
@@ -213,7 +213,7 @@ func TestNeitherKindRendersNothing(t *testing.T) {
 	if strings.Contains(out, "Unpriced") || strings.Contains(out, "Cache rates") {
 		t.Fatalf("a complete figure must carry neither line:\n%s", out)
 	}
-	if strings.Contains(out, "incomplete") {
+	if strings.Contains(out, "估算不完整") {
 		t.Fatalf("a complete figure must not be labelled incomplete:\n%s", out)
 	}
 }
@@ -235,7 +235,7 @@ func TestNeitherKindRendersNothing(t *testing.T) {
 //	formula = $0.049500   real bill = $0.079200   ratio = 0.625
 //
 // All 11 bedrock records ship priced with NO cache block and the bedrock
-// adapter DOES emit the exclusive fields, so "upper bound" was false for
+// adapter DOES emit the exclusive fields, so "上界" was false for
 // the entire bedrock census. The envelope carries no inclusion-shape
 // discriminator, so the renderer must not assert a direction it cannot
 // know — it states the condition and that the figure may err either way.
@@ -250,7 +250,7 @@ func TestCacheUnpricedMakesNoUnconditionalUpperBoundClaim(t *testing.T) {
 		"total_cache_write_tokens": 0,
 	}
 	out := captureUsageOutput(func() { renderCostBlock(usage) })
-	if strings.Contains(out, "upper bound") {
+	if strings.Contains(out, "上界") {
 		t.Fatalf("the exclusive (anthropic/bedrock) shape's unpriced cache "+
 			"tokens contribute $0 — the figure is a LOWER bound there, so "+
 			"an unconditional \"upper bound\" is a false disclosure:\n%s", out)
@@ -258,12 +258,12 @@ func TestCacheUnpricedMakesNoUnconditionalUpperBoundClaim(t *testing.T) {
 	if !strings.Contains(out, "us.anthropic.claude-sonnet-4-6") {
 		t.Fatalf("the cache-unpriced model must still be named:\n%s", out)
 	}
-	if !strings.Contains(out, "Cache rates not configured") {
+	if !strings.Contains(out, "未配置缓存费率") {
 		t.Fatalf("the cache kind keeps its own named line:\n%s", out)
 	}
 	// the operator must still learn the figure is untrustworthy AND that the
 	// error direction is not knowable from this artifact.
-	if !strings.Contains(out, "under") || !strings.Contains(out, "over") {
+	if !strings.Contains(out, "偏低") || !strings.Contains(out, "偏高") {
 		t.Fatalf("the cache line must say the figure may be under- OR "+
 			"over-stated (the direction depends on the provider's field "+
 			"shape, which this envelope does not carry):\n%s", out)
@@ -280,7 +280,7 @@ func TestTrulyUnpricedKeepsItsLowerBoundDirection(t *testing.T) {
 		"unpriced_models": []any{"mystery-model"},
 	}
 	out := captureUsageOutput(func() { renderCostBlock(usage) })
-	if strings.Contains(out, "under- or over") {
+	if strings.Contains(out, "偏低或偏高") {
 		t.Fatalf("the #216 kind's direction IS known (a lower bound) — it "+
 			"must not inherit the cache kind's indeterminacy:\n%s", out)
 	}
@@ -291,9 +291,9 @@ func TestTrulyUnpricedKeepsItsLowerBoundDirection(t *testing.T) {
 //
 // The typed UsageInfo gained TotalCacheReadTokens / TotalCacheWriteTokens
 // (results.go) and the step reports and scan.report.json carry them, but
-// both summary renderers printed "Tokens: N input / M output" only. On the
+// both summary renderers printed "令牌用量: N input / M output" only. On the
 // exclusive shapes those cached tokens are a SEPARATE line item, so an
-// anthropic run showed "10000 input" against a cost covering 100000 tokens.
+// anthropic run showed "输入 10000" against a cost covering 100000 tokens.
 // ---------------------------------------------------------------------------
 func TestTokensLineShowsTheCacheLineItems(t *testing.T) {
 	usage := map[string]any{
@@ -303,8 +303,8 @@ func TestTokensLineShowsTheCacheLineItems(t *testing.T) {
 		"total_cache_write_tokens": 2000,
 	}
 	out := captureUsageOutput(func() { renderTokensLine(usage) })
-	for _, want := range []string{"10000 input", "1000 output",
-		"90000 cache read", "2000 cache write"} {
+	for _, want := range []string{"输入 10000", "输出 1000",
+		"缓存读取 90000", "缓存写入 2000"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q from the tokens line:\n%s", want, out)
 		}
@@ -319,10 +319,10 @@ func TestTokensLineByteIdenticalWithoutCache(t *testing.T) {
 		"total_output_tokens": 1000,
 	}
 	out := captureUsageOutput(func() { renderTokensLine(usage) })
-	if !strings.Contains(out, "10000 input / 1000 output") {
+	if !strings.Contains(out, "输入 10000 / 输出 1000") {
 		t.Fatalf("the pre-#626 tokens line regressed:\n%s", out)
 	}
-	if strings.Contains(out, "cache") {
+	if strings.Contains(out, "缓存") {
 		t.Fatalf("no cache traffic — no cache segment may print:\n%s", out)
 	}
 }
@@ -337,10 +337,10 @@ func TestTokensLinePresentOnlyPerField(t *testing.T) {
 		"total_cache_read_tokens": 90000,
 	}
 	out := captureUsageOutput(func() { renderTokensLine(usage) })
-	if !strings.Contains(out, "90000 cache read") {
+	if !strings.Contains(out, "缓存读取 90000") {
 		t.Fatalf("the cache-read line item is missing:\n%s", out)
 	}
-	if strings.Contains(out, "cache write") {
+	if strings.Contains(out, "缓存写入") {
 		t.Fatalf("no cache WRITE traffic was measured — printing 0 asserts "+
 			"a measurement that did not happen:\n%s", out)
 	}

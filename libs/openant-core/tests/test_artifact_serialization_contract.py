@@ -262,7 +262,7 @@ def test_provenance_header_fires_only_for_threat_model():
         "threat_model_sha256": "abc123",
         "threat_model_warnings": ["every input source marked trusted"],
     })
-    assert "repo-controlled file" in header
+    assert "仓库控制的文件" in header
     assert "abc123" in header
     assert "every input source marked trusted" in header
 
@@ -270,4 +270,4 @@ def test_provenance_header_fires_only_for_threat_model():
 def test_provenance_header_survives_missing_optional_fields():
     """A threat-model context with no sha/warnings still gets the banner."""
     header = _context_provenance_header({"context_source": "threat_model"})
-    assert "repo-controlled file" in header
+    assert "仓库控制的文件" in header

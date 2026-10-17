@@ -24,6 +24,8 @@ class TestTemplateFollowsTheFinding:
         ("cmd/root.go", "go"),
         ("app/models.rb", "ruby"),
         ("public/index.php", "php"),
+        ("lib/parse.c", "c"),
+        ("lib/parse.cpp", "c"),
     ])
     def test_supported_languages_resolve_to_their_template(self, file_path, expected):
         assert resolve_docker_template(file_path, scan_language="python") == expected
@@ -34,22 +36,22 @@ class TestTemplateFollowsTheFinding:
 
 
 class TestUnsupportedLanguagesSkipRatherThanGuess:
-    @pytest.mark.parametrize("file_path", ["lib/parse.c", "lib/parse.cpp", "main.zig"])
+    @pytest.mark.parametrize("file_path", ["main.zig", "main.rs", "main.swift"])
     def test_languages_without_a_template_return_none(self, file_path):
         assert resolve_docker_template(file_path, scan_language="python") is None, (
             "a language with no Docker template must yield None so the caller "
             "can skip; falling back to Python generated a guaranteed-failing test"
         )
 
-    def test_registry_agrees_that_c_and_zig_have_no_template(self):
-        assert docker_template_for("c") is None
+    def test_registry_supports_c_and_skips_zig(self):
+        assert docker_template_for("c") == "c"
         assert docker_template_for("zig") is None
 
     def test_unknown_extension_falls_back_to_the_scan_language(self):
         assert resolve_docker_template("unknown", scan_language="go") == "go"
 
     def test_unknown_extension_and_unusable_scan_language_returns_none(self):
-        assert resolve_docker_template("unknown", scan_language="c") is None
+        assert resolve_docker_template("unknown", scan_language="zig") is None
         assert resolve_docker_template("unknown", scan_language=None) is None
 
     def test_never_silently_defaults_to_python(self):
@@ -106,9 +108,9 @@ class TestUnsupportedLanguageFindingsAreSkipped:
     def test_skip_decision_is_exposed_as_a_helper(self):
         from utilities.dynamic_tester import should_skip_for_language
 
-        skip, reason = should_skip_for_language("lib/parse.c", "c")
+        skip, reason = should_skip_for_language("main.zig", "zig")
         assert skip is True
-        assert "c" in reason.lower()
+        assert "zig" in reason.lower()
 
     def test_supported_language_is_not_skipped(self):
         from utilities.dynamic_tester import should_skip_for_language
@@ -125,14 +127,14 @@ class TestUnsupportedLanguageFindingsAreSkipped:
         from utilities.dynamic_tester import should_skip_for_language
 
         assert should_skip_for_language("unknown", "go")[0] is False
-        assert should_skip_for_language("unknown", "c")[0] is True
+        assert should_skip_for_language("unknown", "c")[0] is False
 
     def test_reason_names_the_language_so_the_trail_is_auditable(self):
         from utilities.dynamic_tester import should_skip_for_language
 
         _, reason = should_skip_for_language("main.zig", "zig")
         assert "zig" in reason
-        assert "template" in reason.lower()
+        assert "模板" in reason
 
 
 class TestSkippedIsAFirstClassStatus:
@@ -157,4 +159,4 @@ class TestSkippedIsAFirstClassStatus:
             DynamicTestResult(finding_id="B", status="SKIPPED", details="no template for zig"),
         ]
         report = generate_report(results, repo_name="r", total_cost_usd=0.0)
-        assert "SKIPPED" in report.upper(), "skipped findings are invisible in the report"
+        assert "已跳过" in report, "skipped findings are invisible in the report"

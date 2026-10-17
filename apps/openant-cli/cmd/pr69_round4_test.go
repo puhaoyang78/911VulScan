@@ -53,6 +53,9 @@ func TestPromptSecret_FallsBackToReaderWhenNotTTY(t *testing.T) {
 // prompt (which falls back to the reader on a non-TTY). Before the fix the
 // command required exactly one argv, so this path did not exist.
 func TestSetAPIKey_ReadsKeyFromStdinWhenNoArgv(t *testing.T) {
+	origProvider := setAPIKeyProvider
+	setAPIKeyProvider = "anthropic"
+	t.Cleanup(func() { setAPIKeyProvider = origProvider })
 	configPath := resolveConfigPathForTest(t)
 
 	// Stub the Anthropic validation endpoint to 200 so the key is accepted.

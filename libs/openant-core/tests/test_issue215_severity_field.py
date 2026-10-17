@@ -379,8 +379,8 @@ def test_summary_template_row_has_severity_cell():
     }]
     block = _summary_tables_block({"findings": findings})
     assert block.count(
-        "| # | Vulnerability | Location | CWE | Severity | Verified |") == 1
-    assert "| 1 | XSS | a.py:handler | CWE-79 | high | verified |" in block
+        "| # | 漏洞 | 位置 | CWE | 严重程度 | 验证方式 |") == 1
+    assert "| 1 | XSS | a.py:handler | CWE-79 | 高危 | 第 2 阶段已验证 |" in block
 
 
 def test_max_iterations_downgrade_strips_severity():
@@ -430,9 +430,9 @@ def test_summary_table_is_contiguous():
     block = _summary_tables_block({"findings": findings})
     lines = block.split("\n")
     i = next(k for k, l in enumerate(lines)
-             if l.startswith("| # | Vulnerability"))
+             if l.startswith("| # | 漏洞"))
     assert lines[i + 1].startswith("|---"), "separator row must follow directly"
-    assert lines[i + 2].startswith("| 1 |") and "medium" in lines[i + 2], (
+    assert lines[i + 2].startswith("| 1 |") and "中危" in lines[i + 2], (
         "the data row must be contiguous and carry the severity cell")
 
 

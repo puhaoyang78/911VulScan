@@ -59,7 +59,7 @@ func TestRenderReskinRepoURLNeverRaw(t *testing.T) {
 	if strings.Contains(out, "ZgotmplZ") {
 		t.Error("reskin: the unparseable form rendered a broken link")
 	}
-	if !strings.Contains(out, `<span title="Repository">`) {
+	if !strings.Contains(out, `<span title="代码仓库">`) {
 		t.Error("reskin: the unparseable form must render the plain span (the honest absence)")
 	}
 	if !strings.Contains(out, "org/repo") {

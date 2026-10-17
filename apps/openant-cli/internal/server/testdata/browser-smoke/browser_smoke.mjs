@@ -129,6 +129,34 @@ let dompurifyProbeBlocked = 0;
   await ready(page, 'index', () => page.waitForFunction(() => typeof deleteScan === 'function'));
   const hasRows = await page.locator('#scans-list .scan-row').count();
   if (hasRows < 1) note('index', 'the seeded scan row is not rendered');
+  await ready(page, 'index model switch', async () => {
+    await page.selectOption('#provider', 'configured');
+    if (!(await page.locator('#api_key').isDisabled()) || !(await page.locator('#model').isDisabled())) throw new Error('configured profile leaves DeepSeek fields enabled');
+    if (!(await page.locator('#llm_config').isEnabled())) throw new Error('profile selector remains disabled');
+    await page.selectOption('#provider', 'deepseek');
+    await page.selectOption('#model', 'deepseek-v4-pro');
+    if (!(await page.locator('#api_key').isEnabled()) || !(await page.locator('#llm_config').isDisabled())) throw new Error('DeepSeek mode does not isolate profile fields');
+  });
+  await ready(page, 'index repeated submission and recoverable response', async () => {
+    let submissions = 0;
+    await page.route('**/scan', async route => {
+      submissions++;
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await route.fulfill({ status:200, contentType:'text/plain', body:'模拟未跳转响应' });
+    });
+    await page.fill('#repo', '/fixture-only-no-real-scan');
+    await page.evaluate(() => { const form=document.getElementById('scan-form'); form.requestSubmit(); form.requestSubmit(); });
+    await page.waitForFunction(() => !document.getElementById('start-button').disabled && document.getElementById('form-feedback').textContent.includes('任务响应异常'));
+    if (submissions !== 1) throw new Error(`duplicate form submissions: ${submissions}`);
+    await page.unroute('**/scan');
+  });
+  await ready(page, 'index back navigation clears one-run key', async () => {
+    await page.fill('#api_key', 'smoke-fixture-not-a-real-key');
+    await page.locator('a[href="/scan/jx"]').click();
+    await page.waitForFunction(() => document.getElementById('status-text')?.dataset.state === 'done');
+    await page.goBack({ waitUntil:'networkidle' });
+    await page.waitForFunction(() => document.getElementById('api_key')?.value === '' && !document.getElementById('start-button').disabled);
+  });
   await drain(page, 'index');
   await page.close();
 }
@@ -141,7 +169,7 @@ let dompurifyProbeBlocked = 0;
   await ready(page, 'scan', () => page.waitForFunction(
     () => document.querySelectorAll('#disclosure-links a').length >= 1));
   await ready(page, 'scan', () => page.waitForFunction(
-    () => !document.getElementById('status-text').textContent.includes('Scanning')));
+    () => document.getElementById('status-text').dataset.state === 'done'));
   await drain(page, 'scan');
   await page.close();
 }
@@ -154,7 +182,7 @@ let summaryHTML = '';
   await ready(page, 'summary', () => page.waitForFunction(
     () => document.getElementById('content').children.length >= 1
       && document.getElementById('content').textContent.trim().length > 0
-      && !document.getElementById('content').textContent.includes('Loading')));
+      && document.getElementById('content').dataset.renderState === 'ready'));
   summaryHTML = await page.$eval('#content', (el) => el.innerHTML);
 
   const ABSENT = ['<img', '<form', '<input', '<style', '<script', 'javascript:',
@@ -176,7 +204,7 @@ let summaryHTML = '';
   const { page } = await visit('disclosure', '/disclosure/jx/d.md');
   await ready(page, 'disclosure', () => page.waitForFunction(
     () => document.getElementById('content').children.length >= 1
-      && !document.getElementById('content').textContent.includes('Loading')));
+      && document.getElementById('content').dataset.renderState === 'ready'));
   await drain(page, 'disclosure');
   await page.close();
 }

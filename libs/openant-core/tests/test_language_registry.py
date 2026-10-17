@@ -192,6 +192,7 @@ class TestDockerTemplate:
         assert docker_template_for("python") == "python"
         assert docker_template_for("javascript") == "node"
         assert docker_template_for("go") == "go"
+        assert docker_template_for("c") == "c"
 
     def test_languages_without_a_template_return_none(self):
         """None means SKIP. Callers must not fall back to a guess.
@@ -200,7 +201,6 @@ class TestDockerTemplate:
         Dockerfile for a C finding — an LLM call with a guaranteed-failing
         result.
         """
-        assert docker_template_for("c") is None
         assert docker_template_for("zig") is None
 
     def test_unknown_language_returns_none(self):

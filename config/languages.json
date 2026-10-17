@@ -77,7 +77,7 @@
         ".hh": "cpp",
         "*": "c"
       },
-      "docker_template": null,
+      "docker_template": "c",
       "enabled": true
     },
     "ruby": {

@@ -27,7 +27,7 @@ def test_findingless_vulnerable_counted_in_html_report(tmp_path):
     generate_report.generate_html_report(experiment, dataset, "", str(out))
     html_text = out.read_text(encoding="utf-8")
 
-    m = re.search(r'#dc3545">(\d+)</div>\s*<div class="stat-label">Vulnerable', html_text)
+    m = re.search(r'#dc3545">(\d+)</div>\s*<div class="stat-label">存在漏洞', html_text)
     assert m, "Vulnerable stat card not found in rendered report"
     assert m.group(1) == "1", f"expected Vulnerable count 1, got {m.group(1)}"
 

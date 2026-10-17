@@ -125,7 +125,7 @@ def test_summary_json_consistent_with_unit_files(tmp_path, monkeypatch):
     assert len(unit_files) == 1
     unit = json.loads(unit_files[0].read_text())
     assert unit["status"] == "ERROR"
-    assert "generation failed" in unit.get("details", "").lower()
+    assert "测试生成失败" in unit.get("details", "")
 
 
 def test_error_checkpoints_still_retried(tmp_path):

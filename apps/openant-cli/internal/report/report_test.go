@@ -33,7 +33,7 @@ func TestRenderOverviewFullScan(t *testing.T) {
 	if !strings.Contains(out, data.ShortCommit()) {
 		t.Error("expected short commit in output for full scan")
 	}
-	if strings.Contains(out, "Incremental") {
+	if strings.Contains(out, "增量扫描") {
 		t.Error("did not expect Incremental badge on full scan")
 	}
 }
@@ -55,14 +55,14 @@ func TestRenderOverviewIncrementalScan(t *testing.T) {
 		t.Fatalf("RenderOverview: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "Incremental") {
+	if !strings.Contains(out, "增量扫描") {
 		t.Error("expected Incremental badge")
 	}
 	if !strings.Contains(out, "c9f255bb..55cc12c5") {
-		t.Errorf("expected git-style range c9f255bb..55cc12c5, got: %s", excerpt(out, "Incremental"))
+		t.Errorf("expected git-style range c9f255bb..55cc12c5, got: %s", excerpt(out, "增量扫描"))
 	}
-	if !strings.Contains(out, "2/8 units") {
-		t.Errorf("expected '2/8 units', got: %s", excerpt(out, "Incremental"))
+	if !strings.Contains(out, "2/8 个代码单元") {
+		t.Errorf("expected '2/8 个代码单元', got: %s", excerpt(out, "增量扫描"))
 	}
 }
 
@@ -82,14 +82,14 @@ func TestRenderReskinIncrementalScan(t *testing.T) {
 		t.Fatalf("RenderReskin: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "Incremental") {
+	if !strings.Contains(out, "增量扫描") {
 		t.Error("reskin: expected Incremental badge")
 	}
 	if !strings.Contains(out, "c9f255bb..55cc12c5") {
 		t.Error("reskin: expected git-style range")
 	}
-	if !strings.Contains(out, "3/8 units") {
-		t.Error("reskin: expected '3/8 units'")
+	if !strings.Contains(out, "3/8 个代码单元") {
+		t.Error("reskin: expected '3/8 个代码单元'")
 	}
 }
 
@@ -144,7 +144,7 @@ func TestRenderReskinSeverityBadge(t *testing.T) {
 		t.Fatalf("RenderReskin: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, ">critical<") {
+	if !strings.Contains(out, ">严重<") {
 		t.Error("expected the severity badge to render for a severity-bearing finding")
 	}
 	// the color method backs the badge style
