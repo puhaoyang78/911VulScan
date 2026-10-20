@@ -304,7 +304,7 @@
                                 </summary>
                                 <div class="px-4 sm:px-5 pb-4 pt-2 border-t border-knostic-border-light">
                                     {{if $f.AttackVector}}<div class="mb-3 sm:hidden"><span class="text-knostic-muted text-xs font-medium">攻击方式</span><p class="text-knostic-body text-sm mt-0.5">{{$f.AttackVector}}</p></div>{{end}}
-                                    <div><span class="text-knostic-muted text-xs font-medium">分析</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{$f.Analysis}}</p></div>
+                                    {{template "reskin-finding-details" $f}}
                                     {{if $f.HasDynamicTest}}<div class="mt-3 pt-3 border-t border-knostic-border-light"><span class="text-knostic-muted text-xs font-medium">动态测试</span><div class="flex items-center gap-2 mt-1"><span class="inline-block px-2 py-0.5 rounded text-xs font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{displayLabel $f.DynamicTestStatus}}</span>{{if $f.DynamicTestDetails}}<span class="text-knostic-muted text-xs">{{$f.DynamicTestDetails}}</span>{{end}}</div></div>{{end}}
                                 </div>
                             </details>
@@ -322,7 +322,7 @@
                             </summary>
                             <div class="px-4 sm:px-5 pb-4 pt-2 border-t border-knostic-border-light">
                                 {{if $f.AttackVector}}<div class="mb-3 sm:hidden"><span class="text-knostic-muted text-xs font-medium">攻击方式</span><p class="text-knostic-body text-sm mt-0.5">{{$f.AttackVector}}</p></div>{{end}}
-                                <div><span class="text-knostic-muted text-xs font-medium">分析</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{$f.Analysis}}</p></div>
+                                {{template "reskin-finding-details" $f}}
                                 {{if $f.HasDynamicTest}}<div class="mt-3 pt-3 border-t border-knostic-border-light"><span class="text-knostic-muted text-xs font-medium">动态测试</span><div class="flex items-center gap-2 mt-1"><span class="inline-block px-2 py-0.5 rounded text-xs font-semibold text-white" style="background-color: {{$f.DynamicTestColor}}">{{displayLabel $f.DynamicTestStatus}}</span>{{if $f.DynamicTestDetails}}<span class="text-knostic-muted text-xs">{{$f.DynamicTestDetails}}</span>{{end}}</div></div>{{end}}
                             </div>
                         </details>
@@ -393,3 +393,18 @@
     </script>
 </body>
 </html>
+
+{{define "reskin-finding-details"}}
+<div><span class="text-knostic-muted text-xs font-medium">{{if .HasReportDetails}}发现项描述{{else}}分析{{end}}</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{if .Description}}{{.Description}}{{else if .Analysis}}{{.Analysis}}{{else}}未提供描述。{{end}}</p></div>
+{{if .HasReportDetails}}
+<p class="text-knostic-muted text-xs mt-1">以下描述、影响与修复方案来自分析记录，不代表已执行验证；建议修复示例需评审和回归测试。</p>
+<div class="mt-3"><span class="text-knostic-muted text-xs font-medium">类型 / CWE</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{.CWELabel}}</p></div>
+<div class="mt-3"><span class="text-knostic-muted text-xs font-medium">影响（分析评估）</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{if .Impact}}{{.Impact}}{{else}}未提供影响评估；需人工确认受影响对象和前提条件。{{end}}</p></div>
+<div class="mt-3"><span class="text-knostic-muted text-xs font-medium">修复建议</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{if .Remediation}}{{.Remediation}}{{else}}未提供修复建议；需结合实际调用约束人工评估。{{end}}</p></div>
+<details class="mt-3"><summary class="text-knostic-muted text-xs font-medium">相关漏洞代码（已有记录）</summary><pre class="text-knostic-body text-xs mt-1 whitespace-pre-wrap overflow-x-auto"><code>{{if .VulnerableCode}}{{.VulnerableCode}}{{else}}未提供代码片段；请按文件和函数定位源代码。{{end}}</code></pre></details>
+<details class="mt-3"><summary class="text-knostic-muted text-xs font-medium">建议修复示例（未测试）</summary><pre class="text-knostic-body text-xs mt-1 whitespace-pre-wrap overflow-x-auto"><code>{{if .SuggestedFix}}{{.SuggestedFix}}{{else}}未提供可用的修复代码示例；未生成或验证补丁。{{end}}</code></pre></details>
+<div class="mt-3"><span class="text-knostic-muted text-xs font-medium">复现思路（分析记录，非执行证据）</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{if .StepsToReproduce}}{{.StepsToReproduce}}{{else}}未记录复现步骤。{{end}}</p></div>
+<div class="mt-3"><span class="text-knostic-muted text-xs font-medium">二阶段分析结论</span><p class="text-knostic-body text-sm mt-1 whitespace-pre-wrap leading-relaxed">{{if .Stage2Verification}}{{.Stage2Verification}}{{else}}未记录二阶段验证结论；不能视为已验证。{{end}}</p></div>
+<details class="mt-3 pt-3 border-t border-knostic-border-light"><summary class="text-knostic-muted text-xs font-medium">动态验证：PoC 构建、运行与证据</summary><pre class="text-knostic-body text-xs mt-1 whitespace-pre-wrap overflow-x-auto">{{if .Reproduction}}{{.Reproduction}}{{else}}未记录可复核的 PoC 构建、触发步骤或执行证据；不据此宣称已复现。{{end}}</pre></details>
+{{end}}
+{{end}}

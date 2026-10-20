@@ -243,6 +243,18 @@ type Finding struct {
 	Analysis           string `json:"analysis"`
 	DynamicTestStatus  string `json:"dynamic_test_status"`
 	DynamicTestDetails string `json:"dynamic_test_details"`
+	// Optional, display-only report fields. Old report-data JSON remains valid;
+	// absence is rendered as an evidence gap, never a verified result.
+	Description        string `json:"description"`
+	CWEID              string `json:"cwe_id"`
+	CWEName            string `json:"cwe_name"`
+	Impact             string `json:"impact"`
+	Remediation        string `json:"remediation"`
+	VulnerableCode     string `json:"vulnerable_code"`
+	SuggestedFix       string `json:"suggested_fix"`
+	StepsToReproduce   string `json:"steps_to_reproduce"`
+	Stage2Verification string `json:"stage2_verification"`
+	Reproduction       string `json:"reproduction"`
 	// #305: the parsers emit start_line in primary_origin and it survived
 	// enhancement — it was dropped at the report boundary. Threaded so the
 	// SARIF region can anchor the alert to the real row (0 = unknown: emit
@@ -252,6 +264,27 @@ type Finding struct {
 	// — old artifacts) + its provenance (model | derived).
 	Severity       string `json:"severity"`
 	SeveritySource string `json:"severity_source"`
+}
+
+// HasReportDetails keeps the legacy compact display for non-findings, while
+// vulnerable/bypassable rows always show the required sections and honest gaps.
+func (f Finding) HasReportDetails() bool {
+	return f.IsHighSeverity() || f.Impact != "" || f.Remediation != "" || f.SuggestedFix != ""
+}
+
+// CWELabel displays the recorded classification without inventing one for
+// legacy artifacts. This string is escaped by html/template like all evidence.
+func (f Finding) CWELabel() string {
+	id := strings.TrimSpace(f.CWEID)
+	if id == "" || id == "0" {
+		id = "CWE 未提供"
+	} else if !strings.HasPrefix(strings.ToUpper(id), "CWE-") {
+		id = "CWE-" + id
+	}
+	if f.CWEName != "" {
+		return id + " · " + f.CWEName
+	}
+	return id
 }
 
 // SeverityColor returns the badge color for the severity. Unknown values

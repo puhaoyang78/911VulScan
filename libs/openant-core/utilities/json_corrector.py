@@ -56,7 +56,12 @@ _VULN_SCHEMA = """{
     "attack_vector": "if vulnerable: a single plain-text string describing the specific attack; if safe: null",
     "confidence": 0.0-1.0,
     "cwe_id": "if vulnerable: the CWE number (integer, 0 if no match); if safe: 0",
-    "cwe_name": "if vulnerable: the short CWE name; if safe: null"
+    "cwe_name": "if vulnerable: the short CWE name; if safe: null",
+    "description": "the finding-specific defect description present in the response; otherwise null",
+    "impact": "the anticipated impact present in the response, not observed execution evidence; otherwise null",
+    "remediation": "the concrete remediation guidance present in the response; otherwise null",
+    "vulnerable_code": "the exact source excerpt present in the response; otherwise null",
+    "suggested_fix": "the proposed, untested fixed code example present in the response; otherwise null"
 }"""
 
 
@@ -116,7 +121,11 @@ _VERIFY_SCHEMA = """{
         "attacker_control_at_sink": "full" | "partial" | "none",
         "path_broken_at": "where/why the path breaks (or null)"
     },
-    "security_weakness": "dangerous patterns that exist but aren't currently exploitable (or null)"
+    "security_weakness": "dangerous patterns that exist but aren't currently exploitable (or null)",
+    "description": "the final finding-specific description present in the response; otherwise null",
+    "impact": "the anticipated impact present in the response, not observed execution evidence; otherwise null",
+    "remediation": "the concrete correction guidance present in the response; otherwise null",
+    "suggested_fix": "the proposed untested corrected code example present in the response; otherwise null"
 }"""
 
 

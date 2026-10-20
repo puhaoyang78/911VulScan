@@ -27,6 +27,8 @@ class Finding:
     vulnerable_code_section: Optional[str] = None
     impact: Optional[list] = None
     suggested_fix: Optional[str] = None
+    remediation: Optional[str] = None
+    suggested_fix_status: Optional[str] = None
     steps_to_reproduce: Optional[list] = None
     rejection_reason: Optional[str] = None
     # #215: a rankable severity + its provenance. Optional and NOT required —
@@ -53,6 +55,8 @@ class Finding:
             vulnerable_code_section=data.get("vulnerable_code_section"),
             impact=data.get("impact"),
             suggested_fix=data.get("suggested_fix"),
+            remediation=data.get("remediation"),
+            suggested_fix_status=data.get("suggested_fix_status"),
             steps_to_reproduce=data.get("steps_to_reproduce"),
             rejection_reason=data.get("rejection_reason"),
             severity=data.get("severity"),

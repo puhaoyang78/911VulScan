@@ -26,6 +26,7 @@ from core.verdict_taxonomy import (SEVERITIES, SEVERITY_FINDING_VERDICTS,
                                    severity_display_verdict)
 from utilities.child_interp import child_interpreter_env
 from utilities.file_io import normalize_results, open_utf8, read_json, write_json
+from report.details import finding_fields
 
 # Root of openant-core
 _CORE_ROOT = Path(__file__).parent.parent
@@ -460,13 +461,12 @@ def build_pipeline_output(
         # raise AttributeError. Same defensive-coercion class as _coerce_to_str.
         vuln = vulns[0] if vulns and isinstance(vulns[0], dict) else {}
 
-        description = (
-            vuln.get("description")
-            or finding.get("reasoning")
-            or full_result.get("reasoning")
-        )
-
-        vulnerable_code = vuln.get("vulnerable_code") or code_by_route.get(route_key)
+        # The same additive report projection feeds HTML/CSV/disclosures.
+        # Full records fill legacy confirmed_findings summaries; newer values win.
+        detail_source = {**full_result, **finding}
+        details = finding_fields(detail_source, code_by_route.get(route_key))
+        description = details["description"]
+        vulnerable_code = details["vulnerable_code"]
         file_path = route_key.split(":")[0] if ":" in route_key else "unknown"
         vulnerable_code_section = _build_vulnerable_code_section(
             file_path=file_path,
@@ -474,7 +474,7 @@ def build_pipeline_output(
             language=language,
         )
 
-        impact = vuln.get("impact") or finding.get("attack_vector")
+        impact = details["impact"]
 
         steps_to_reproduce = vuln.get("steps_to_reproduce")
         if not steps_to_reproduce:
@@ -626,7 +626,9 @@ def build_pipeline_output(
             "vulnerable_code": vulnerable_code,
             "vulnerable_code_section": vulnerable_code_section,
             "impact": impact,
-            "suggested_fix": vuln.get("suggested_fix"),
+            "remediation": details["remediation"],
+            "suggested_fix": details["suggested_fix"],
+            "suggested_fix_status": "proposed_unvalidated" if details["suggested_fix"] else None,
             "steps_to_reproduce": steps_to_reproduce,
         })
 

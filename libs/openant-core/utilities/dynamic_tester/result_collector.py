@@ -61,6 +61,10 @@ def collect_result(
             generation_cost_usd=generation_cost,
         )
 
+    # Observational receipt from the executor; no status inference from it.
+    reproduction = getattr(execution, "reproduction", {})
+    reproduction = reproduction if isinstance(reproduction, dict) else {}
+
     if getattr(execution, "execution_error", None):
         return DynamicTestResult(
             finding_id=finding_id, identity_key=identity_key, status="ERROR",
@@ -68,6 +72,7 @@ def collect_result(
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
+            reproduction=reproduction,
             elapsed_seconds=execution.elapsed_seconds, generation_cost_usd=generation_cost,
         )
 
@@ -81,6 +86,7 @@ def collect_result(
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
+            reproduction=reproduction,
             elapsed_seconds=execution.elapsed_seconds,
             generation_cost_usd=generation_cost,
         )
@@ -98,6 +104,7 @@ def collect_result(
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
+            reproduction=reproduction,
             elapsed_seconds=execution.elapsed_seconds,
             generation_cost_usd=generation_cost,
         )
@@ -117,6 +124,7 @@ def collect_result(
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
+            reproduction=reproduction,
             elapsed_seconds=execution.elapsed_seconds,
             generation_cost_usd=generation_cost,
         )
@@ -159,6 +167,7 @@ def collect_result(
         test_code=generation.get("test_script", ""),
         dockerfile=generation.get("dockerfile", ""),
         docker_compose=generation.get("docker_compose", ""),
+        reproduction=reproduction,
         elapsed_seconds=execution.elapsed_seconds,
         generation_cost_usd=generation_cost,
     )

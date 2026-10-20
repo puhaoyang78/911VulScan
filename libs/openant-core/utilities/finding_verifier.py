@@ -132,6 +132,11 @@ MAX_TOKENS_PER_RESPONSE = DEFAULT_MAX_TOKENS
 # reason a finding is downgraded out of disclosure.
 INCOMPLETE_VERIFICATION_MARKER = "Max iterations reached"
 
+# Optional report-only content produced with the existing finish call. Keeping
+# it in the verification record preserves it through the existing checkpoints
+# without changing the verdict, tool loop or number of model calls.
+VERIFICATION_REPORT_FIELDS = ("description", "impact", "remediation", "suggested_fix")
+
 
 # Expected JSON shape of a verifier `finish` response — handed to JSONCorrector
 # so a malformed-but-recoverable verifier reply is repaired into THIS shape (no
@@ -142,7 +147,11 @@ _VERIFY_JSON_SCHEMA = """{
     "correct_finding": "safe | protected | bypassable | vulnerable | inconclusive",
     "exploit_path": {"entry_point": null, "data_flow": [], "sink_reached": false, "attacker_control_at_sink": "none", "path_broken_at": null},
     "explanation": "Detailed explanation of your analysis",
-    "security_weakness": null
+    "security_weakness": null,
+    "description": "finding-specific description matching the final finding, or null",
+    "impact": "anticipated impact, not an observed test result, or null",
+    "remediation": "concrete correction and regression test guidance, or null",
+    "suggested_fix": "proposed untested corrected code example supported by the inspected code, or null"
 }"""
 
 
@@ -206,7 +215,7 @@ VERIFICATION_TOOLS = [
     },
     {
         "name": "finish",
-        "description": "Complete the verification with your verdict and exploit path analysis.",
+        "description": "Complete the verification with your verdict and exploit path analysis. For a vulnerable or bypassable final finding, populate the optional report fields in this same call using the code you inspected. Report anticipated impact, not invented execution evidence; proposed fixes have not been applied or tested.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -254,6 +263,22 @@ VERIFICATION_TOOLS = [
                 "security_weakness": {
                     "type": ["string", "null"],
                     "description": "Any dangerous patterns that exist but aren't currently exploitable (optional)"
+                },
+                "description": {
+                    "type": ["string", "null"],
+                    "description": "For vulnerable/bypassable: a concise defect description, location and required conditions matching your final analysis. Otherwise null."
+                },
+                "impact": {
+                    "type": ["string", "null"],
+                    "description": "For vulnerable/bypassable: affected data or operations and what an attacker could achieve. Anticipated impact only, not a claimed crash or observed test result. Otherwise null."
+                },
+                "remediation": {
+                    "type": ["string", "null"],
+                    "description": "For vulnerable/bypassable: a concrete correction at the affected operation and a regression test recommendation. Explain any missing context needed for a code example. Otherwise null."
+                },
+                "suggested_fix": {
+                    "type": ["string", "null"],
+                    "description": "For vulnerable/bypassable: a minimal proposed corrected code example grounded in inspected source, never a claim of an applied or tested fix. Null when context is insufficient or no vulnerability remains."
                 }
             },
             "required": ["agree", "correct_finding", "explanation"]
@@ -341,6 +366,11 @@ class VerificationResult:
     # into the unit's verification record so results_verified.json is
     # reconcilable against a provider bill; never summed, never in cost.
     usage_details: Optional[list] = None
+    # Optional flat finish fields, serialized inside the verification record.
+    # Preserve explicit null to distinguish an unsupported example from an old
+    # artifact that never requested one. Consumers must still honor incomplete
+    # and consistency-update provenance before presenting this as final advice.
+    report_fields: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         result = {
@@ -361,6 +391,11 @@ class VerificationResult:
         result["incomplete"] = self.incomplete
         if self.withheld_correct_finding is not None:
             result["withheld_correct_finding"] = self.withheld_correct_finding
+        result.update({
+            key: value for key, value in self.report_fields.items()
+            if key in VERIFICATION_REPORT_FIELDS
+            and (value is None or isinstance(value, str))
+        })
         return result
 
 
@@ -1656,6 +1691,11 @@ class FindingVerifier:
             security_weakness=finish_result.get("security_weakness"),
             incomplete=incomplete,
             withheld_correct_finding=withheld_correct_finding,
+            report_fields={
+                key: finish_result[key] for key in VERIFICATION_REPORT_FIELDS
+                if key in finish_result
+                and (finish_result[key] is None or isinstance(finish_result[key], str))
+            },
         )
 
     def _try_parse_text_response(

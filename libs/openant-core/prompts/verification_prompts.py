@@ -540,7 +540,16 @@ For EACH approach, trace through step by step until you succeed or hit a blocker
 
 IMPORTANT:
 - Only conclude PROTECTED or SAFE if ALL approaches fail. If ANY approach succeeds, conclude VULNERABLE.
-- A vulnerability must harm someone OTHER than the attacker.{local_access_rule}"""
+- A vulnerability must harm someone OTHER than the attacker.{local_access_rule}
+
+When finishing, include description, impact, remediation and suggested_fix for a
+vulnerable or bypassable final finding in the existing finish response. Match
+these report fields to your final analysis, including any correction to Stage 1.
+Use concrete, source-grounded guidance; if a fixed code example is unsupported,
+set suggested_fix to null and explain the missing context in remediation.
+Impact is anticipated, and the code example is proposed and untested: code
+inspection is not execution evidence and must not claim a reproduced crash or
+an applied or verified fix."""
 
 
 def get_consistency_check_prompt(

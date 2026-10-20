@@ -65,6 +65,18 @@ INSTRUCTIONS:
 - Steps to Reproduce: if dynamic_testing data exists, use those steps; if only dynamic_testing_attempted exists (the test ran but did not confirm), still write "[需要动态测试]" — the attempted evidence is diagnostic, not a reproduction; otherwise write "[需要动态测试]" for each step
 - Impact: 3-5 bullet points, no sub-bullets
 - Suggested Fix: show minimal code change, use comments to indicate what was added
+- Use the supplied description, impact, remediation and suggested_fix fields.
+  Never manufacture missing impacts, affected versions, test environment, commands,
+  expected output, observed logs or successful execution. For absent data write
+  "未记录，需要补充"; do not pad impacts to meet a bullet count.
+- Clearly label suggested_fix as "建议修复示例（未验证）". It is a proposal,
+  not an applied or tested patch. If no fix is supported by the supplied context,
+  explain the remediation and missing context instead of inventing code.
+- The recorded dynamic artifacts, commands, exit status and evidence are inserted
+  by the server. Do not rewrite them or claim any generated test code was run.
+  Static reproduction steps are hypotheses, not observed behavior. A nonzero
+  exit code, compilation failure or sanitizer configuration alone does not prove
+  a vulnerability. Non-crash findings can be supported by file/HTTP/network evidence.
 - Do not include CVSS scores or severity ratings
 - Do not include disclosure timelines
 - Do not include references section

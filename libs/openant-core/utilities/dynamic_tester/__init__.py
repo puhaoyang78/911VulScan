@@ -399,6 +399,8 @@ def run_dynamic_tests(
                 test_code=cp_data.get("test_code", ""),
                 dockerfile=cp_data.get("dockerfile", ""),
                 docker_compose=cp_data.get("docker_compose", ""),
+                reproduction=(cp_data.get("reproduction")
+                              if isinstance(cp_data.get("reproduction"), dict) else {}),
                 # Reconstruct the exploit-proof evidence too — it's serialized in the
                 # checkpoint but was dropped on resume, so a restored CONFIRMED finding
                 # silently lost its command_output/file_read/http_response proof.

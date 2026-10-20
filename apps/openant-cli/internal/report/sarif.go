@@ -290,6 +290,22 @@ func sarifResultFor(f Finding, ruleIndex map[string]int) map[string]any {
 	if f.DynamicTestDetails != "" {
 		props["dynamicTestDetails"] = f.DynamicTestDetails
 	}
+	// Additive detail metadata: preserve original rule IDs/fingerprints and do
+	// not publish an untested suggestion as a SARIF fixes[] edit.
+	for key, value := range map[string]string{
+		"description": f.Description, "cwe_id": f.CWEID, "cwe_name": f.CWEName,
+		"impact": f.Impact, "remediation": f.Remediation,
+		"vulnerable_code": f.VulnerableCode, "suggested_fix": f.SuggestedFix,
+		"steps_to_reproduce":  f.StepsToReproduce,
+		"stage2_verification": f.Stage2Verification, "reproduction": f.Reproduction,
+	} {
+		if value != "" {
+			props[key] = value
+		}
+	}
+	if f.SuggestedFix != "" {
+		props["suggested_fix_validation"] = "not_tested"
+	}
 	result["properties"] = props
 
 	// PartialFingerprints is what makes SARIF de-dup work across runs in
@@ -339,6 +355,18 @@ func sarifLocationFor(f Finding) map[string]any {
 // CI inboxes don't drown.
 func findingMessage(f Finding) string {
 	parts := []string{}
+	if f.Description != "" {
+		parts = append(parts, "漏洞描述："+strings.TrimSpace(f.Description))
+	}
+	if f.CWEID != "" || f.CWEName != "" {
+		parts = append(parts, "类型："+f.CWELabel())
+	}
+	if f.Impact != "" {
+		parts = append(parts, "影响（分析评估）："+strings.TrimSpace(f.Impact))
+	}
+	if f.Remediation != "" {
+		parts = append(parts, "修复建议（未测试）："+strings.TrimSpace(f.Remediation))
+	}
 	if f.AttackVector != "" {
 		parts = append(parts, strings.TrimSpace(f.AttackVector))
 	}

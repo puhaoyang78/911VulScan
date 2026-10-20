@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from utilities.dynamic_tester.models import DynamicTestResult
 from report.localization import display_label
+from report.reproduction import render_reproduction
 
 
 def generate_report(
@@ -77,35 +78,11 @@ def generate_report(
                 f"### {r.finding_id}",
                 "",
                 f"**状态：** {display_label(r.status)}",
-                f"**详情：** {r.details}",
                 f"**耗时：** {r.elapsed_seconds:.1f} 秒",
                 f"**生成预估费用：** ${r.generation_cost_usd:.4f}",
                 "",
             ])
 
-            if r.evidence:
-                lines.append("**证据：**")
-                lines.append("")
-                for e in r.evidence:
-                    lines.extend([
-                        f"- **{display_label(e.type)}：**",
-                        "```",
-                        e.content[:2000],
-                        "```",
-                        "",
-                    ])
-
-            if r.test_code:
-                lines.extend([
-                    "<details>",
-                    "<summary>生成的测试代码</summary>",
-                    "",
-                    "```python",
-                    r.test_code,
-                    "```",
-                    "",
-                    "</details>",
-                    "",
-                ])
+            lines.extend([render_reproduction(r.to_dict()), ""])
 
     return "\n".join(lines)

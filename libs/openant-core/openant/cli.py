@@ -1197,47 +1197,13 @@ def cmd_report_data(args):
             normalize_results(experiment)
             dataset = read_json(dataset_path)
 
-            # --- Load dynamic test results if available ---
-            # Dynamic tests use VULN-XXX IDs from pipeline_output.json,
-            # but report-data works with route_keys from results_verified.json.
-            # Bridge by reconstructing route_key = location.file + ":" + location.function
-            # (location.function is the bare name; file+":"+function == route_key, D3b).
-            dt_by_route_key = {}
-            dt_path = os.path.join(results_dir, "dynamic_test_results.json")
+            # Stable identities, not positional VULN IDs, bind evidence to findings.
+            from report.details import (
+                dynamic_for_result, finding_fields, load_dynamic_by_route, report_text,
+            )
+            from report.reproduction import render_reproduction
+            dt_by_route_key = load_dynamic_by_route(results_path)
             po_path = os.path.join(results_dir, "pipeline_output.json")
-            if os.path.exists(dt_path) and os.path.exists(po_path):
-                dt_data = read_json(dt_path)
-                # fa17 TRUST BOUNDARY: dynamic_test_results.json is a separate
-                # model-supplied schema; normalize its `results` to dicts-only so
-                # the `for dr in dt_data.get("results", [])` loop below is safe.
-                normalize_results(dt_data)
-                po_data = read_json(po_path)
-                # fa18 TRUST BOUNDARY: normalize model `findings` from
-                # pipeline_output.json to dicts-only at load (presence-guarded)
-                # so the `finding.get("id")` mapping loop below is safe.
-                if "findings" in po_data:
-                    normalize_results(po_data, "findings")
-
-                # Map VULN-ID → route_key from pipeline_output
-                vuln_id_to_route = {}
-                for finding in po_data.get("findings", []):
-                    fid = finding.get("id")
-                    loc = finding.get("location", {})
-                    route = (
-                        f"{loc.get('file', '')}:{loc.get('function', '')}"
-                        if loc.get("file") else loc.get("function", "")
-                    )
-                    if fid and route:
-                        vuln_id_to_route[fid] = route
-
-                # Map route_key → dynamic test result
-                for dr in dt_data.get("results", []):
-                    fid = dr.get("finding_id")
-                    route = vuln_id_to_route.get(fid)
-                    if route:
-                        dt_by_route_key[route] = dr
-
-                print(f"[报告] 已加载 {len(dt_by_route_key)} 条动态测试结果", file=sys.stderr)
 
             # --- Prepare findings ---
             units_by_id = {u["id"]: u for u in dataset.get("units", [])}
@@ -1276,13 +1242,11 @@ def cmd_report_data(args):
                 verdict = fold_legacy_finding(verdict)
                 file_path = route_key.rsplit(":", 1)[0] if ":" in route_key else route_key
                 unit = units_by_id.get(route_key, {})
-                verification = result.get("verification") or {}
+                verification = result.get("verification")
+                verification = verification if isinstance(verification, dict) else {}
 
-                # Justification: prefer stage2, fallback to stage1
-                justification = verification.get("explanation", "")
-                if not justification:
-                    justification = result.get("reasoning", "")
-                justification = justification[:300]
+                # Preserve the complete explanation, including late qualifications.
+                justification = report_text(verification.get("explanation") or result.get("reasoning"))
 
                 # Downgrade unverified findings to inconclusive
                 if justification.strip() == "Max iterations reached":
@@ -1306,19 +1270,24 @@ def cmd_report_data(args):
                 func_name = route_key.split(":")[-1] if ":" in route_key else route_key
 
                 # Dynamic test result for this finding
-                dt_result = dt_by_route_key.get(route_key)
+                dt_result = dynamic_for_result(result, dt_by_route_key)
                 dt_status = ""
                 dt_details = ""
                 if dt_result:
                     dt_status = dt_result.get("status", "")
-                    dt_details = dt_result.get("details", "")
+                    dt_details = report_text(dt_result.get("details"))
+                code = unit.get("code")
+                source_code = code.get("primary_code") if isinstance(code, dict) else code
+                fields = finding_fields(result, source_code)
 
                 findings.append({
+                    **fields,
+                    "reproduction": render_reproduction(dt_result) if dt_result else "未记录可关联的动态测试。未提供构建、触发或运行证据；不能据此声称已复现。",
                     "verdict": verdict,
                     "verdict_color": verdict_colors.get(verdict, "#6c757d"),
                     "file": file_path,
                     "function": func_name,
-                    "attack_vector": result.get("attack_vector", "") or "",
+                    "attack_vector": report_text(result.get("attack_vector")),
                     "analysis": justification,
                     # #215: a rankable severity on every finding — the
                     # stamped/model value, else the reporter's conservative
@@ -1346,7 +1315,9 @@ def cmd_report_data(args):
                 ("已确认", lambda s: s == "CONFIRMED"),
                 ("未复现", lambda s: s in ("NOT_REPRODUCED", "BLOCKED")),
                 ("测试错误", lambda s: s == "ERROR"),
-                ("未测试", lambda s: s in ("", "INCONCLUSIVE")),
+                ("无法确定", lambda s: s == "INCONCLUSIVE"),
+                ("已跳过", lambda s: s == "SKIPPED"),
+                ("未测试或状态未知", lambda s: s not in ("CONFIRMED", "NOT_REPRODUCED", "BLOCKED", "ERROR", "INCONCLUSIVE", "SKIPPED")),
             ]
 
             findings_by_verdict = []

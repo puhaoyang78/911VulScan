@@ -5,6 +5,7 @@ and collecting stdout/stderr output. All execution is isolated
 in Docker containers with no host volume mounts or privileged mode.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -14,6 +15,7 @@ import tempfile
 import time
 import uuid
 from utilities.file_io import open_utf8, run_utf8
+from utilities.dynamic_tester.diagnostics import bounded_diagnostic
 
 # Timeouts
 DEFAULT_CONTAINER_TIMEOUT = 120   # seconds per container
@@ -36,6 +38,8 @@ class DockerExecutionResult:
         self.execution_error: str | None = None
         self.infrastructure_error: bool = False
         self.elapsed_seconds: float = 0.0
+        # Reporting receipt only; never participates in verdict or execution.
+        self.reproduction: dict = {}
 
     @property
     def success(self) -> bool:
@@ -427,6 +431,48 @@ def _run_command(cmd: list[str], timeout: int, cwd: str = None) -> tuple[str, st
         return "", f"无法启动命令 {cmd[0]}：{exc}", 127, False
 
 
+def _staged_artifacts(work_dir: str, source_file: str | None) -> dict:
+    """Snapshot files already staged by the existing harness before cleanup.
+
+    Keep the target's hash/name, not another full copy of repository source.
+    Recording failure must never change whether a test executes.
+    """
+    receipt = {"artifacts": []}
+    source_name = os.path.basename(source_file) if source_file else None
+    try:
+        for root, directories, files in os.walk(work_dir):
+            directories.sort()
+            for filename in sorted(files):
+                path = os.path.join(root, filename)
+                relative = os.path.relpath(path, work_dir)
+                if os.path.islink(path):
+                    continue
+                if relative == source_name:
+                    with open(path, "rb") as handle:
+                        receipt["source"] = {"filename": relative,
+                                             "sha256": hashlib.file_digest(handle, "sha256").hexdigest()}
+                    continue
+                with open_utf8(path) as handle:
+                    receipt["artifacts"].append({"filename": relative, "content": handle.read()})
+    except (OSError, UnicodeError) as exc:
+        receipt["capture_error"] = f"暂存产物记录不完整：{type(exc).__name__}"
+    return receipt
+
+
+def _run_recorded_command(result: DockerExecutionResult, stage: str,
+                          cmd: list[str], timeout: int, cwd: str = None):
+    """Preserve an existing command's result without changing its behavior."""
+    outcome = _run_command(cmd, timeout=timeout, cwd=cwd)
+    stdout, stderr, code, timed_out = outcome
+    result.reproduction.setdefault("commands", []).append({
+        "stage": stage, "argv": list(cmd), "cwd": cwd,
+        "exit_code": code, "timed_out": timed_out,
+        "stdout": bounded_diagnostic(stdout, 12000),
+        "stderr": bounded_diagnostic(stderr, 12000),
+    })
+    return outcome
+
+
 def run_single_container(
     generation: dict,
     finding_id: str,
@@ -469,6 +515,7 @@ def run_single_container(
 
     try:
         _write_test_files(work_dir, generation, source_file=source_file)
+        receipt = _staged_artifacts(work_dir, source_file)
 
         if generation.get("docker_compose") and generation.get("needs_attacker_server"):
             # Multi-service: use docker compose with explicit project name
@@ -480,6 +527,7 @@ def run_single_container(
             # Single container: docker build + run
             result = _run_single(work_dir, image_tag, network_name,
                                  container_timeout, build_timeout)
+        result.reproduction.update(receipt)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         result.execution_error = f"测试文件准备失败：{exc}"
     finally:
@@ -503,8 +551,8 @@ def _run_single(
     result = DockerExecutionResult()
 
     # Build
-    stdout, stderr, code, timed_out = _run_command(
-        ["docker", "build", "-t", image_tag, "."],
+    stdout, stderr, code, timed_out = _run_recorded_command(
+        result, "build", ["docker", "build", "-t", image_tag, "."],
         timeout=build_timeout,
         cwd=work_dir,
     )
@@ -525,8 +573,8 @@ def _run_single(
     # tests still work over loopback. (No `docker network create` needed for this path.)
     # RESIDUAL: build-time RUN egress is still open — see _sanitize_compose. Hardening,
     # not a vuln fix. The multi-service path uses an internal compose network instead.
-    stdout, stderr, code, timed_out = _run_command(
-        [
+    stdout, stderr, code, timed_out = _run_recorded_command(
+        result, "run", [
             "docker", "run",
             "--rm",
             "--network", "none",
@@ -584,8 +632,8 @@ def _run_compose(
     compose_base = ["docker", "compose", "-p", project_name]
 
     # Build all services
-    stdout, stderr, code, timed_out = _run_command(
-        compose_base + ["build"],
+    stdout, stderr, code, timed_out = _run_recorded_command(
+        result, "build", compose_base + ["build"],
         timeout=build_timeout,
         cwd=work_dir,
     )
@@ -613,16 +661,16 @@ def _run_compose(
         return result
 
     # Start services
-    _run_command(
-        compose_base + ["up", "-d"],
+    _run_recorded_command(
+        result, "start", compose_base + ["up", "-d"],
         timeout=60,
         cwd=work_dir,
     )
 
     try:
         # Wait for the test container to exit (it should be the main service)
-        stdout, stderr, code, timed_out = _run_command(
-            compose_base + ["logs", "--no-log-prefix", "-f", "test"],
+        stdout, stderr, code, timed_out = _run_recorded_command(
+            result, "observe", compose_base + ["logs", "--no-log-prefix", "-f", "test"],
             timeout=container_timeout,
             cwd=work_dir,
         )

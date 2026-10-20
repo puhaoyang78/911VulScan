@@ -48,6 +48,8 @@ class DynamicTestResult:
     # #314: the run-stable identity from the pipeline finding — the join
     # key the report merge verifies (VULN-NNN is positional, not stable).
     identity_key: str = ""
+    # Optional, observational only: actual staged files and command outcomes.
+    reproduction: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = {
@@ -75,6 +77,8 @@ class DynamicTestResult:
                if self.unpriced_cache_models else {}),
             "retry_count": self.retry_count,
         }
+        if self.reproduction:
+            d["reproduction"] = self.reproduction
         if self.identity_key:
             d["identity_key"] = self.identity_key
         return d

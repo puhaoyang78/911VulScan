@@ -31,6 +31,7 @@ import json
 import os
 from utilities.file_io import normalize_results, read_json
 from report.localization import display_label
+from report.details import dynamic_for_result, finding_fields, load_dynamic_by_route
 
 from core.verdict_taxonomy import (SEVERITIES as _SEVERITIES, SEVERITY_FINDING_VERDICTS,
                                   severity_display_verdict)
@@ -134,7 +135,8 @@ def get_stage1_verdict(result: dict) -> str:
     survives here while the HTML/CLI displays fold it to inconclusive's
     synonym via core.verdict_taxonomy.fold_legacy_finding; nothing
     programmatic recomputes buckets from the CSV)."""
-    verification = result.get('verification', {})
+    verification = result.get('verification')
+    verification = verification if isinstance(verification, dict) else {}
     verification_note = result.get('verification_note', '')
 
     # If Stage 2 disagreed, extract original from verification_note.
@@ -192,6 +194,8 @@ def export_csv(experiment_path: str, dataset_path: str, output_path: str):
     # as defense-in-depth).
     normalize_results(experiment)
     dataset = load_json(dataset_path)
+    from report.reproduction import render_reproduction
+    dynamic_by_route = load_dynamic_by_route(experiment_path)
 
     # Build unit lookup by ID
     units_by_id = {}
@@ -249,7 +253,8 @@ def export_csv(experiment_path: str, dataset_path: str, output_path: str):
             or '')
 
         # Get verification data from experiment result
-        verification = result.get('verification') or {}
+        verification = result.get('verification')
+        verification = verification if isinstance(verification, dict) else {}
 
         # Determine Stage 1 verdict (before Stage 2 modification)
         stage1_verdict = get_stage1_verdict(result)
@@ -259,7 +264,9 @@ def export_csv(experiment_path: str, dataset_path: str, output_path: str):
         # raw by design — see get_stage1_verdict's docstring (#623)
         stage2_verdict = result.get('finding') or result.get('verdict', '')
 
-        # Build row
+        details = finding_fields(result, unit_code)
+        dynamic = dynamic_for_result(result, dynamic_by_route)
+        # Appenditive columns keep the existing final-verdict column intact.
         row = {
             'file': extract_file(route_key),
             'unit_id': route_key,
@@ -275,7 +282,11 @@ def export_csv(experiment_path: str, dataset_path: str, output_path: str):
             'stage1_verdict': stage1_verdict,
             'stage1_justification': result.get('reasoning', ''),
             'stage1_confidence': result.get('confidence', ''),
-            'agentic_classification': agentic_classification
+            'agentic_classification': agentic_classification,
+            **details,
+            'suggested_fix_status': 'proposed_unvalidated' if details["suggested_fix"] else '',
+            'dynamic_test_status': dynamic.get('status', ''),
+            'reproduction': render_reproduction(dynamic) if dynamic else '',
         }
         # Neutralize CSV / formula injection on every cell before writing.
         rows.append({k: _csv_safe(v) for k, v in row.items()})
@@ -293,7 +304,19 @@ def export_csv(experiment_path: str, dataset_path: str, output_path: str):
         'stage1_verdict',
         'stage1_justification',
         'stage1_confidence',
-        'agentic_classification'
+        'agentic_classification',
+        'description',
+        'cwe_id',
+        'cwe_name',
+        'impact',
+        'remediation',
+        'vulnerable_code',
+        'suggested_fix',
+        'steps_to_reproduce',
+        'stage2_verification',
+        'suggested_fix_status',
+        'dynamic_test_status',
+        'reproduction',
     ]
 
     diff = _load_diff_block(experiment_path)

@@ -287,6 +287,12 @@ def merge_dynamic_results(pipeline_data: dict, pipeline_path: str) -> dict:
         # details, evidence, the date-stamped ATTEMPT) without the
         # verification claim — a template cannot render a failed test as a
         # verification by omission.
+        # Preserve existing PoC/configuration and execution receipts through the
+        # same identity gate as the verdict. Do not infer missing observations.
+        artifacts = {key: r[key] for key in ("test_code", "dockerfile", "docker_compose")
+                     if isinstance(r.get(key), str) and r[key]}
+        if isinstance(r.get("reproduction"), dict):
+            artifacts["reproduction"] = r["reproduction"]
         if status == "CONFIRMED":
             finding["dynamic_testing"] = {
                 "status": status,
@@ -295,6 +301,7 @@ def merge_dynamic_results(pipeline_data: dict, pipeline_path: str) -> dict:
                 "tested": f"Docker 容器，{date_str}",
                 # the join is auditable after the fact
                 "identity_key": r_key,
+                **artifacts,
             }
             merged_count += 1
         else:
@@ -306,6 +313,7 @@ def merge_dynamic_results(pipeline_data: dict, pipeline_path: str) -> dict:
                 # that ran and confirmed. `attempted` carries the date.
                 "attempted": date_str,
                 "identity_key": r_key,
+                **artifacts,
             }
             attempted_count += 1
 
@@ -330,6 +338,14 @@ def merge_dynamic_results(pipeline_data: dict, pipeline_path: str) -> dict:
               f"旧版结果文件中缺少 identity_key；请重新运行动态"
               f"测试以重新生成结果", file=sys.stderr)
     return pipeline_data
+
+
+def _dynamic_summary(value):
+    """Only verdict metadata goes to the LLM; raw proof is rendered verbatim."""
+    if not isinstance(value, dict):
+        return value
+    return {key: item for key, item in value.items()
+            if key not in {"reproduction", "test_code", "dockerfile", "docker_compose", "evidence"}}
 
 
 def _compact_for_summary(pipeline_data: dict) -> dict:
@@ -381,11 +397,11 @@ def _compact_for_summary(pipeline_data: dict) -> dict:
             # model-guessed, not read from the scan.
             "severity": f.get("severity"),
             "severity_source": f.get("severity_source"),
-            "dynamic_testing": f.get("dynamic_testing"),
+            "dynamic_testing": _dynamic_summary(f.get("dynamic_testing")),
             # #319 (the e2e-caught gap): the ATTEMPTED block must reach the
             # summary LLM too — without it a failed test rendered "static"
             # (safe, but the failure was invisible to the reader).
-            "dynamic_testing_attempted": f.get("dynamic_testing_attempted"),
+            "dynamic_testing_attempted": _dynamic_summary(f.get("dynamic_testing_attempted")),
             "impact": f.get("impact"),
         })
     return compact
@@ -1033,6 +1049,9 @@ def generate_disclosure(
         if k not in ("vulnerable_code_section", "vulnerable_code")
     }
     payload["product_name"] = product_name
+    for key in ("dynamic_testing", "dynamic_testing_attempted"):
+        if key in payload:
+            payload[key] = _dynamic_summary(payload[key])
 
     user_prompt = (
         load_prompt("disclosure")
@@ -1066,6 +1085,14 @@ def generate_disclosure(
     # never populated — so an unadjudicated Stage-1 candidate reads identically
     # to an attacker-simulation-confirmed finding.
     final_output = _disclosure_verdict_header(vulnerability_data) + final_output
+    # Keep the raw execution receipt outside model generation: no extra tokens,
+    # no paraphrased logs, and no invented build/trigger instructions.
+    from report.reproduction import render_reproduction
+    dynamic_record = vulnerability_data.get("dynamic_testing")
+    if not isinstance(dynamic_record, dict):
+        dynamic_record = vulnerability_data.get("dynamic_testing_attempted")
+    if isinstance(dynamic_record, dict):
+        final_output += "\n\n" + render_reproduction(dynamic_record)
 
     return final_output, _extract_usage(
         result.input_tokens,
