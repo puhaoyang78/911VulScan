@@ -11,6 +11,7 @@ def generate_report(
     results: list[DynamicTestResult],
     repo_name: str = "unknown",
     total_cost_usd: float = 0.0,
+    total_unpriced: "list[str] | None" = None,
 ) -> str:
     """Generate a DYNAMIC_TEST_RESULTS.md markdown report.
 
@@ -42,7 +43,12 @@ def generate_report(
         f"**日期：** {now}",
         f"**已测试的发现项总数：** {total - skipped}",
         f"**已跳过（该语言没有 Docker 模板）：** {skipped}",
-        f"**预估总费用：** ${total_cost_usd:.4f}",
+        f"**预估总费用：** ${total_cost_usd:.4f}"
+        + ((f" — 费用统计不完整 / run cost incomplete: {len(total_unpriced)} unpriced "
+            f"model(s) — this figure may exclude their spend"
+            if total_unpriced is not None else
+            f" — 费用统计不完整 / INCOMPLETE: {len({m for r in results for m in (r.unpriced_models or [])})} unpriced model(s) (an under-count)"
+            if any(r.unpriced_models for r in results) else "")),
         "",
         "费用按配置中的模型费率估算，最终以供应商账单为准。",
         "",
@@ -78,8 +84,11 @@ def generate_report(
                 f"### {r.finding_id}",
                 "",
                 f"**状态：** {display_label(r.status)}",
+                f"**详情：** {r.details}",
                 f"**耗时：** {r.elapsed_seconds:.1f} 秒",
-                f"**生成预估费用：** ${r.generation_cost_usd:.4f}",
+                f"**生成预估费用：** ${r.generation_cost_usd:.4f}"
+                + (f" — 费用统计不完整 / INCOMPLETE: {len(r.unpriced_models or [])} unpriced model(s) (an under-count)"
+                   if getattr(r, "unpriced_models", None) else ""),
                 "",
             ])
 

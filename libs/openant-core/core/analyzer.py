@@ -21,8 +21,10 @@ from datetime import datetime
 from pathlib import Path
 
 from core.schemas import AnalyzeResult, AnalysisMetrics
+from utilities.llm import LLMAuthError, LLMConfigError
 from core import tracking
-from core.checkpoint import StepCheckpoint, analyze_result_is_error
+from core.checkpoint import (StepCheckpoint, analyze_result_is_error,
+                             build_resume_delta)
 from core.progress import ProgressReporter
 
 # Import existing analysis machinery
@@ -40,7 +42,7 @@ from utilities.llm import (
 from utilities.file_io import read_json, write_json
 from utilities.json_corrector import JSONCorrector
 from utilities.llm import DEFAULT_MAX_TOKENS
-from utilities.context_enhancer import _build_error_info
+from utilities.context_enhancer import _build_error_info, _summary_error_bucket
 from utilities.rate_limiter import (
     get_rate_limiter,
     is_budget_exhausted_error,
@@ -227,6 +229,17 @@ def _process_unit(binding: PhaseBinding, unit, index, json_corrector, app_contex
             "usage": tracker.get_unit_usage(),
         }
 
+    except (LLMAuthError, LLMConfigError):
+        # #696: the designed-abort classes re-raise — the llm_reachability
+        # parity anchor ("Auth failures are fatal and recur on every batch —
+        # surface them instead of burying them as a per-batch 'failed'
+        # line"). A rejected thinking policy (LLMConfigError) recurs on
+        # every unit the same way an auth failure does: converting either
+        # into a per-unit ERROR row lets an all-fatal scan read green
+        # (status success, exit 0) while every unit failed. The re-raise
+        # aborts the phase; step_context marks the step error and the
+        # envelope/exit contract follows.
+        raise
     except Exception as e:
         elapsed = time.monotonic() - start
         worker = threading.current_thread().name
@@ -265,8 +278,10 @@ def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, wo
     Supports checkpoint/resume via the checkpoint parameter.
 
     Args:
-        summary_callback: Optional callable(finding, usage=None) called from
-            main thread after each unit completes. Used for _summary.json updates.
+        summary_callback: Optional callable(finding, usage=None,
+            error_msg=None, error_info=None) called from main thread after
+            each unit completes. Used for _summary.json updates (#800:
+            the error args carry the material the breakdown classifies).
 
     Returns (results_list, code_by_route_dict) in original unit order.
     """
@@ -317,6 +332,11 @@ def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, wo
     # same 3/2 shape, a different trigger. (finding_verifier.py computes the
     # same quantity the same way: remaining = len(results_to_verify).)
     _done = total - len(units_to_process)
+    # #685: no cost_baseline holder here BY CALL ORDER, not by omission —
+    # run_analysis takes the #281 post-injection re-snapshot before it
+    # invokes _run_detection, so this reporter's own construction-time
+    # snapshot is already past the restored spend. Pinned by
+    # tests/test_issue685_progress_step_own_cost.py.
     progress = ProgressReporter("Detect", total, tracker=tracker, completed=_done)
 
     mode = "sequential" if workers <= 1 else f"parallel ({workers} workers)"
@@ -347,7 +367,9 @@ def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, wo
                 results[i] = out["result"]
                 code_by_route[out["route_key"]] = out["code_for_route"]
                 if summary_callback:
-                    summary_callback(out["finding"], usage=out.get("usage"))
+                    summary_callback(out["finding"], usage=out.get("usage"),
+                                     error_msg=out["result"].get("error"),
+                                     error_info=out["result"].get("error_info"))
                 progress.report(
                     out["result"].get("unit_id", f"unit_{i}"),
                     detail=out["finding"],
@@ -381,7 +403,9 @@ def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, wo
             results[idx] = out["result"]
             code_by_route[out["route_key"]] = out["code_for_route"]
             if summary_callback:
-                summary_callback(out["finding"], usage=out.get("usage"))
+                summary_callback(out["finding"], usage=out.get("usage"),
+                                 error_msg=out["result"].get("error"),
+                                 error_info=out["result"].get("error_info"))
             worker = out.get("worker", "?")
             progress.report(
                 out["result"].get("unit_id", f"unit_{idx}"),
@@ -395,6 +419,25 @@ def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, wo
         print(_interrupt_report(results, total), file=sys.stderr, flush=True)
         progress.finish()
         raise  # #313: see the sequential handler note
+    except (LLMAuthError, LLMConfigError):
+        # #696 (the fable-hunt zombie catch): the DESIGNED-ABORT classes —
+        # every pending unit is a doomed API call against the same bad
+        # key/policy, so cancel the unstarted (the KI arm's mirror) and
+        # never swallow the raise.
+        executor.shutdown(wait=False, cancel_futures=True)
+        progress.finish()
+        raise
+    except Exception:
+        # #696 (the in-suite wedge catch — the patch-pipeline regression):
+        # a GENERIC exception must keep the base contract — the pending
+        # futures' checkpoint saves COMPLETE (shutdown WITHOUT
+        # cancel_futures), because the checkpointed pipeline's resume
+        # machinery polls for them; cancelling them wedged the pipeline's
+        # retry loop. The raise still aborts the phase; step_context marks
+        # the step error; the envelope/exit contract follows.
+        executor.shutdown(wait=False)
+        progress.finish()
+        raise
     else:
         executor.shutdown(wait=False)
 
@@ -477,7 +520,10 @@ def _seed_summary(existing: dict, unit_ids: frozenset | set | None = None,
     spend (the test pins the consistency both ways).
 
     Returns: completed, input_tokens, output_tokens, cost_usd,
-    unpriced_models (the #216 marker).
+    unpriced_models (the #216 marker), resume_delta (the #802 kept-set
+    delta: the dropped foreign rows classified by their prior verdicts —
+    PRESENT-ONLY: the key is absent when nothing dropped or the population
+    is unconstrained).
     """
     completed = 0
     input_tokens = 0
@@ -490,8 +536,17 @@ def _seed_summary(existing: dict, unit_ids: frozenset | set | None = None,
     # the resumed phase reported a complete cost after cache-unpriced spend.
     unpriced_cache: set = set()
     _unit_by_id = {u.get("id"): u for u in (units or [])}
+    # #802: the foreign rows — checkpointed units NOT in this run's
+    # population — were skipped "counted nowhere" (the #316/#324 famD
+    # exclusion). A row that ERRORED in the prior run is the exact work a
+    # resume exists to finish; when it leaves scope the headline error
+    # count falls and reads as repair. The delta records what left, with
+    # prior verdicts, so the absorption is visible.
+    _dropped_rows: list[tuple] = []
     for _id, _cp in existing.items():
         if unit_ids is not None and _id not in unit_ids:
+            _dropped_rows.append(
+                (_id, analyze_result_is_error(_cp.get("result") or {})))
             continue
         # #611: a STALE row (sentinel-stamped, re-enhancement migrated it)
         # is re-analyzed — seeding it as completed double-counts on the
@@ -513,7 +568,8 @@ def _seed_summary(existing: dict, unit_ids: frozenset | set | None = None,
         _u, _c = unpriced_kinds_from(_usage)
         unpriced.update(_u)
         unpriced_cache.update(_c)
-    return {
+    _resume_delta = build_resume_delta(_dropped_rows)
+    seed = {
         "completed": completed,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -521,6 +577,11 @@ def _seed_summary(existing: dict, unit_ids: frozenset | set | None = None,
         "unpriced_models": unpriced,
         "unpriced_cache_models": unpriced_cache,
     }
+    if _resume_delta is not None:
+        # #802: present-only in the seed too (the callers thread it the
+        # same way into _summary.json).
+        seed["resume_delta"] = _resume_delta
+    return seed
 
 
 def _count_verdicts(results):
@@ -840,6 +901,13 @@ def run_analysis(
     _summary_cost_usd = _seed["cost_usd"]
     _summary_unpriced: set[str] = _seed["unpriced_models"]
     _summary_unpriced_cache: set[str] = _seed["unpriced_cache_models"]
+    # #802: the kept-set delta — the prior run's checkpoint rows whose
+    # units are not in THIS run's population, classified by prior verdict.
+    # Threaded into every _summary.json write (present-only) and the
+    # AnalyzeResult, so a resume that absorbs the prior run's unfinished
+    # work reports what left instead of reading clean while the error
+    # count falls.
+    _resume_delta = _seed.get("resume_delta")
 
     def _usage_dict():
         usage = {"input_tokens": _summary_input_tokens,
@@ -887,16 +955,25 @@ def run_analysis(
     # Write initial summary
     checkpoint.write_summary(total, _summary_completed, _summary_errors,
                              _summary_error_breakdown, phase="in_progress",
-                             usage=_usage_dict(), incomplete=_summary_incomplete)
+                             usage=_usage_dict(), incomplete=_summary_incomplete,
+                             resume_delta=_resume_delta)
 
-    def _summary_callback(finding, usage=None):
+    def _summary_callback(finding, usage=None, error_msg=None,
+                         error_info=None):
         """Update summary counters after each unit. Called from main thread."""
         nonlocal _summary_completed, _summary_incomplete, _summary_errors
         nonlocal _summary_error_breakdown
         nonlocal _summary_input_tokens, _summary_output_tokens, _summary_cost_usd
         if finding == "error":
             _summary_errors += 1
-            _summary_error_breakdown["api"] = _summary_error_breakdown.get("api", 0) + 1
+            # #800: the taxonomy split — a permanent context-overflow 400
+            # files under its own class, distinct from a transient 429 (the
+            # hardcoded "api" bucket made the two indistinguishable in
+            # _summary.json, and the two demand opposite operator
+            # responses: never retry vs. retry later).
+            _bucket = _summary_error_bucket(error_msg, error_info)
+            _summary_error_breakdown[_bucket] = \
+                _summary_error_breakdown.get(_bucket, 0) + 1
         else:
             # #293 adjudication: "inconclusive"/"insufficient_context" are
             # completed verdicts (taxonomy), not incomplete — no third state.
@@ -907,7 +984,8 @@ def run_analysis(
             _summary_cost_usd += usage.get("cost_usd", 0.0)
         checkpoint.write_summary(total, _summary_completed, _summary_errors,
                                  _summary_error_breakdown, phase="in_progress",
-                                 usage=_usage_dict(), incomplete=_summary_incomplete)
+                                 usage=_usage_dict(), incomplete=_summary_incomplete,
+                                 resume_delta=_resume_delta)
 
     # --- Stage 1: Detection ---
     results, code_by_route = _run_detection(
@@ -975,6 +1053,25 @@ def run_analysis(
         for i in retryable_indices:
             unit = units[i]
             _cap = budget_retry_cap(i, _budget_set, binding)
+            # #800 (r1-F1): the FIRST-ATTEMPT class must retire with the
+            # first attempt — capture the bucket BEFORE the retry
+            # overwrites the result (the storm-then-overflow pattern: a
+            # 429 first attempt retried into a permanent context-overflow
+            # 400 must file as context_overflow, the residual class the
+            # operator needs — never as the transient first-attempt
+            # class; the enhance phase's own retry already retires its
+            # bucket, the analyzer's loop did not).
+            _prev_bucket = _summary_error_bucket(
+                results[i].get("error"), results[i].get("error_info"))
+            if _prev_bucket in _summary_error_breakdown:
+                _n = _summary_error_breakdown[_prev_bucket] - 1
+                if _n > 0:
+                    _summary_error_breakdown[_prev_bucket] = _n
+                else:
+                    # the enhance phase's own retire precedent: a zeroed
+                    # count drops the key (a "rate_limit: 0" artifact
+                    # invites the question the split was meant to answer)
+                    _summary_error_breakdown.pop(_prev_bucket, None)
             out = _process_unit(binding, unit, i, json_corrector, app_context,
                                 max_tokens=_cap)
             results[i] = out["result"]
@@ -986,13 +1083,24 @@ def run_analysis(
             if out["finding"] != "error":
                 _summary_errors = max(0, _summary_errors - 1)
                 _summary_completed += 1
+            else:
+                # the retry errored again: re-file under the RETRY's
+                # class (the first-attempt bucket already retired above;
+                # the error COUNT stays — the unit never left the error
+                # side)
+                _new_bucket = _summary_error_bucket(
+                    out["result"].get("error"),
+                    out["result"].get("error_info"))
+                _summary_error_breakdown[_new_bucket] = \
+                    _summary_error_breakdown.get(_new_bucket, 0) + 1
             retry_usage = out.get("usage", {})
             _summary_input_tokens += retry_usage.get("input_tokens", 0)
             _summary_output_tokens += retry_usage.get("output_tokens", 0)
             _summary_cost_usd += retry_usage.get("cost_usd", 0.0)
             checkpoint.write_summary(total, _summary_completed, _summary_errors,
                                      _summary_error_breakdown, phase="in_progress",
-                                     usage=_usage_dict(), incomplete=_summary_incomplete)
+                                     usage=_usage_dict(), incomplete=_summary_incomplete,
+                                 resume_delta=_resume_delta)
 
             # Update checkpoint
             if checkpoint is not None:
@@ -1012,7 +1120,8 @@ def run_analysis(
     # Write final summary with phase="done"
     checkpoint.write_summary(total, _summary_completed, _summary_errors,
                              _summary_error_breakdown, phase="done",
-                             usage=_usage_dict(), incomplete=_summary_incomplete)
+                             usage=_usage_dict(), incomplete=_summary_incomplete,
+                             resume_delta=_resume_delta)
 
     tracking.log_usage("Stage 1", _phase_baseline)
 
@@ -1091,4 +1200,7 @@ def run_analysis(
         results_path=results_path,
         metrics=metrics,
         usage=usage,
+        # #802: the kept-set delta rides the result (the scan-level
+        # consumer's field; present-only in to_dict).
+        resume_delta=_resume_delta,
     )

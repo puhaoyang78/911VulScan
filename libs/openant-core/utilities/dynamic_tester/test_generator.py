@@ -644,7 +644,11 @@ def generate_tests_batch(
         results = []
         for i, finding in enumerate(findings):
             _finding, result, cost, _worker = _generate_one(finding, repo_info, binding, tracker)
-            print(f"[动态测试] {i+1}/{total}  ${cost:.2f}", file=sys.stderr, flush=True)
+            _ids = tracker.cost_incomplete_models()
+            print(f"[动态测试] {i+1}/{total}  ${cost:.2f}"
+                  + (f" (费用统计不完整 / run cost incomplete: {len(_ids)} unpriced model(s))"
+                     if _ids else ""),
+                  file=sys.stderr, flush=True)
             results.append((_finding, result, cost))
         return results
 
@@ -656,7 +660,12 @@ def generate_tests_batch(
         for future in as_completed(futures):
             _finding, result, cost, worker = future.result()
             completed += 1
-            print(f"[动态测试] {completed}/{total}  ${cost:.2f}  [{worker}]", file=sys.stderr, flush=True)
+            _ids = tracker.cost_incomplete_models()
+            print(f"[动态测试] {completed}/{total}  ${cost:.2f}"
+                  + (f" (费用统计不完整 / run cost incomplete: {len(_ids)} unpriced model(s))"
+                     if _ids else "")
+                  + f"  [{worker}]",
+                  file=sys.stderr, flush=True)
             results.append((_finding, result, cost))
 
     return results

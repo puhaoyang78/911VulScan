@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from .context_enhancer import _build_error_info, _summary_error_bucket
 from .llm_client import (TokenTracker, error_path_turn,
                          get_global_tracker, incomplete_markers,
                          turn_has_spend, unpriced_kinds_from)
@@ -56,6 +57,7 @@ from .llm import (
 # simple_text's default — a private 4096 here is how PR #242's raise never
 # reached verify on any route.
 from .llm.helpers import DEFAULT_MAX_TOKENS
+from .json_extract import extract_json_object
 
 # Null logger that discards all messages (used when no logger provided)
 _null_logger = logging.getLogger("null_verifier")
@@ -513,6 +515,9 @@ class FindingVerifier:
         # verbatim (None entries for turns whose provider reported none).
         # Passed to record_call as a list; never summed, never in cost.
         per_turn_usage_details: list = []
+        # #697: the dropped-block per-kind accumulator for this call
+        # (the #625/#660 diagnostic rides every record like the usage does)
+        per_turn_dropped: dict[str, int] = {}
 
         while iterations < MAX_ITERATIONS:
             iterations += 1
@@ -578,12 +583,19 @@ class FindingVerifier:
                         pricing=lookup_pricing(self.binding),
                         usage_details=turn_details,
                         turns=len(turn_details),
+                    dropped_block_kinds=(dict(per_turn_dropped)
+                                       if per_turn_dropped else None),
                     )
                 raise
 
             total_input_tokens += response.input_tokens
             total_output_tokens += response.output_tokens
             per_turn_usage_details.append(response.usage_details)
+            # #697: accumulate the dropped-block per-kind counts per turn
+            if getattr(response, "dropped_block_kinds", None):
+                for _kind, _n in response.dropped_block_kinds.items():
+                    per_turn_dropped[_kind] = (per_turn_dropped.get(_kind, 0)
+                                                + int(_n))
 
             assistant_content = response.content
             stop_reason = response.stop_reason
@@ -594,6 +606,7 @@ class FindingVerifier:
                     assistant_content, finding, iterations,
                     total_input_tokens, total_output_tokens,
                     usage_details=per_turn_usage_details,
+                    dropped_block_kinds=dict(per_turn_dropped) or None,
                 )
                 if result:
                     return result
@@ -617,6 +630,8 @@ class FindingVerifier:
                     pricing=lookup_pricing(self.binding),
                     usage_details=per_turn_usage_details,
                     turns=len(per_turn_usage_details),
+                    dropped_block_kinds=(dict(per_turn_dropped)
+                                       if per_turn_dropped else None),
                 )
                 return VerificationResult(
                     agree=False,
@@ -680,6 +695,8 @@ class FindingVerifier:
                     pricing=lookup_pricing(self.binding),
                     usage_details=per_turn_usage_details,
                     turns=len(per_turn_usage_details),
+                    dropped_block_kinds=(dict(per_turn_dropped)
+                                       if per_turn_dropped else None),
                 )
                 return VerificationResult(
                     agree=False,
@@ -699,6 +716,8 @@ class FindingVerifier:
                     pricing=lookup_pricing(self.binding),
                     usage_details=per_turn_usage_details,
                     turns=len(per_turn_usage_details),
+                    dropped_block_kinds=(dict(per_turn_dropped)
+                                       if per_turn_dropped else None),
                 )
                 return self._parse_finish_result(
                     finish_result, finding, iterations,
@@ -723,6 +742,8 @@ class FindingVerifier:
                     pricing=lookup_pricing(self.binding),
                     usage_details=per_turn_usage_details,
                     turns=len(per_turn_usage_details),
+                    dropped_block_kinds=(dict(per_turn_dropped)
+                                       if per_turn_dropped else None),
                 )
                 # Fail-safe (R4-7): see the :380 path above. Don't auto-agree;
                 # keep the Stage-1 verdict surfaced for human triage.
@@ -745,6 +766,8 @@ class FindingVerifier:
             pricing=lookup_pricing(self.binding),
             usage_details=per_turn_usage_details,
             turns=len(per_turn_usage_details),
+                    dropped_block_kinds=(dict(per_turn_dropped)
+                                       if per_turn_dropped else None),
         )
         # Fail-safe (R4-7): exhausting the iteration budget is not agreement.
         # Don't auto-agree; keep the Stage-1 verdict surfaced for human triage.
@@ -824,8 +847,13 @@ class FindingVerifier:
         _restored_ok = 0
         _restored_incomplete = 0
         _errored_retried = 0
+        # #802: the current population's keys — the verify census keys the
+        # delta on these (the checkpoint rows NOT in this batch are the
+        # prior run's rows whose findings left scope).
+        _current_keys: set = set()
         for r in results:
             key = r.get("unit_id") or r.get("route_key", "unknown")
+            _current_keys.add(key)
             cp_data = checkpointed.get(key)
             if cp_data and not _cp_is_error(cp_data):
                 # Restore verification data from checkpoint
@@ -887,6 +915,23 @@ class FindingVerifier:
             _summary_unpriced.update(_u)
             _summary_unpriced_cache.update(_c)
 
+        # #802: the kept-set delta — the verify leg's foreign rows
+        # (checkpoint keys NOT in this batch) were never visited: a prior
+        # run's ERRORED verify row whose finding left scope is unfinished
+        # work silently absorbed (the same 88-casualty class the analyze
+        # and enhance legs report). Classify each dropped row by THIS
+        # phase's own errored-row predicate and thread the block into
+        # every summary write, present-only.
+        _resume_delta = None
+        if checkpoint is not None:
+            from core.checkpoint import build_resume_delta
+            _dropped_rows = [
+                (_key, _cp_is_error(_cp))
+                for _key, _cp in checkpointed.items()
+                if _key not in _current_keys
+            ]
+            _resume_delta = build_resume_delta(_dropped_rows)
+
         def _usage_dict():
             usage = {"input_tokens": _summary_input_tokens,
                      "output_tokens": _summary_output_tokens,
@@ -919,16 +964,24 @@ class FindingVerifier:
         if checkpoint is not None:
             checkpoint.write_summary(total, _summary_completed, _summary_errors,
                                      _summary_error_breakdown, phase="in_progress",
-                                     usage=_usage_dict(), incomplete=_summary_incomplete)
+                                     usage=_usage_dict(), incomplete=_summary_incomplete,
+                                     resume_delta=_resume_delta)
 
-        def _summary_callback(detail, usage=None):
+        def _summary_callback(detail, usage=None, error_msg=None,
+                             error_info=None):
             """Update summary counters after each unit. Called from main thread."""
             nonlocal _summary_completed, _summary_incomplete, _summary_errors
             nonlocal _summary_error_breakdown
             nonlocal _summary_input_tokens, _summary_output_tokens, _summary_cost_usd
             if detail == "error":
                 _summary_errors += 1
-                _summary_error_breakdown["api"] = _summary_error_breakdown.get("api", 0) + 1
+                # #800: the taxonomy split — the analyze sibling's shape
+                # (a context-overflow 400 files under its own class,
+                # distinct from a transient 429; the hardcoded "api"
+                # bucket made the two indistinguishable).
+                _bucket = _summary_error_bucket(error_msg, error_info)
+                _summary_error_breakdown[_bucket] = \
+                    _summary_error_breakdown.get(_bucket, 0) + 1
             elif detail.startswith("incomplete"):
                 # #293: the third state — the loop never reached a verdict.
                 # _verify_one tags incomplete units "incomplete:<finding>"
@@ -959,7 +1012,8 @@ class FindingVerifier:
             if checkpoint is not None:
                 checkpoint.write_summary(total, _summary_completed, _summary_errors,
                                          _summary_error_breakdown, phase="in_progress",
-                                         usage=_usage_dict(), incomplete=_summary_incomplete)
+                                         usage=_usage_dict(), incomplete=_summary_incomplete,
+                                         resume_delta=_resume_delta)
 
         remaining = len(results_to_verify)
         # #542 (the #435 family, PR #472's verify sibling): "already done"
@@ -986,7 +1040,8 @@ class FindingVerifier:
         if checkpoint is not None:
             checkpoint.write_summary(total, _summary_completed, _summary_errors,
                                      _summary_error_breakdown, phase="done",
-                                     usage=_usage_dict(), incomplete=_summary_incomplete)
+                                     usage=_usage_dict(), incomplete=_summary_incomplete,
+                                     resume_delta=_resume_delta)
 
         # Step 2: Consistency cross-check (barrier — needs all results)
         results = self._check_consistency(results, code_by_route)
@@ -1061,6 +1116,11 @@ class FindingVerifier:
             # NEVER read as safe — it is unverified and needs manual review.
             err_msg = f"{type(e).__name__}: {e}"
             result["error"] = err_msg
+            # #800 (r1-F2): the structured taxonomy on the verify path
+            # too — analyze's results carry error_info (the #663 route);
+            # without it the classifier sees only the string and the
+            # word-bounded codes must carry the class.
+            result["error_info"] = _build_error_info(e)
             # Surface a minimal verification dict marked incomplete so any
             # consumer that branches on ``verification.incomplete`` also treats
             # it as needs-review rather than a clean verdict.
@@ -1104,7 +1164,9 @@ class FindingVerifier:
                         cp_data["usage"] = usage
                     checkpoint.save(key, cp_data)
                 if summary_callback:
-                    summary_callback(detail, usage=usage)
+                    summary_callback(detail, usage=usage,
+                                     error_msg=result.get("error"),
+                                     error_info=result.get("error_info"))
                 if progress_callback:
                     progress_callback(route_key, detail, unit_elapsed)
         except KeyboardInterrupt:
@@ -1145,7 +1207,9 @@ class FindingVerifier:
                         cp_data["usage"] = usage
                     checkpoint.save(key, cp_data)
                 if summary_callback:
-                    summary_callback(detail, usage=usage)
+                    summary_callback(detail, usage=usage,
+                                     error_msg=result.get("error"),
+                                     error_info=result.get("error_info"))
                 if progress_callback:
                     progress_callback(route_key, f"{detail}  [{worker}]", unit_elapsed)
         except KeyboardInterrupt:
@@ -1501,6 +1565,20 @@ class FindingVerifier:
         groups = {}
 
         for result in results:
+            # #744 (the r1-F6 catch): an ESCALATED row (origin inconclusive —
+            # stage2_candidates admitted it carrying a claim) does not join
+            # the pattern groups: its Stage-1 verdict is a different
+            # population from the vulnerable-origin rows, a mixed group
+            # would spend a consistency LLM call on a non-comparison, and
+            # the group's verdict negotiation must never anchor a
+            # vulnerable sibling toward the inconclusive candidate.
+            # #743: the SAFE-disagreement origin is excluded for the same
+            # three reasons — a {vulnerable, escalated-safe} group is a
+            # non-comparison, and the negotiation must never anchor a
+            # vulnerable sibling toward the escalated candidate.
+            _stage1 = str(result.get("stage1_finding", "")).lower()
+            if _stage1 in ("inconclusive", "safe"):
+                continue
             # Extract pattern key from route_key
             route_key = result.get("route_key", "")
 
@@ -1706,6 +1784,7 @@ class FindingVerifier:
         total_input_tokens: int,
         total_output_tokens: int,
         usage_details: list | None = None,
+        dropped_block_kinds: dict | None = None,
     ) -> Optional[VerificationResult]:
         """Try to parse a text response as JSON."""
         for block in assistant_content:
@@ -1724,6 +1803,10 @@ class FindingVerifier:
                         # raising turns — the raising path records at its
                         # own site above).
                         turns=len(usage_details) if usage_details is not None else 1,
+                        # #697: the caller's per-turn accumulation rides this
+                        # record too (present-only).
+                        dropped_block_kinds=(dict(dropped_block_kinds)
+                                             if dropped_block_kinds else None),
                     )
                     return self._parse_finish_result(
                         result, original_finding, iterations,
@@ -1734,13 +1817,12 @@ class FindingVerifier:
 
     def _parse_json_from_text(self, text: str) -> Optional[dict]:
         """Extract JSON object from text, with LLM correction fallback."""
-        try:
-            start = text.find('{')
-            end = text.rfind('}') + 1
-            if start >= 0 and end > start:
-                return json.loads(text[start:end])
-        except json.JSONDecodeError:
-            pass
+        # #673: the shared depth-0 scanner, not a first-{/last-} slice -- a
+        # brace anywhere in the surrounding prose invalidated that span and
+        # sent a perfectly-extractable verification to the paid corrector.
+        recovered = extract_json_object(text)
+        if recovered is not None:
+            return recovered
 
         # Fallback: use LLM to correct malformed JSON. Pass the verifier's
         # `finish` schema so the corrector recovers verifier shape (no verdict)

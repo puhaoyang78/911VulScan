@@ -12,7 +12,7 @@
 
 ## 安装与启动
 
-需要 Go 1.25+、Python 3.11+；JavaScript/TypeScript 解析另需 Node.js。动态验证另需已经启动的 Docker Engine。
+需要 Go 1.26+、Python 3.11+；JavaScript/TypeScript 解析另需 Node.js。动态验证另需已经启动的 Docker Engine。
 
 ```bash
 git clone --branch 911-dev https://github.com/puhaoyang78/911VulScan.git

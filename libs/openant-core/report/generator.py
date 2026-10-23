@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
+from core.verdict_taxonomy import coerce_cwe_id
 from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
 from .schema import validate_pipeline_output, ValidationError
 from .localization import display_label
@@ -706,6 +707,33 @@ def _summary_tables_block(pipeline_data: dict) -> str:
         if rows:
             parts.append("## 扫描结果\n\n| 结果 | 代码单元数 |\n|---|---|\n"
                          + "\n".join(rows) + "\n")
+            # #744 (the r1-F4 catch): the identity block renders BESIDE the
+            # count — the issue's own symptom was 'the summary reports
+            # "Inconclusive | 3" with no identity to review'; the reviewer
+            # is HERE, so the review path is here: each inconclusive row's
+            # file:function + the claim (the CWE / the attack vector), one
+            # line per row, present-only.
+            _inc = results.get("inconclusive_findings")
+            if isinstance(_inc, list) and _inc:
+                _lines = []
+                for _f in _inc:
+                    if not isinstance(_f, dict):
+                        continue
+                    _where = f"{_f.get('file', '?')}:{_f.get('function', '?')}"
+                    _claim = []
+                    _cwe = coerce_cwe_id(_f.get("cwe_id"))
+                    if _cwe:
+                        _claim.append(f"CWE-{_cwe}")
+                    _vec = _f.get("attack_vector")
+                    if isinstance(_vec, str) and _vec.strip():
+                        _claim.append(_vec.strip()[:120])
+                    _lines.append(f"- {_where}"
+                                  + (f" — {'; '.join(_claim)}" if _claim else "")
+                                  + "（建议人工复核 / manual review recommended）")
+                if _lines:
+                    parts.append(
+                        "### 无法确定的发现项 / Inconclusive rows（建议人工复核 / manual review recommended）\n\n"
+                        + "\n".join(_lines) + "\n")
 
     durations = stats.get("durations") or {}
     if durations:

@@ -128,6 +128,20 @@ def simple_completion(
         # #211 pass-through capture: provider detail fields verbatim
         # (never in the cost math — see TokenTracker.record_call).
         usage_details=result.usage_details,
+        # #797 (the r1-F2 catch): the provider's own reported cost,
+        # PRESENT-ONLY — the None path must keep the call shape
+        # byte-identical (duck-typed record_call consumers with
+        # keyword-only signatures exist in the wild; the kwarg must
+        # appear only when there is a cost to carry).
+        **({"provider_cost_usd": result.provider_cost_usd}
+           if result.provider_cost_usd is not None else {}),
+        # #697: the #625/#660 dropped-block diagnostic rides the same
+        # record — present-only, so a call that dropped nothing keeps the
+        # record_call shape byte-identical (the diagnostic reaches the
+        # tracker totals -> the step report -> the scan aggregate; before
+        # #697 it was computed per call and read by nothing).
+        **({"dropped_block_kinds": dict(result.dropped_block_kinds)}
+           if getattr(result, "dropped_block_kinds", None) else {}),
     )
     return result
 

@@ -21,7 +21,8 @@ from pathlib import Path
 
 from core.schemas import ReportResult
 from core.language_registry import fence_for_path
-from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
+from core.verdict_taxonomy import (DISCLOSURE_ELIGIBLE, coerce_cwe_id,
+                                    fold_legacy_finding)
 from core.verdict_taxonomy import (SEVERITIES, SEVERITY_FINDING_VERDICTS,
                                    severity_display_verdict)
 from utilities.child_interp import child_interpreter_env
@@ -393,6 +394,32 @@ def build_pipeline_output(
     all_results = [r for r in experiment.get("results", []) if isinstance(r, dict)]
     code_by_route = experiment.get("code_by_route", {})
     metrics = experiment.get("metrics", {})
+
+    # #744: the INCONCLUSIVE identity surface — the review path. The docs,
+    # the HTML legend, and the remediation guidance all recommend manual
+    # review for this verdict; the pipeline owed them identities, not a
+    # bare count. PRESENT-ONLY: a run with no inconclusive rows writes no
+    # block (no crying wolf on clean runs). The disclosure-drop is
+    # UNCHANGED (a disclosure document is a shipped artifact, not a review
+    # path — this block IS the review path).
+    _inconclusive_findings = []
+    for _r in all_results:
+        # #744 (the r1-F5 catch): fold the legacy INSUFFICIENT_CONTEXT value
+        # (the #623 promise: one function at every counting sink) — a
+        # resume-adopted legacy row counts here exactly as it does in the
+        # metrics, or the block under-reports beside the count.
+        if fold_legacy_finding(
+                str(_r.get("finding") or _r.get("verdict", "")).lower()) \
+                != "inconclusive":
+            continue
+        _rk = _r.get("route_key") or _r.get("unit_id", "unknown")
+        _inconclusive_findings.append({
+            "file": _rk.split(":")[0] if ":" in _rk else "unknown",
+            "function": (_rk.split(":", 1)[1] if ":" in _rk else _rk),
+            "cwe_id": coerce_cwe_id(_r.get("cwe_id", 0)),
+            "attack_vector": str(_r.get("attack_vector") or ""),
+            "reasoning": str(_r.get("reasoning") or ""),
+        })
 
     # Use confirmed_findings if present (verified results), else filter manually
     confirmed = experiment.get("confirmed_findings")
@@ -891,6 +918,9 @@ def build_pipeline_output(
             "safe": metrics.get("safe", 0),
             "protected": metrics.get("protected", 0),
             "inconclusive": metrics.get("inconclusive", 0),
+            # #744: the identity block (present-only — see the extraction above)
+            **({"inconclusive_findings": _inconclusive_findings}
+               if _inconclusive_findings else {}),
             # #423 (wave r1, three axes — the F13 partition): the metrics
             # recount and the disclosure list are TWO populations that
             # deliberately overlap (verifier.py's #284 note keeps
@@ -1101,7 +1131,9 @@ def generate_summary_report(
         f.write(report_text)
 
     print(f"  摘要报告： {output_path}", file=sys.stderr)
-    print(f"  预估费用： ${usage['cost_usd']:.4f} ({usage['total_tokens']:,} tokens)", file=sys.stderr)
+    from core.tracking import cost_marker
+    print(f"  预估费用： ${usage['cost_usd']:.4f} ({usage['total_tokens']:,} tokens)"
+          f"{cost_marker(usage)}", file=sys.stderr)
 
     # Record in global tracker so step_context picks it up
     _record_usage_in_tracker(usage, report_binding)
@@ -1241,7 +1273,9 @@ def generate_disclosure_docs(
     merged_usage = _merge_usage(all_usages) if all_usages else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
 
     print(f"  披露文档：{count} 个文件，目录 {output_dir}", file=sys.stderr)
-    print(f"  预估费用： ${merged_usage['cost_usd']:.4f} ({merged_usage['total_tokens']:,} tokens)", file=sys.stderr)
+    from core.tracking import cost_marker
+    print(f"  预估费用： ${merged_usage['cost_usd']:.4f} ({merged_usage['total_tokens']:,} tokens)"
+          f"{cost_marker(merged_usage)}", file=sys.stderr)
 
     # Record in global tracker so step_context picks it up
     _record_usage_in_tracker(merged_usage, report_binding)

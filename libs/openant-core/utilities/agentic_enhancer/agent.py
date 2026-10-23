@@ -16,6 +16,7 @@ import sys
 from typing import Optional, Set, List
 
 from core.file_boundary import boundary_for_language
+from core.file_boundary import neutralize_boundaries
 from ..llm_client import (TokenTracker, error_path_turn,
                           get_global_tracker, incomplete_markers,
                           record_accounting_error, unit_unpriced_kinds)
@@ -299,6 +300,15 @@ class ContextAgent:
         total_output_tokens = 0
         # #211 pass-through capture: per-turn usage detail dicts, verbatim.
         per_turn_usage_details: list = []
+        # #797: the per-turn PROVIDER-cost accumulator (the issue's
+        # evidence path was agentic): each turn's reported cost sums; None
+        # when no turn reported one (present-only semantics, never a
+        # fabricated 0.0).
+        per_turn_provider_cost: float | None = None
+
+        # #697: the dropped-block per-kind accumulator for this call
+
+        per_turn_dropped: dict[str, int] = {}
 
         while iterations < MAX_ITERATIONS:
             iterations += 1
@@ -375,13 +385,32 @@ class ContextAgent:
                     # rate limit as a non-retryable KeyError.
                     try:
                         turn_details = per_turn_usage_details + turn.entries
+                        # #797 (the r1-F4 catch): the raising turn's OWN
+                        # billed usage has NO cost channel (the unifier's
+                        # error paths attach tokens, never the harvested
+                        # cost) — threading the accumulated provider cost
+                        # here would label the conversation 'provider' while
+                        # that turn's charge is missing (a silent under-
+                        # count; at base the same shape took the LOUD path).
+                        # Fall back to the table/loud path when the raising
+                        # turn billed anything.
+                        _err_provider_cost = (
+                            per_turn_provider_cost
+                            if not (exc_in or exc_out or turn.billed)
+                            else None)
                         call_record = self.tracker.record_call(
                             model=self.binding.model,
                             input_tokens=total_input_tokens + exc_in,
                             output_tokens=total_output_tokens + exc_out,
                             pricing=lookup_pricing(self.binding),
+                            **({"provider_cost_usd": _err_provider_cost}
+                               if _err_provider_cost is not None else {}),
                             usage_details=turn_details,
                             turns=len(turn_details),
+                            # #697 fable-F4: the raising path's record rides
+                            # the per-turn accumulation like every exit.
+                            dropped_block_kinds=(dict(per_turn_dropped)
+                                                 if per_turn_dropped else None),
                         )
                         # the reads live INSIDE the guard's try: a double
                         # returning None from record_call must hit the
@@ -447,6 +476,16 @@ class ContextAgent:
             total_input_tokens += result.input_tokens
             total_output_tokens += result.output_tokens
             per_turn_usage_details.append(result.usage_details)
+            # #797: accumulate the provider's own reported cost per turn
+            if result.provider_cost_usd is not None:
+                per_turn_provider_cost = (
+                    (per_turn_provider_cost or 0.0) + result.provider_cost_usd)
+            # #697: accumulate the dropped-block per-kind counts per turn
+            # (the #625/#660 diagnostic rides every record like the cost does)
+            if getattr(result, "dropped_block_kinds", None):
+                for _kind, _n in result.dropped_block_kinds.items():
+                    per_turn_dropped[_kind] = (per_turn_dropped.get(_kind, 0)
+                                               + int(_n))
 
             assistant_content = result.content
             stop_reason = result.stop_reason
@@ -471,6 +510,9 @@ class ContextAgent:
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     pricing=lookup_pricing(self.binding),
+                    provider_cost_usd=per_turn_provider_cost,
+            dropped_block_kinds=(dict(per_turn_dropped)
+                                 if per_turn_dropped else None),
                     usage_details=per_turn_usage_details,
                     turns=len(per_turn_usage_details),
                 )
@@ -546,6 +588,9 @@ class ContextAgent:
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     pricing=lookup_pricing(self.binding),
+                    provider_cost_usd=per_turn_provider_cost,
+            dropped_block_kinds=(dict(per_turn_dropped)
+                                 if per_turn_dropped else None),
                     usage_details=per_turn_usage_details,
                     turns=len(per_turn_usage_details),
                 )
@@ -576,6 +621,9 @@ class ContextAgent:
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     pricing=lookup_pricing(self.binding),
+                    provider_cost_usd=per_turn_provider_cost,
+            dropped_block_kinds=(dict(per_turn_dropped)
+                                 if per_turn_dropped else None),
                     usage_details=per_turn_usage_details,
                     turns=len(per_turn_usage_details),
                 )
@@ -618,6 +666,9 @@ class ContextAgent:
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     pricing=lookup_pricing(self.binding),
+                    provider_cost_usd=per_turn_provider_cost,
+            dropped_block_kinds=(dict(per_turn_dropped)
+                                 if per_turn_dropped else None),
                     usage_details=per_turn_usage_details,
                     turns=len(per_turn_usage_details),
                 )
@@ -650,6 +701,13 @@ class ContextAgent:
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
             pricing=lookup_pricing(self.binding),
+            # #797 (the r1-F1 catch): the SIXTH record site — a tool-heavy
+            # unit that exhausts MAX_ITERATIONS is the exit a rich agent run
+            # most plausibly takes; the accumulated provider cost must ride
+            # it like every other exit.
+            provider_cost_usd=per_turn_provider_cost,
+            dropped_block_kinds=(dict(per_turn_dropped)
+                                 if per_turn_dropped else None),
             usage_details=per_turn_usage_details,
             turns=len(per_turn_usage_details),
         )
@@ -743,7 +801,13 @@ def enhance_unit_with_agent(
                 func_data = index.get_function(func_id)
 
                 if func_data and func_data.get("code"):
-                    additional_code.append(func_data["code"])
+                    # #723 (T1 round-6, the 8th producer): the joined parts are
+                    # scanned-repo source — a boundary-shaped line in them
+                    # would split the unit at the consumer and relabel the
+                    # payload do-not-analyze. The producers' contract: defang
+                    # every part before it enters the blob.
+                    additional_code.append(
+                        neutralize_boundaries(func_data["code"]))
 
                     # Extract file path from func_id
                     colon_idx = func_id.rfind(":")
