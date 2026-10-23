@@ -92,6 +92,17 @@ func InvokeCtxCaptureEnv(ctx context.Context, pythonPath string, args []string, 
 	return invokeCtxInner(ctx, pythonPath, args, workDir, extraEnv, onLog, true)
 }
 
+// InvokeCtxCaptureEnvTimeout captures stdout with an explicit per-call budget.
+// The positive timeout overrides VULSCAN_INVOKE_TIMEOUT for this call only;
+// legacy APIs retain their environment-configured default. Docker cleanup uses
+// its own independent context and is not cut short when this budget expires.
+func InvokeCtxCaptureEnvTimeout(ctx context.Context, pythonPath string, args []string, workDir string, extraEnv map[string]string, onLog func(string), timeout time.Duration) (stdout string, exitCode int, err error) {
+	if timeout <= 0 {
+		return "", 0, fmt.Errorf("invoke timeout must be positive")
+	}
+	return invokeCtxInnerTimeout(ctx, pythonPath, args, workDir, extraEnv, onLog, true, timeout)
+}
+
 func legacyAPIKeyEnv(apiKey string) map[string]string {
 	if apiKey == "" {
 		return nil
@@ -164,14 +175,12 @@ func deadlineOutcome(stdoutBuf *bytes.Buffer, invokeTimeout time.Duration, onLog
 }
 
 func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workDir string, extraEnv map[string]string, onLog func(string), captureStdout bool) (string, int, error) {
-	// #320: bound the subprocess with the operator-tunable invoke deadline —
-	// the same budget the CLI's Invoke applies (invoke.go:91). Derived from
-	// the CALLER's context so the job cancel still propagates (the parent);
-	// the deadline is the local bound the maintainers' own pattern gives
-	// every other runaway subprocess (DNS 5s, git clone 15m). Resolved ONCE
-	// into a local (the invalid-override warning prints a single time —
-	// resolving again in the diagnosis would print it twice).
-	invokeTimeout := resolveInvokeTimeout()
+	return invokeCtxInnerTimeout(ctx, pythonPath, args, workDir, extraEnv, onLog, captureStdout, resolveInvokeTimeout())
+}
+
+func invokeCtxInnerTimeout(ctx context.Context, pythonPath string, args []string, workDir string, extraEnv map[string]string, onLog func(string), captureStdout bool, invokeTimeout time.Duration) (string, int, error) {
+	// Derive only the scan-call deadline from the caller's context so explicit
+	// cancellation still propagates. Keep the resolved budget local to this job.
 	ctx, cancel := context.WithTimeout(ctx, invokeTimeout)
 	defer cancel()
 	// -P keeps the process working directory off sys.path so a hostile vulscan/

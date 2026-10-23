@@ -182,6 +182,26 @@ func TestChineseDashboardUsesSafeDefaultsAndNoSecretValues(t *testing.T) {
 			t.Errorf("missing %q", want)
 		}
 	}
+	budgetSelect := regexp.MustCompile(`(?s)<select id="scan-timeout" name="scan_timeout"[^>]*>(.*?)</select>`).FindStringSubmatch(body)
+	if len(budgetSelect) != 2 {
+		t.Fatal("missing submitted scan time budget selector")
+	}
+	options := regexp.MustCompile(`<option value="([^"]+)"([^>]*)>`).FindAllStringSubmatch(budgetSelect[1], -1)
+	var budgets, defaults []string
+	for _, option := range options {
+		budgets = append(budgets, option[1])
+		if strings.Contains(option[2], "selected") {
+			defaults = append(defaults, option[1])
+		}
+	}
+	if !reflect.DeepEqual(budgets, []string{"30m", "1h", "2h", "4h", "8h", "24h"}) || !reflect.DeepEqual(defaults, []string{"2h"}) {
+		t.Fatalf("scan budgets = %v, defaults = %v", budgets, defaults)
+	}
+	for _, want := range []string{"总时间预算", "不是每个阶段的预计耗时", "不含排队", "辅助调用使用独立时间上限"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scan budget lacks scope explanation %q", want)
+		}
+	}
 	// The UI deliberately offers a subset of the backend's supported languages.
 	// Keep the submitted IDs stable, including "c" for the shared C/C++ parser.
 	inputs := regexp.MustCompile(`<input type="checkbox" name="languages" value="([^"]+)"[^>]*>`).FindAllStringSubmatch(body, -1)
@@ -300,6 +320,7 @@ func TestChineseProgressHandlesActualScannerMessages(t *testing.T) {
 const assert = require('node:assert/strict');
 class Element {
  constructor() { this.textContent='阶段'; this.attrs={}; this.dataset={}; const values=new Set(); this.classList={add:v=>values.add(v),remove:v=>values.delete(v),contains:v=>values.has(v)}; }
+ addEventListener(){}
  setAttribute(k,v){this.attrs[k]=v;} removeAttribute(k){delete this.attrs[k];}
 }
 const elements={};
@@ -417,6 +438,26 @@ fi
 		}
 		if strings.Contains(strings.Split(line, "|")[0], "fixture-deepseek-key") {
 			t.Error("key leaked in subprocess argv")
+		}
+	}
+}
+
+func TestScanPageShowsSelectedTimeBudget(t *testing.T) {
+	tmpl, err := template.ParseFS(uifiles.FS, "scan.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ value, want string }{{"2h", "2h"}, {"8h", "8h"}, {"", "未记录（旧任务）"}} {
+		var out bytes.Buffer
+		if err := tmpl.Execute(&out, scanPageData{ID: "fixture", ScanTimeout: tc.value}); err != nil {
+			t.Fatal(err)
+		}
+		budget := regexp.MustCompile(`(?s)<p id="scan-timeout-budget">(.*?)</p>`).FindStringSubmatch(out.String())
+		if len(budget) != 2 || !strings.Contains(budget[1], tc.want) || !strings.Contains(budget[1], "非单阶段 ETA") {
+			t.Fatalf("budget %q not accurately displayed: %v", tc.value, budget)
+		}
+		if strings.Contains(out.String(), "可设置 VULSCAN_INVOKE_TIMEOUT") {
+			t.Error("web timeout guidance still directs users to a global environment setting")
 		}
 	}
 }

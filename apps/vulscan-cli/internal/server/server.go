@@ -38,9 +38,11 @@ import (
 
 // Job status constants.
 const (
-	StatusRunning = "running"
-	StatusDone    = "done"
-	StatusError   = "error"
+	StatusRunning    = "running"
+	StatusCancelling = "cancelling"
+	StatusCancelled  = "cancelled"
+	StatusDone       = "done"
+	StatusError      = "error"
 	// #320: a job whose Python subprocess was killed by the invoke deadline
 	// (VULSCAN_INVOKE_TIMEOUT) — a distinct terminal state so the UI can say
 	// "timed out, raise the budget" instead of a generic failure (and so the
@@ -51,11 +53,12 @@ const (
 // jobMeta is the on-disk metadata written immediately on job creation, and
 // (per #320) amended at terminal time with the job's final status.
 type jobMeta struct {
-	LLMConfig string    `json:"llm_config,omitempty"`
-	ID        string    `json:"id"`
-	Repo      string    `json:"repo"`
-	StartedAt time.Time `json:"started_at"`
-	Status    string    `json:"status,omitempty"`
+	ScanTimeout string    `json:"scan_timeout,omitempty"`
+	LLMConfig   string    `json:"llm_config,omitempty"`
+	ID          string    `json:"id"`
+	Repo        string    `json:"repo"`
+	StartedAt   time.Time `json:"started_at"`
+	Status      string    `json:"status,omitempty"`
 }
 
 // Job represents a single scan job.
@@ -76,6 +79,7 @@ type Job struct {
 	// Internal scan parameters (not exposed via API)
 	keyEnv      map[string]string
 	llmConfig   string
+	scanTimeout time.Duration
 	languages   []string
 	libraryMode bool
 	verify      bool
@@ -88,6 +92,11 @@ type Job struct {
 func (j *Job) addLog(line string) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.addLogLocked(line)
+}
+
+// addLogLocked requires j.mu (also used for atomic cancellation updates).
+func (j *Job) addLogLocked(line string) {
 	if j.logCapped {
 		return
 	}
@@ -118,6 +127,9 @@ func (j *Job) addLog(line string) {
 func (j *Job) setDone(reportPath, summaryPath string, disclosurePaths []string) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.Status != StatusRunning {
+		return
+	}
 	j.Status = StatusDone
 	j.ReportPath = reportPath
 	j.SummaryPath = summaryPath
@@ -323,6 +335,9 @@ func (s *Server) recoverJobs() {
 				job.Repo = m.Repo
 				job.StartedAt = m.StartedAt
 				job.llmConfig = m.LLMConfig
+				if m.ScanTimeout != "" {
+					job.scanTimeout, _ = parseScanTimeout(m.ScanTimeout)
+				}
 				persistedStatus = m.Status
 			}
 		}
@@ -363,8 +378,11 @@ func (s *Server) recoverJobs() {
 		// #320 (wave r3): the persisted terminal status wins over the
 		// report.html inference — a timed-out job reloaded as a generic
 		// error loses the distinct state the UI renders.
-		if persistedStatus == StatusTimeout {
-			job.Status = StatusTimeout
+		if persistedStatus == StatusTimeout || persistedStatus == StatusCancelled {
+			job.Status = persistedStatus
+		} else if persistedStatus == StatusCancelling {
+			// Restart interrupted cleanup; never infer success from a partial report.
+			job.Status = StatusError
 		}
 
 		// Load persisted logs if available. Sanitize each line the same way
@@ -431,6 +449,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /disclosures/{id}", s.handleDisclosureList)
 	mux.HandleFunc("GET /disclosure/{id}/{filename}", s.noncedPage(s.handleDisclosure))
 	mux.HandleFunc("DELETE /scan/{id}", s.handleDeleteScan)
+	mux.HandleFunc("POST /scan/{id}/cancel", s.handleCancelScan)
 	return securityHeaders(mux)
 }
 
@@ -591,12 +610,10 @@ func (s *Server) Start(ctx context.Context, addr string) (string, error) {
 		//                   would make graceful Shutdown block forever)
 		// Wait for in-flight runJob goroutines to finish their kill+cleanup, bounded
 		// so a wedged job cannot hang process exit.
-		done := make(chan struct{})
-		go func() { s.wg.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-		}
+		// An invocation may still be in stale-resource recovery (30s), then
+		// needs its own cleanup (30s), plus lease/process wait overhead.
+		// Do not cut an accepted cancellation short at the old 5s deadline.
+		s.waitForJobs(75 * time.Second)
 		close(s.shutdownDone)
 	}()
 
@@ -605,6 +622,21 @@ func (s *Server) Start(ctx context.Context, addr string) (string, error) {
 	}()
 
 	return url, nil
+}
+
+// waitForJobs drains registered runners with a bounded process-exit budget.
+// Callers must set draining before entering, so no new wg.Add can race Wait.
+func (s *Server) waitForJobs(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() { s.wg.Wait(); close(done) }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // WaitShutdown blocks until the ctx-triggered shutdown (cancel in-flight scans +
@@ -685,7 +717,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, v := range views {
 		switch v.Status {
-		case StatusRunning:
+		case StatusRunning, StatusCancelling:
 			d.RunningCount++
 		case StatusDone:
 			d.DoneCount++
@@ -758,6 +790,34 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+// parseScanTimeout accepts only the budgets offered by the web form. Omitted
+// fields (including older clients) default to two hours, independent of CLI env.
+func parseScanTimeout(value string) (time.Duration, error) {
+	switch strings.TrimSpace(value) {
+	case "", "2h":
+		return 2 * time.Hour, nil
+	case "30m":
+		return 30 * time.Minute, nil
+	case "1h":
+		return time.Hour, nil
+	case "4h":
+		return 4 * time.Hour, nil
+	case "8h":
+		return 8 * time.Hour, nil
+	case "24h":
+		return 24 * time.Hour, nil
+	default:
+		return 0, errors.New("请选择有效的扫描时限：30 分钟、1、2、4、8 或 24 小时")
+	}
+}
+
+func scanTimeoutValue(timeout time.Duration) string {
+	if timeout == 30*time.Minute {
+		return "30m"
+	}
+	return strconv.FormatInt(int64(timeout/time.Hour), 10) + "h"
+}
+
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
 		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
@@ -794,6 +854,11 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	scanTimeout, err := parseScanTimeout(r.FormValue("scan_timeout"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	languages := r.Form["languages"]
 	for _, l := range languages {
 		if !supportedLanguages[l] {
@@ -840,7 +905,7 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write meta.json immediately.
-	meta := jobMeta{ID: id, Repo: repo, StartedAt: time.Now().UTC(), LLMConfig: llmConfig}
+	meta := jobMeta{ID: id, Repo: repo, StartedAt: time.Now().UTC(), LLMConfig: llmConfig, ScanTimeout: scanTimeoutValue(scanTimeout)}
 	if data, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(filepath.Join(jobDir, "meta.json"), data, 0640)
 	}
@@ -855,11 +920,13 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		ctx:         ctx,
 		keyEnv:      keyEnv,
 		llmConfig:   llmConfig,
+		scanTimeout: scanTimeout,
 		languages:   languages,
 		libraryMode: libraryMode,
 		verify:      verify,
 		dynamicTest: dynamicTest,
 		done:        make(chan struct{}),
+		outDir:      jobDir,
 	}
 	s.mgr.add(job)
 	go s.runJob(job)
@@ -941,11 +1008,12 @@ func scanModelSettings(r *http.Request) (string, map[string]string, error) {
 }
 
 type scanPageData struct {
-	LLMConfig string
-	ID        string
-	Repo      string
-	CSRF      string
-	Nonce     string // the securityHeaders CSP nonce (see #578 follow-up A)
+	ScanTimeout string
+	LLMConfig   string
+	ID          string
+	Repo        string
+	CSRF        string
+	Nonce       string // the securityHeaders CSP nonce (see #578 follow-up A)
 }
 
 func (s *Server) handleScanPage(w http.ResponseWriter, r *http.Request) {
@@ -958,10 +1026,14 @@ func (s *Server) handleScanPage(w http.ResponseWriter, r *http.Request) {
 	job.mu.Lock()
 	repo := job.Repo
 	llmConfig := job.llmConfig
+	scanTimeout := ""
+	if job.scanTimeout > 0 {
+		scanTimeout = scanTimeoutValue(job.scanTimeout)
+	}
 	job.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmplScan.Execute(w, scanPageData{ID: id, Repo: repo, LLMConfig: llmConfig, CSRF: s.csrfToken, Nonce: nonceFrom(r)}); err != nil {
+	if err := s.tmplScan.Execute(w, scanPageData{ID: id, Repo: repo, LLMConfig: llmConfig, ScanTimeout: scanTimeout, CSRF: s.csrfToken, Nonce: nonceFrom(r)}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -1008,7 +1080,7 @@ func (s *Server) handleScanLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	sent := len(initial)
 
-	if initStatus != StatusRunning {
+	if !scanActive(initStatus) {
 		fmt.Fprintf(w, "event: done\ndata: %s\n\n", initStatus)
 		if canFlush {
 			flusher.Flush()
@@ -1039,7 +1111,7 @@ func (s *Server) handleScanLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		sent = len(logs)
 
-		if status != StatusRunning {
+		if !scanActive(status) {
 			fmt.Fprintf(w, "event: done\ndata: %s\n\n", status)
 			if canFlush {
 				flusher.Flush()
@@ -1294,6 +1366,45 @@ func findDisclosures(outDir string) []string {
 	return paths
 }
 
+// scanActive includes stopping jobs: SSE must not announce completion until
+// subprocess termination, owned-resource cleanup, and log persistence finish.
+func scanActive(status string) bool {
+	return status == StatusRunning || status == StatusCancelling
+}
+
+// handleCancelScan stops execution without deleting the job or its artifacts.
+// Cancellation is asynchronous: 202 means requested, NOT cleanup completed.
+func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginOK(r) {
+		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(s.csrfToken)) != 1 {
+		http.Error(w, "安全令牌失效或缺失，请刷新页面后重试", http.StatusForbidden)
+		return
+	}
+	id := r.PathValue("id")
+	job, ok := s.mgr.get(id)
+	if !jobIDRe.MatchString(id) || !ok {
+		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
+		return
+	}
+	job.mu.Lock()
+	if job.Status == StatusRunning && job.Cancel != nil {
+		job.Status = StatusCancelling
+		job.addLogLocked("[cancel] 已请求取消，正在停止扫描并清理本任务资源…")
+		job.persistTerminalStatus(StatusCancelling)
+		job.Cancel()
+	}
+	status := job.Status
+	job.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	if scanActive(status) {
+		w.WriteHeader(http.StatusAccepted)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
+}
+
 func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
 		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
@@ -1327,6 +1438,10 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
+			http.Error(w, "任务仍在停止并清理资源，请稍后重试删除", http.StatusConflict)
+			return
+		case <-r.Context().Done():
+			return
 		}
 	}
 
@@ -1354,20 +1469,38 @@ func (s *Server) runJob(job *Job) {
 		if r := recover(); r != nil {
 			job.addLog(fmt.Sprintf("[error] 内部异常：%v", r))
 		}
-		// Any path that leaves the job still "running" here is a cancellation
-		// (delete/shutdown) or a recovered panic; mark it terminal so an open SSE
-		// stream receives a done event and stops instead of ticking forever.
-		job.mu.Lock()
-		if job.Status == StatusRunning {
-			job.Status = StatusError
+		// Only the runner publishes cancelled, after InvokeCtxCaptureEnv has
+		// waited for process-group termination and owned Docker cleanup.
+		if job.ctx.Err() != nil {
+			job.addLog("[cancelled] 扫描已取消；日志与已有产物已保留，未完成的结果不代表完整扫描结论。")
 		}
-		job.mu.Unlock()
-		// Persist full log buffer to logs.txt.
 		job.mu.Lock()
+		defer job.mu.Unlock()
+		status := job.Status
+		if status == StatusCancelling || (status == StatusRunning && job.ctx.Err() != nil) {
+			status = StatusCancelled
+			// Retain access to any partial reports, without presenting them as
+			// a successful scan. Download handlers still validate safe paths.
+			if p := filepath.Join(outDir, "report.html"); isRegularNoSymlink(outDir, p) {
+				job.ReportPath = p
+			}
+			for _, p := range []string{filepath.Join(outDir, "report", "SUMMARY_REPORT.md"), filepath.Join(outDir, "SUMMARY_REPORT.md")} {
+				if isRegularNoSymlink(outDir, p) {
+					job.SummaryPath = p
+					break
+				}
+			}
+			job.DisclosurePaths = findDisclosures(outDir)
+		} else if status == StatusRunning {
+			status = StatusError
+		}
 		logData := strings.Join(job.LogBuf, "\n") + "\n"
 		job.keyEnv = nil // release per-run credentials after the last subprocess exits
-		job.mu.Unlock()
 		_ = os.WriteFile(filepath.Join(outDir, "logs.txt"), []byte(logData), 0640)
+		job.persistTerminalStatus(status)
+		// Serialize final persistence with cancellation requests; terminal state
+		// is visible only after the final artifact writes have completed.
+		job.Status = status
 	}()
 
 	// Acquire a run slot, but abort promptly if the job was cancelled/deleted
@@ -1376,6 +1509,10 @@ func (s *Server) runJob(job *Job) {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
 	case <-job.ctx.Done():
+		return
+	}
+
+	if job.ctx.Err() != nil {
 		return
 	}
 
@@ -1446,7 +1583,14 @@ func (s *Server) runJob(job *Job) {
 
 	job.addLog("→ 执行命令：python -m vulscan " + strings.Join(args, " "))
 
-	stdout, exitCode, err := python.InvokeCtxCaptureEnv(job.ctx, s.pythonPath, args, "", job.keyEnv, job.addLog)
+	// This is the total primary scan invocation budget, not a fresh timer per
+	// pipeline stage. Queue/clone and fallback report/summary are separate.
+	scanTimeout := job.scanTimeout
+	if scanTimeout <= 0 {
+		scanTimeout = 2 * time.Hour
+	}
+	job.addLog(fmt.Sprintf("→ Python 扫描调用总时限：%s（不含排队、克隆、补充报告和清理）", scanTimeout))
+	stdout, exitCode, err := python.InvokeCtxCaptureEnvTimeout(job.ctx, s.pythonPath, args, "", job.keyEnv, job.addLog, scanTimeout)
 	if job.ctx.Err() != nil {
 		return // cancelled — don't mark error
 	}
@@ -1456,6 +1600,7 @@ func (s *Server) runJob(job *Job) {
 		// generic failure.
 		if errors.Is(err, python.ErrInvokeDeadline) {
 			job.addLog("[timeout] " + err.Error())
+			job.addLog("[timeout] 请在新建扫描中选择更长的扫描时限后重试；命令行环境变量不会覆盖网页所选时限。")
 			job.setTimeout()
 			return
 		}

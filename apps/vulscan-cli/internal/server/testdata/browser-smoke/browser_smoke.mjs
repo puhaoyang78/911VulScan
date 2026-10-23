@@ -169,6 +169,17 @@ let dompurifyProbeBlocked = 0;
     for (const [id] of expected) await page.locator(`input[name="languages"][value="${id}"]`).uncheck();
     if ((await submitted()).length) throw new Error('clearing selection did not restore auto detection');
   });
+  await ready(page, 'index scan time budget', async () => {
+    const selected = () => page.locator('#scan-form').evaluate(form => new FormData(form).get('scan_timeout'));
+    if (await selected() !== '2h') throw new Error('scan budget must default to 2h');
+    const options = await page.locator('#scan-timeout option').evaluateAll(nodes => nodes.map(n => n.value));
+    if (JSON.stringify(options) !== JSON.stringify(['30m','1h','2h','4h','8h','24h'])) throw new Error('unexpected scan budgets');
+    for (const value of options) {
+      await page.selectOption('#scan-timeout', value);
+      if (await selected() !== value) throw new Error(`incorrect submitted scan budget: ${value}`);
+    }
+    await page.selectOption('#scan-timeout', '4h');
+  });
   await ready(page, 'index model switch', async () => {
     await page.selectOption('#provider', 'configured');
     if (!(await page.locator('#api_key').isDisabled()) || !(await page.locator('#model').isDisabled())) throw new Error('configured profile leaves DeepSeek fields enabled');
@@ -179,8 +190,10 @@ let dompurifyProbeBlocked = 0;
   });
   await ready(page, 'index repeated submission and recoverable response', async () => {
     let submissions = 0;
+    let submittedBudget = null;
     await page.route('**/scan', async route => {
       submissions++;
+      submittedBudget = new URLSearchParams(route.request().postData()).get('scan_timeout');
       await new Promise(resolve => setTimeout(resolve, 100));
       await route.fulfill({ status:200, contentType:'text/plain', body:'模拟未跳转响应' });
     });
@@ -188,6 +201,7 @@ let dompurifyProbeBlocked = 0;
     await page.evaluate(() => { const form=document.getElementById('scan-form'); form.requestSubmit(); form.requestSubmit(); });
     await page.waitForFunction(() => !document.getElementById('start-button').disabled && document.getElementById('form-feedback').textContent.includes('任务响应异常'));
     if (submissions !== 1) throw new Error(`duplicate form submissions: ${submissions}`);
+    if (submittedBudget !== '4h') throw new Error(`request lost scan budget: ${submittedBudget}`);
     await page.unroute('**/scan');
   });
   await ready(page, 'index back navigation clears one-run key', async () => {
@@ -210,8 +224,60 @@ let dompurifyProbeBlocked = 0;
     () => document.querySelectorAll('#disclosure-links a').length >= 1));
   await ready(page, 'scan', () => page.waitForFunction(
     () => document.getElementById('status-text').dataset.state === 'done'));
+  await ready(page, 'scan', async () => {
+    if (!(await page.locator('#scan-timeout-budget').innerText()).includes('未记录（旧任务）')) throw new Error('legacy scan budget misrepresented');
+    if (!(await page.locator('#overview-panel').isVisible())) throw new Error('overview is not the default');
+    await page.getByRole('tab', {name:'详细日志'}).click();
+    if (!(await page.locator('#terminal-panel').isVisible())) throw new Error('terminal tab did not open');
+    await page.getByRole('tab', {name:'详细日志'}).press('ArrowLeft');
+    if (!(await page.locator('#overview-panel').isVisible())) throw new Error('keyboard tab switch failed');
+    if (!(await page.locator('#btn-cancel').isDisabled())) throw new Error('completed scan can still be cancelled');
+    const result = await page.evaluate(() => {
+      const line='11:22:33 [Enhance] 94/987 source.c::tc_error neutral 7.5s (elapsed 3m11s, ETA ~30m23s, $0.0064)';
+      extractProgress(line);
+      extractProgress('[Enhance] 95/987 <img src=x onerror=alert(1)> neutral (elapsed 3m12s, ETA ~30m0s, $0)');
+      return {severity:classifyLine(line), warning:classifyLine('WARNING: failed'), count:document.getElementById('overview-count').textContent, injected:document.querySelector('#overview-task img')!==null};
+    });
+    if (result.severity!=='progress'||result.warning!=='warning'||result.count!=='95 / 987'||result.injected) throw new Error('progress/severity/XSS regression');
+  });
   await drain(page, 'scan');
   await page.close();
+}
+
+// Cancellation UI: controlled SSE/fetch, never starts or cancels a real job.
+{
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    window.EventSource = class {
+      static CONNECTING=0; static CLOSED=2;
+      constructor(){window.testStream=this;this.handlers={};setTimeout(()=>this.onopen?.(),0);}
+      addEventListener(name, fn){this.handlers[name]=fn;} close(){}
+    };
+  });
+  let requests=0;
+  await page.route('**/scan/jx/cancel', async route => {
+    requests++;
+    await route.fulfill({status:202,contentType:'application/json',body:'{"status":"cancelling"}'});
+  });
+  await page.goto(baseURL+'/scan/jx');
+  await ready(page, 'scan-cancel', async () => {
+    await page.evaluate(() => {
+      testStream.onmessage({lastEventId:'0',data:'[Enhance] 1/2 source.c::tc_error neutral (elapsed 1s, ETA ~1s, $0)'});
+      testStream.onmessage({lastEventId:'0',data:'duplicate'});
+      testStream.readyState=EventSource.CONNECTING;testStream.onerror();
+    });
+    if (await page.locator('.log-line').count()!==1) throw new Error('replay duplicated log');
+    if (await page.locator('#status-text').getAttribute('data-state')!=='reconnecting') throw new Error('reconnect state missing');
+    page.once('dialog', dialog=>dialog.dismiss()); await page.locator('#btn-cancel').click();
+    if(requests!==0) throw new Error('dismissed confirmation submitted');
+    page.once('dialog', dialog=>dialog.accept()); await page.locator('#btn-cancel').click();
+    await page.waitForFunction(()=>document.getElementById('status-text').dataset.state==='cancelling');
+    if (!(await page.locator('#btn-cancel').isDisabled())) throw new Error('repeat cancel enabled');
+    await page.evaluate(()=>{testStream.onopen();testStream.onmessage({lastEventId:'1',data:'final log'});testStream.handlers.done({data:'cancelled'});});
+    await page.waitForFunction(()=>document.getElementById('status-text').dataset.state==='cancelled');
+    if(requests!==1 || await page.locator('.log-line').count()!==2) throw new Error('cancel request/log preservation regression');
+  });
+  await drain(page,'scan-cancel'); await page.close();
 }
 
 // --- /summary/jx: the render path — readiness, the CANARIES (hard,

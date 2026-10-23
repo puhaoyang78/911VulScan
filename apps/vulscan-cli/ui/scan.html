@@ -15,6 +15,24 @@
   header .title { color: #fff; font-size: 0.9rem; font-weight: 600; font-family: monospace; word-break: break-all; }
   .main { max-width: 900px; margin: 0 auto; padding: 28px 24px; }
 
+  [hidden] { display:none!important; }
+  .view-tabs { display:flex; gap:8px; margin:20px 0; }
+  .view-tabs button,.cancel-button { border:1px solid #bdd6d1; border-radius:8px; background:white; color:#245064; padding:10px 16px; cursor:pointer; font:inherit; font-size:13px; }
+  .view-tabs [aria-selected="true"] { background:#087d78; color:white; border-color:#087d78; }
+  .cancel-button { margin-left:auto; color:#a32d39; border-color:#d7a5ac; }
+  .cancel-button:disabled { opacity:.6; cursor:not-allowed; }
+  .overview { background:white; border:1px solid #dbe5e9; border-radius:12px; padding:24px; margin-bottom:20px; }
+  .overview h2 { font-size:20px; margin-bottom:8px; }
+  .overview-note { color:#5b7081; font-size:12px; line-height:1.8; }
+  .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:16px; margin:24px 0; }
+  .metric { padding:16px; background:#f3f8f8; border-radius:8px; }
+  .metric dt { color:#5b7081; font-size:12px; margin-bottom:8px; }
+  .metric dd { font-size:22px; font-weight:600; overflow-wrap:anywhere; }
+  .overview progress { display:block; width:100%; height:14px; accent-color:#087d78; margin:12px 0; }
+  .current-task { overflow-wrap:anywhere; line-height:1.8; font-size:13px; margin-top:8px; }
+  .log-line.warning .body { color:#e3b341; }
+  .log-line.error .body { color:#ff7b72; }
+  .log-line.progress .body { color:#a5d6ff; }
   /* Pipeline steps */
   .steps { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; align-items: flex-start; }
   .step-item { display: flex; flex-direction: column; align-items: center; gap: 4px; }
@@ -44,7 +62,7 @@
   .log-line.ok      .body { color: #3fb950; }
   .log-line.finding .body { color: #f0883e; font-weight: 700; }
   .log-line.step-tag .body { color: #79c0ff; }
-  .log-line.progress .body { color: #e3b341; }
+  .log-line.progress .body { color: #a5d6ff; }
   .log-line .body { color: #e6edf3; }
 
   /* Status bar */
@@ -107,7 +125,7 @@
   <span class="sep">/</span>
   <span class="title">{{.Repo}}</span>
 </header>
-<main class="main"><div class="page-heading"><div><span class="eyebrow">911VulScan · 扫描任务</span><h1>跟踪分析进度</h1><p>模型配置：{{if .LLMConfig}}{{.LLMConfig}}{{else}}沿用已有配置{{end}} · 原始诊断信息保留命令与技术标识</p></div><a class="new-scan" href="/">新建扫描</a></div>
+<main class="main"><div class="page-heading"><div><span class="eyebrow">911VulScan · 扫描任务</span><h1>跟踪分析进度</h1><p>模型配置：{{if .LLMConfig}}{{.LLMConfig}}{{else}}沿用已有配置{{end}} · 原始诊断信息保留命令与技术标识</p><p id="scan-timeout-budget">主扫描时间上限：<strong>{{if .ScanTimeout}}{{.ScanTimeout}}{{else}}未记录（旧任务）{{end}}</strong> · 总调用预算，非单阶段 ETA；不含排队、克隆、补充报告、摘要和清理。</p></div><a class="new-scan" href="/">新建扫描</a></div>
   <!-- Pipeline step tracker -->
   <div class="steps">
     <div class="step-item">
@@ -140,15 +158,34 @@
   <div class="status-bar">
     <div class="dot running" id="status-dot"></div>
     <span class="status-text" id="status-text" data-state="connecting" role="status" aria-live="polite">正在连接扫描任务…</span>
+    <button class="cancel-button" id="btn-cancel" type="button">取消扫描</button>
   </div>
 
-  <!-- Log terminal -->
-  <div class="log-panel">
+  <p id="cancel-feedback" class="artifact-note" role="status" aria-live="polite"></p>
+  <div class="view-tabs" role="tablist" aria-label="扫描展示方式">
+    <button id="tab-overview" role="tab" aria-selected="true" aria-controls="overview-panel" type="button">进度概览</button>
+    <button id="tab-terminal" role="tab" aria-selected="false" aria-controls="terminal-panel" tabindex="-1" type="button">详细日志</button>
+  </div>
+  <section class="overview" id="overview-panel" role="tabpanel" aria-labelledby="tab-overview">
+    <h2 id="overview-stage">等待阶段信息</h2>
+    <p class="overview-note">仅展示扫描器已报告的数据；各阶段工作量不同，不推算整体完成百分比。</p>
+    <dl class="metrics">
+      <div class="metric"><dt>当前阶段已处理 / 总数</dt><dd id="overview-count">等待数据</dd></div>
+      <div class="metric"><dt>当前阶段已用时间（日志快照）</dt><dd id="overview-elapsed">尚未报告</dd></div>
+      <div class="metric"><dt>当前阶段预计剩余（扫描器估计）</dt><dd id="overview-eta">尚未报告</dd></div>
+    </dl>
+    <progress id="stage-progress" aria-label="当前阶段进度" hidden></progress>
+    <p class="overview-note" id="overview-progress-note">收到阶段计数后显示进度；排队或初始化期间可能暂时没有日志。</p>
+    <p class="overview-note">最近处理的代码单元 / 阶段活动</p>
+    <p class="current-task" id="overview-task">等待扫描日志…</p>
+  </section>
+  <!-- Log terminal: retained verbatim diagnostic content, safely text-rendered. -->
+  <section class="log-panel" id="terminal-panel" role="tabpanel" aria-labelledby="tab-terminal" hidden>
     <div class="log-header">
       <span>任务日志 / {{.ID}}</span><label class="autoscroll"><input type="checkbox" id="auto-scroll" checked> 自动滚动</label>
     </div>
     <div class="log-body" id="log-body" tabindex="0" aria-label="扫描日志"><div id="log-empty" class="log-empty">等待扫描日志；任务可能正在排队…</div></div>
-  </div>
+  </section>
 
   <!-- Report/Summary buttons -->
   <div class="actions">
@@ -177,6 +214,93 @@ steps.forEach(s => {
 });
 
 let streamClosed = false;
+let terminalStatus = '';
+let cancelPending = false;
+let lastEventID = -1;
+let overviewStage = '';
+const stageLabels = {parse:'代码解析', enhance:'上下文增强', analyze:'漏洞分析', verify:'模拟验证', dynamic:'动态测试', report:'生成报告'};
+function showView(view) {
+  ['overview','terminal'].forEach(name => {
+    const selected = name === view;
+    const tab = document.getElementById('tab-' + name);
+    tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
+    document.getElementById(name + '-panel').hidden = !selected;
+  });
+  if (view === 'terminal' && document.getElementById('auto-scroll').checked) { const log = document.getElementById('log-body'); log.scrollTop = log.scrollHeight; }
+}
+['overview','terminal'].forEach(name => {
+  const tab = document.getElementById('tab-' + name);
+  tab.addEventListener('click', () => showView(name));
+  tab.addEventListener('keydown', e => {
+    if (!['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) return;
+    e.preventDefault();
+    const next = e.key === 'Home' ? 'overview' : e.key === 'End' ? 'terminal' : name === 'overview' ? 'terminal' : 'overview';
+    showView(next); document.getElementById('tab-' + next).focus();
+  });
+});
+function selectOverviewStage(stage) {
+  if (overviewStage === stage) return;
+  overviewStage = stage;
+  document.getElementById('overview-stage').textContent = stageLabels[stage];
+  document.getElementById('overview-count').textContent = '等待数据';
+  document.getElementById('overview-elapsed').textContent = '尚未报告';
+  document.getElementById('overview-eta').textContent = '尚未报告';
+  document.getElementById('stage-progress').hidden = true;
+  document.getElementById('overview-progress-note').textContent = '等待当前阶段计数；不推算整体完成百分比。';
+}
+function extractProgress(raw) {
+  const line = raw.replace(/^\d{2}:\d{2}:\d{2}\s+/, '').trim();
+  const m = line.match(/^\[([^\]]+)\]\s+(?:---\s+|Done:\s+)?(\d[\d,]*)\s*\/\s*(\d[\d,]*)\s+(.*)$/);
+  if (!m) return false;
+  const aliases = {parse:'parse',enhance:'enhance',analyze:'analyze',detect:'analyze',verify:'verify',report:'report','上下文增强':'enhance','漏洞分析':'analyze','模拟验证':'verify','代码解析':'parse'};
+  const stage = aliases[m[1].toLowerCase()];
+  if (!stage) return false;
+  const done = parseNum(m[2]), total = parseNum(m[3]);
+  if (!Number.isSafeInteger(done) || !Number.isSafeInteger(total) || total <= 0) return false;
+  finishActiveStages(stage); markActive(stage); selectOverviewStage(stage);
+  countEls[stage].textContent = done.toLocaleString() + ' / ' + total.toLocaleString();
+  document.getElementById('overview-count').textContent = countEls[stage].textContent;
+  const progress = document.getElementById('stage-progress');
+  progress.max = total; progress.value = Math.min(done,total); progress.hidden = false;
+  document.getElementById('overview-progress-note').textContent = done > total ? '计数包含重试，已处理数超过阶段总数；原始计数保留。' : '当前阶段 ' + Math.floor(done / total * 100) + '% · 非整体扫描进度';
+  if (!/^\[[^\]]+\]\s+(?:---|Done:)/i.test(line)) document.getElementById('overview-task').textContent = m[4].replace(/\s*\(elapsed\s.*$/, '');
+  const timing = m[4].match(/(?:\(|\|\s*)elapsed\s+([^,|]+)[,|]\s*ETA\s+([^,|]+)/i);
+  document.getElementById('overview-elapsed').textContent = timing ? timing[1].trim() : (m[4].match(/^units in ([^|]+)/) || [,'尚未报告'])[1].trim();
+  document.getElementById('overview-eta').textContent = timing && timing[2].trim() !== '~?' ? timing[2].trim() : '尚未报告';
+  return true;
+}
+function showCancelling() {
+  cancelPending = true;
+  document.getElementById('btn-cancel').disabled = true;
+  document.getElementById('btn-cancel').textContent = '正在取消…';
+  const text = document.getElementById('status-text');
+  text.dataset.state = 'cancelling'; text.textContent = '正在停止扫描并保存日志，请稍候…';
+}
+document.getElementById('btn-cancel').addEventListener('click', async () => {
+  if (cancelPending || terminalStatus) return;
+  if (!window.confirm('确认取消本次扫描？扫描将停止，已有日志和已生成结果会保留。')) return;
+  showCancelling();
+  const feedback = document.getElementById('cancel-feedback'); feedback.textContent = '';
+  try {
+    const response = await fetch('/scan/' + jobID + '/cancel', {method:'POST', headers:{'X-CSRF-Token':document.querySelector('meta[name="csrf"]').content}});
+    if (!response.ok) throw new Error('cancel failed');
+    const result = await response.json();
+    if (terminalStatus) return;
+    if (['done','error','timeout','cancelled'].includes(result.status)) {
+      // SSE is the terminal authority: it delivers every remaining log first.
+      feedback.textContent = '任务已结束，正在同步最后日志；如连接已断开，请刷新查看。';
+    }
+    else showCancelling();
+  } catch (_) {
+    if (terminalStatus) return;
+    cancelPending = false;
+    document.getElementById('btn-cancel').disabled = false;
+    document.getElementById('btn-cancel').textContent = '重试取消';
+    feedback.textContent = '取消请求未确认；扫描可能仍在运行。可重试取消或刷新核实状态。';
+    document.getElementById('status-text').textContent = '取消状态未知，请重试或刷新核实';
+    document.getElementById('status-text').dataset.state = 'cancel-unknown';
+  }
+});
 const stageCounts = {};
 
 function setCount(stage, n) {
@@ -187,6 +311,7 @@ function setCount(stage, n) {
 function markActive(name) {
   const el = stepEls[name];
   if (el && !el.classList.contains('done') && !el.classList.contains('failed')) {
+    selectOverviewStage(name);
     el.classList.add('active');
     el.setAttribute('aria-current', 'step');
   }
@@ -300,13 +425,15 @@ function updateSteps(line) {
 }
 
 function classifyLine(line) {
-  const l = line.toLowerCase();
-  if (/warning|failed|error|警告|失败|错误/.test(l)) return 'finding';
-  if (/^\[\d+\/\d+\]/.test(l.trim())) return 'step-tag';
-  if (line.startsWith('✓') || /complete\b/.test(l)) return 'ok';
-  if (/potential|vulner|finding|! /.test(l) && !line.startsWith('✓')) return 'finding';
-  if (/^\[parse\]|^\[enhance\]|^\[analyze\]|^\[detect\]|^\[verify\]|^\[report\]|^\[dynamic/.test(l)) return 'step-tag';
-  if (/→|analyzing batch|running|scanning|processing/.test(l)) return 'progress';
+  const l = line.replace(/^\d{2}:\d{2}:\d{2}\s+/, '').trim().toLowerCase();
+  // Severity belongs to a diagnostic prefix, never an arbitrary source symbol.
+  if (/^(?:\[(?:error|fatal|错误)\]|(?:error|fatal|错误|失败)[:：]|traceback \(most recent call last\):)/.test(l)) return 'error';
+  if (/^(?:\[(?:warn(?:ing)?|警告)\]|(?:warn(?:ing)?|警告)[:：])/.test(l)) return 'warning';
+  if (/^\[[^\]]+\]\s+\d[\d,]*\/\d[\d,]*/.test(l)) return 'progress';
+  if (/^\[\d+\/\d+\]/.test(l)) return 'step-tag';
+  if (/^✓|^(?:scan |stage )?complete\b/.test(l)) return 'ok';
+  if (/^(?:! |\[(?:finding|vulnerability)\]|(?:potential|confirmed) (?:finding|vulnerability))/.test(l)) return 'finding';
+  if (/^\[(?:parse|enhance|analyze|detect|verify|report|dynamic[-_]?(?:test)?)\]/.test(l)) return 'step-tag';
   return '';
 }
 
@@ -368,7 +495,11 @@ function appendLine(rawLine) {
   if (document.getElementById('auto-scroll').checked) logBody.scrollTop = logBody.scrollHeight;
 
   updateSteps(rawLine);
-  tryExtractCounts(rawLine);
+  if (!extractProgress(rawLine)) {
+    tryExtractCounts(rawLine);
+    if (/^\[\d+\/\d+\]/.test(body.trim())) document.getElementById('overview-task').textContent = presentLog(body);
+  }
+  if (/^\[cancel\]/i.test(body.trim())) showCancelling();
 }
 
 function loadDisclosures() {
@@ -393,7 +524,13 @@ function loadDisclosures() {
 }
 
 function onDone(status) {
+  if (terminalStatus) return;
+  terminalStatus = status;
   streamClosed = true;
+  document.getElementById('btn-cancel').disabled = true;
+  document.getElementById('btn-cancel').textContent = status === 'cancelled' ? '已取消' : '扫描已结束';
+  document.getElementById('cancel-feedback').textContent = '';
+  document.getElementById('overview-eta').textContent = '任务已结束';
   const emptyLog = document.getElementById('log-empty');
   if (emptyLog) emptyLog.textContent = '本任务未保留日志记录。';
   const dot = document.getElementById('status-dot');
@@ -412,16 +549,23 @@ function onDone(status) {
       else document.getElementById('artifact-note').textContent = '本次扫描未生成摘要，可先查看漏洞报告。';
     }).catch(() => { document.getElementById('artifact-note').textContent = '摘要状态暂时无法确认，请刷新重试。'; });
     loadDisclosures();
+  } else if (status === 'cancelled') {
+    dot.classList.add('timeout');
+    text.textContent = '扫描已取消；日志和已生成结果已保留';
+    steps.forEach(stage => { if (stepEls[stage].classList.contains('active')) { stepEls[stage].classList.remove('active'); stepEls[stage].removeAttribute('aria-current'); countEls[stage].textContent += ' · 已中止'; } });
+    document.getElementById('artifact-note').textContent = '已取消的扫描结果可能不完整；以下入口仅在对应产物已生成时可用。';
+    [['report','btn-report'],['summary','btn-summary']].forEach(([path,id]) => fetch('/' + path + '/' + jobID, {method:'HEAD'}).then(r => { if (r.ok) enableArtifact(id); }).catch(() => {}));
+    loadDisclosures();
   } else if (status === 'timeout') {
     // #320: the invoke deadline killed the run — a distinct state with the
-    // operator escape hatch named, not a generic failure. The amber dot +
+    // task-specific retry guidance, not a generic failure. The amber dot +
     // the timeout-specific banner text (wave round: the red error dot and
     // the generic "Scan failed" banner contradicted index.html's deliberate
     // amber-not-red timeout design).
     dot.classList.add('timeout');
-    text.textContent = '扫描已超时，可调高 VULSCAN_INVOKE_TIMEOUT 后重新运行';
+    text.textContent = '任务已超时，请查看日志中的超时来源及对应时间设置';
     document.getElementById('error-banner').textContent =
-      '任务超时。可设置 VULSCAN_INVOKE_TIMEOUT=2h 后重新运行；已生成的中间结果保留在任务目录中。';
+      '任务超时。请查看日志中的超时来源及对应时间设置：主扫描可新建扫描并选择更长的时间上限；补充报告和摘要使用独立时间设置。已生成的中间结果保留在任务目录中。';
     document.getElementById('error-banner').style.display = 'block';
   } else {
     dot.classList.add('error');
@@ -433,10 +577,13 @@ function onDone(status) {
 function connect() {
   if (streamClosed) return;
   const es = new EventSource('/scan/' + jobID + '/logs');
-  es.onopen = function() { if (!streamClosed) { const text = document.getElementById('status-text'); text.textContent = '扫描进行中，日志已连接'; text.dataset.state = 'running'; } };
+  es.onopen = function() { if (!streamClosed) { const text = document.getElementById('status-text'); text.textContent = '扫描进行中，日志已连接'; text.dataset.state = 'running'; if (cancelPending) showCancelling(); } };
   window.addEventListener('pagehide', () => es.close(), { once:true });
 
   es.onmessage = function(e) {
+    if (terminalStatus) return;
+    const id = Number(e.lastEventId);
+    if (e.lastEventId !== undefined && e.lastEventId !== '' && Number.isSafeInteger(id) && id >= 0) { if (id <= lastEventID) return; lastEventID = id; }
     appendLine(e.data);
   };
 
