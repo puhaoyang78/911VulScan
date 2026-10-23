@@ -86,6 +86,12 @@ async function visit(name, path) {
   if (!csp.includes("default-src 'none'")) {
     note(name, `the navigation response carries no enforcing CSP: ${csp.slice(0, 90)}`);
   }
+  if (['index', 'scan', 'summary', 'disclosure'].includes(name)) {
+    const footer = await page.locator('footer').innerText();
+    if (!footer.includes('911VulScan') || /Knostic|OpenAnt/.test(footer)) {
+      note(name, `unexpected product footer: ${footer}`);
+    }
+  }
   return { page, csp };
 }
 
@@ -145,6 +151,24 @@ let dompurifyProbeBlocked = 0;
   await ready(page, 'index', () => page.waitForFunction(() => typeof deleteScan === 'function'));
   const hasRows = await page.locator('#scans-list .scan-row').count();
   if (hasRows < 1) note('index', 'the seeded scan row is not rendered');
+  await ready(page, 'index language selection', async () => {
+    const inputs = page.locator('input[name="languages"]');
+    const actual = await inputs.evaluateAll(nodes => nodes.map(n => [n.value, n.closest('label').textContent.trim()]));
+    const expected = [['c', 'C / C++'], ['python', 'Python'], ['javascript', 'JavaScript'], ['go', 'Go']];
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`unexpected languages: ${JSON.stringify(actual)}`);
+    const submitted = () => page.locator('#scan-form').evaluate(form => new FormData(form).getAll('languages'));
+    if ((await submitted()).length) throw new Error('default must remain auto detection');
+    for (const [id] of expected) {
+      const input = page.locator(`input[name="languages"][value="${id}"]`);
+      await input.check();
+      if (JSON.stringify(await submitted()) !== JSON.stringify([id])) throw new Error(`incorrect submitted ID: ${id}`);
+      await input.uncheck();
+    }
+    for (const [id] of expected) await page.locator(`input[name="languages"][value="${id}"]`).check();
+    if (JSON.stringify(await submitted()) !== JSON.stringify(expected.map(([id]) => id))) throw new Error('multi-selection IDs changed');
+    for (const [id] of expected) await page.locator(`input[name="languages"][value="${id}"]`).uncheck();
+    if ((await submitted()).length) throw new Error('clearing selection did not restore auto detection');
+  });
   await ready(page, 'index model switch', async () => {
     await page.selectOption('#provider', 'configured');
     if (!(await page.locator('#api_key').isDisabled()) || !(await page.locator('#model').isDisabled())) throw new Error('configured profile leaves DeepSeek fields enabled');

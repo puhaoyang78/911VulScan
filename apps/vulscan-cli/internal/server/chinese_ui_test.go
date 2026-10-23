@@ -177,10 +177,26 @@ func TestChineseDashboardUsesSafeDefaultsAndNoSecretValues(t *testing.T) {
 		t.Fatalf("dashboard = %d", w.Code)
 	}
 	body := w.Body.String()
-	for _, want := range []string{`lang="zh-CN"`, "911VulScan", "安全扫描工作台", "最近扫描", `value="deepseek" selected`, "deepseek-v4-pro", `id="stat-running">1`, `id="stat-done">1`, `id="stat-attention">1`, "Knostic OpenAnt", "DEEPSEEK_API_KEY"} {
+	for _, want := range []string{`lang="zh-CN"`, "911VulScan", "安全扫描工作台", "最近扫描", `value="deepseek" selected`, "deepseek-v4-pro", `id="stat-running">1`, `id="stat-done">1`, `id="stat-attention">1`, "DEEPSEEK_API_KEY"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q", want)
 		}
+	}
+	// The UI deliberately offers a subset of the backend's supported languages.
+	// Keep the submitted IDs stable, including "c" for the shared C/C++ parser.
+	inputs := regexp.MustCompile(`<input type="checkbox" name="languages" value="([^"]+)"[^>]*>`).FindAllStringSubmatch(body, -1)
+	var languageIDs []string
+	for _, input := range inputs {
+		languageIDs = append(languageIDs, input[1])
+		if strings.Contains(input[0], "checked") {
+			t.Error("language default must remain automatic (no selection)")
+		}
+		if !supportedLanguages[input[1]] {
+			t.Errorf("UI language %q is not accepted by the scan handler", input[1])
+		}
+	}
+	if want := []string{"c", "python", "javascript", "go"}; !reflect.DeepEqual(languageIDs, want) {
+		t.Errorf("selectable languages = %v, want %v", languageIDs, want)
 	}
 	for _, bad := range []string{"never-render-this-key", "<script>alert('repo')</script>", "Anthropic API Key", "localStorage"} {
 		// A comment documents that storage must not be used; forbid calls only.
@@ -218,6 +234,13 @@ func TestRenderedChinesePagesJavaScriptSyntax(t *testing.T) {
 			}
 			if !strings.Contains(out.String(), `lang="zh-CN"`) {
 				t.Error("missing Chinese document language")
+			}
+			footer := regexp.MustCompile(`(?s)<footer[^>]*>(.*?)</footer>`).FindStringSubmatch(out.String())
+			if len(footer) != 2 || !strings.Contains(footer[1], "911VulScan") {
+				t.Fatal("missing product footer")
+			}
+			if strings.Contains(footer[1], "Knostic") || strings.Contains(footer[1], "OpenAnt") {
+				t.Error("obsolete upstream attribution remains in the visible footer")
 			}
 			scripts := regexp.MustCompile(`(?s)<script nonce="[^"]*">(.*?)</script>`).FindAllStringSubmatch(out.String(), -1)
 			if len(scripts) == 0 {

@@ -53,7 +53,7 @@
           <label for="repo">仓库地址或本机项目路径</label><input type="text" id="repo" name="repo" required placeholder="https://github.com/org/repo 或 /path/to/project" autocomplete="off" aria-describedby="repo-hint">
           <p class="hint" id="repo-hint">仅扫描你有权测试的项目。私有仓库请使用本机 Git 凭据，不要把密码或令牌放进地址。</p>
           <label id="language-label">扫描语言</label><div class="language-grid" role="group" aria-labelledby="language-label">
-            <label><input type="checkbox" name="languages" value="c"> C / C++</label><label><input type="checkbox" name="languages" value="python"> Python</label><label><input type="checkbox" name="languages" value="javascript"> JavaScript</label><label><input type="checkbox" name="languages" value="go"> Go</label><label><input type="checkbox" name="languages" value="rust"> Rust</label><label><input type="checkbox" name="languages" value="php"> PHP</label><label><input type="checkbox" name="languages" value="ruby"> Ruby</label><label><input type="checkbox" name="languages" value="swift"> Swift</label><label><input type="checkbox" name="languages" value="zig"> Zig</label>
+            <label><input type="checkbox" name="languages" value="c"> C / C++</label><label><input type="checkbox" name="languages" value="python"> Python</label><label><input type="checkbox" name="languages" value="javascript"> JavaScript</label><label><input type="checkbox" name="languages" value="go"> Go</label>
           </div><p class="hint">不勾选时自动分析达到规模阈值的全部已检测语言。指定语言可缩小范围，减少时间与模型费用。</p>
         </fieldset>
         <fieldset><legend><span class="section-no">02</span>模型配置</legend>
@@ -75,7 +75,7 @@
   <section class="scans-section"><div class="section-heading"><h2>最近扫描</h2><p>任务时间为 UTC · 打开任务查看实时进度</p></div>
     <div class="scans-table" id="scans-list">{{if .Jobs}}{{range .Jobs}}<div class="scan-row" id="row-{{.ID}}" data-status="{{.Status}}"><div><div class="scan-repo-wrap"><span class="scan-repo" title="{{.Repo}}">{{.Repo}}</span><button class="copy-btn" type="button" title="复制仓库地址或路径" aria-label="复制仓库地址或路径" data-repo="{{.Repo}}">复制</button></div><div class="scan-meta">{{.StartedAt}} · {{.ID}}</div></div><span class="badge badge-{{.Status}}">{{if eq .Status "running"}}进行中{{else if eq .Status "done"}}已完成{{else if eq .Status "timeout"}}已超时{{else}}失败{{end}}</span><div class="scan-actions"><a class="link-btn" href="/scan/{{.ID}}">{{if eq .Status "running"}}查看进度{{else}}查看日志{{end}}</a>{{if .HasSummary}}<a class="link-btn" href="/summary/{{.ID}}" target="_blank" rel="noopener">摘要</a>{{end}}{{if .HasReport}}<a class="link-btn" href="/report/{{.ID}}" target="_blank" rel="noopener">报告</a>{{end}}<button class="delete-btn" type="button" title="删除扫描与产物" data-id="{{.ID}}">删除</button></div></div>{{end}}{{else}}<div class="empty-state" id="empty-state"><strong>还没有扫描任务</strong>填写上方项目地址，开始第一次安全分析。</div>{{end}}</div><p class="feedback" id="list-feedback" role="status" aria-live="polite"></p>
   </section>
-  <footer><span>911VulScan · 中文安全扫描工作台</span><span>基于 Knostic OpenAnt 开源项目构建</span></footer>
+  <footer><span>911VulScan · 中文安全扫描工作台</span></footer>
 </main>
 <script nonce="{{.Nonce}}">
 const provider = document.getElementById('provider');
