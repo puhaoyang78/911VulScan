@@ -1,10 +1,10 @@
-# OpenAnt architecture
+# VulScan architecture
 
 How the scanner is put together, what depends on what, and where to stand when you
 need to change something.
 
 > **Where documentation lives.** In tracked files at the repository root and under
-> `libs/openant-core/`. **Not** in `docs/` — that directory is gitignored
+> `libs/vulscan-core/`. **Not** in `docs/` — that directory is gitignored
 > (`.gitignore:11`), which is why twelve `docs/*.md` links elsewhere in this repo
 > point at files that do not exist. Anything written there is silently discarded.
 
@@ -12,21 +12,21 @@ need to change something.
 
 ## 1. The shape of the thing
 
-OpenAnt is a Go CLI wrapping a Python engine. The Go side owns the user's
+VulScan is a Go CLI wrapping a Python engine. The Go side owns the user's
 workspace — projects, config, checkpoints, process lifecycle. The Python side owns
 everything about analysis. They speak over a deliberately narrow contract.
 
 ```mermaid
 flowchart TB
-    subgraph go["Go CLI — apps/openant-cli"]
+    subgraph go["Go CLI — apps/vulscan-cli"]
         cmd["cmd/*.go<br/>init · scan · parse · report · serve"]
         invoke["internal/python/invoke.go<br/>process lifecycle, timeouts, signals"]
-        gocfg["internal/config<br/>~/.config/openant/config.json"]
+        gocfg["internal/config<br/>~/.config/vulscan/config.json"]
         golang_["internal/languages<br/>reads config/languages.json"]
     end
 
-    subgraph py["Python engine — libs/openant-core"]
-        cli["openant/cli.py<br/>argparse + cmd_* entry points"]
+    subgraph py["Python engine — libs/vulscan-core"]
+        cli["vulscan/cli.py<br/>argparse + cmd_* entry points"]
         scanner["core/scanner.py<br/>orchestration"]
         parsers["parsers/&lt;lang&gt;/<br/>9 language front-ends"]
         ctx["context/<br/>app context + threat model"]
@@ -59,19 +59,19 @@ where drift between the two sides shows up as silence rather than an error.
 sequenceDiagram
     participant U as user
     participant Go as Go CLI
-    participant Py as openant/cli.py
+    participant Py as vulscan/cli.py
     participant S as core/scanner.py
     participant P as parsers/&lt;lang&gt;
     participant C as context/
     participant L as LLM
 
-    U->>Go: openant scan ./repo
-    Go->>Py: python -m openant scan … (argv only)
+    U->>Go: vulscan scan ./repo
+    Go->>Py: python -m vulscan scan … (argv only)
     Py->>S: scan_repository(...)
     S->>P: detect languages, parse each
     P-->>S: per-language datasets
     S->>S: merge_datasets → one dataset.json
-    S->>C: load OPENANT.THREATMODEL.md, else generate app context
+    S->>C: load VULSCAN.THREATMODEL.md, else generate app context
     C-->>S: ApplicationContext (custom or built-in)
     S->>L: Stage 1 — detection, per unit
     L-->>S: findings
@@ -86,7 +86,7 @@ sequenceDiagram
 (`{status, data, errors}`); stderr carries human output and is streamed unparsed;
 exit codes are 0 clean, 1 vulnerabilities found, 2 error. Only `ANTHROPIC_API_KEY`
 crosses as an environment variable. Config is *not* passed — both sides read
-`~/.config/openant/config.json` independently, which is a known drift vector
+`~/.config/vulscan/config.json` independently, which is a known drift vector
 (see §6).
 
 ---
@@ -122,11 +122,11 @@ language corpus — see §7 for the caveat that carries.
 The original design classified a repository into one of four values
 (`web_app | cli_tool | library | agent_framework`), each mapping to a hardcoded
 attack model, and collapsed the whole attacker question into one boolean. A
-repository can now ship `OPENANT.THREATMODEL.md` and describe itself.
+repository can now ship `VULSCAN.THREATMODEL.md` and describe itself.
 
 ```mermaid
 flowchart TB
-    scan["core/scanner.py"] --> exists{"OPENANT.THREATMODEL.md<br/>present?"}
+    scan["core/scanner.py"] --> exists{"VULSCAN.THREATMODEL.md<br/>present?"}
     exists -->|"absent"| gen["generate_application_context()<br/>4-value enum"]
     exists -->|"present"| load["load_threat_model()"]
     load --> val{"valid?"}
@@ -155,11 +155,11 @@ Two properties worth knowing before you touch this:
 |---|---|---|
 | add a language | `config/languages.json` | `parsers/<lang>/`, then run `tests/test_scanner_contract.py` — it discovers parsers from the registry, so a new language enters the suite automatically |
 | change what a prompt says | `prompts/vulnerability_analysis.py` (Stage 1), `prompts/verification_prompts.py` (Stage 2) | `prompts/threat_model_render.py` if it concerns attacker personas |
-| change the threat-model schema | `context/threat_model.py` (`REQUIRED_TOP_LEVEL`, the `_validate_*` helpers) | `context/OPENANT_THREATMODEL_TEMPLATE.md`, and `tests/test_threat_model_rejection.py` |
+| change the threat-model schema | `context/threat_model.py` (`REQUIRED_TOP_LEVEL`, the `_validate_*` helpers) | `context/VULSCAN_THREATMODEL_TEMPLATE.md`, and `tests/test_threat_model_rejection.py` |
 | touch repository traversal | `core/repo_walk.py` — **one** walker for all Python parsers | never per-parser; that is why traversal bugs used to land in 1 of 5 |
 | open a file from a scanned repo | `utilities/file_io.py` — `read_repo_file` / `write_repo_file` / `repo_path_state` | never bare `open()`; these guard symlinks, FIFOs and size |
 | add a provider | `utilities/llm/providers/` | the adapter Protocol in `utilities/llm/adapter.py` |
-| change the Go↔Python contract | `core/schemas.py` **and** `apps/openant-cli/internal/` together | §6 — they are not bound by anything mechanical |
+| change the Go↔Python contract | `core/schemas.py` **and** `apps/vulscan-cli/internal/` together | §6 — they are not bound by anything mechanical |
 
 ---
 
@@ -197,5 +197,5 @@ Extending those exemplars per language is a known, unclosed gap.
 
 ## See also
 
-- `libs/openant-core/context/THREAT_MODEL_AUTHORITY_DESIGN.md` — the unimplemented
+- `libs/vulscan-core/context/THREAT_MODEL_AUTHORITY_DESIGN.md` — the unimplemented
   authority model for repository-supplied threat models

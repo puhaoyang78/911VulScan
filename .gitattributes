@@ -2,11 +2,11 @@
 # autocrlf converted their bytes on checkout and the sha256 enforcement
 # (TestVendoredReportScriptHashes) correctly caught the change. Never
 # convert, never diff-convert.
-apps/openant-cli/internal/report/vendor/*.js -text -diff
+apps/vulscan-cli/internal/report/vendor/*.js -text -diff
 
 # #577: the vendored ui scripts are BINARY artifacts too — same rule (Windows
 # autocrlf must never convert their bytes; the sha256 lock in
 # ui/vendor_test.go would correctly catch the change).
-apps/openant-cli/ui/vendor/*.js -text -diff
-apps/openant-cli/internal/server/testdata/browser-smoke/golden_expected.html text eol=lf
-apps/openant-cli/internal/server/testdata/browser-smoke/golden_input.md text eol=lf
+apps/vulscan-cli/ui/vendor/*.js -text -diff
+apps/vulscan-cli/internal/server/testdata/browser-smoke/golden_expected.html text eol=lf
+apps/vulscan-cli/internal/server/testdata/browser-smoke/golden_input.md text eol=lf

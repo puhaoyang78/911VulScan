@@ -4,11 +4,11 @@ __pycache__/
 .env
 .venv/
 node_modules/
-apps/openant-cli/bin/
-libs/openant-core/parsers/go/go_parser/go_parser
-libs/openant-core/parsers/go/go_parser/.openant-go-build.lock
-libs/openant-core/parsers/go/go_parser/.openant-go-build-*/
-libs/openant-core/parsers/javascript/.openant-npm-install.lock
+apps/vulscan-cli/bin/
+libs/vulscan-core/parsers/go/go_parser/go_parser
+libs/vulscan-core/parsers/go/go_parser/.vulscan-go-build.lock
+libs/vulscan-core/parsers/go/go_parser/.vulscan-go-build-*/
+libs/vulscan-core/parsers/javascript/.vulscan-npm-install.lock
 _docs/
 docs/
 .worktrees/
@@ -22,15 +22,18 @@ reports/
 # future intentional .log fixture is let back in by a path-narrow `!pattern`
 # negation here (or a plain `git add -f`); either way it needs an allowlist
 # entry, with a reason, in the test file at
-# libs/openant-core/tests/test_issue766_stray_run_log.py -- full
+# libs/vulscan-core/tests/test_issue766_stray_run_log.py -- full
 # repo-relative paths for tracked entries, bare names for root on-disk
 # entries.
 *.log
 
-# Local scripts and tools (e.g. libs/openant-core/scripts/local/) --
+# Local scripts and tools (e.g. libs/vulscan-core/scripts/local/) --
 # personal, unversioned developer scratch space. Does NOT cover
-# libs/openant-core/utilities/autopatcher/tools/ (tracked Auto Patcher
+# libs/vulscan-core/utilities/autopatcher/tools/ (tracked Auto Patcher
 # tracing/replay tooling) or any test file for it -- those are real,
 # versioned development capabilities, not local scratch.
 local/
 /bughunt-repros/
+
+# Generated minimal deployment archives
+/dist/

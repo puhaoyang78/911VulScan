@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+# Modified 2026-10-23 for the VulScan-only product namespace.
+"""
+Zig Parser Pipeline Orchestrator
+
+Entry point for parsing Zig repositories. Wires together the 4-stage pipeline:
+1. Repository Scanner
+2. Function Extractor
+3. Call Graph Builder
+4. Unit Generator
+
+Usage:
+    python test_pipeline.py <repo_path> \
+        --output <dir> \
+        --processing-level <all|reachable|codeql|exploitable> \
+        --skip-tests \
+        --name <dataset_name>
+"""
+
+import argparse
+import sys
+from pathlib import Path
+from utilities.file_io import write_json
+
+# Add parent directories to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from parsers.zig.repository_scanner import RepositoryScanner
+from parsers.zig.function_extractor import FunctionExtractor
+from parsers.zig.call_graph_builder import CallGraphBuilder
+from parsers.zig.unit_generator import UnitGenerator
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Parse Zig repositories for vulnerability analysis"
+    )
+    parser.add_argument("repo_path", help="Path to the Zig repository")
+    parser.add_argument(
+        "--output", "-o", required=True, help="Output directory for results"
+    )
+    parser.add_argument(
+        "--processing-level",
+        choices=["all", "reachable", "codeql", "exploitable"],
+        default="all",
+        help="Processing level for filtering functions",
+    )
+    parser.add_argument(
+        "--skip-tests", action="store_true", help="Skip test files and functions"
+    )
+    parser.add_argument("--name", help="Dataset name (defaults to repo directory name)")
+    parser.add_argument(
+        "--library-mode",
+        action="store_true",
+        help="Seed the exported public API as entry points (for libraries with no main/route/CLI)",
+    )
+    parser.add_argument(
+        "--dependency-depth",
+        type=int,
+        default=3,
+        help="Maximum depth for dependency resolution",
+    )
+
+    args = parser.parse_args()
+
+    repo_path = Path(args.repo_path).resolve()
+    output_dir = Path(args.output).resolve()
+
+    if not repo_path.exists():
+        print(f"Error: Repository path does not exist: {repo_path}", file=sys.stderr)
+        return 1
+
+    # Create output directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[Zig Parser] Parsing repository: {repo_path}", file=sys.stderr)
+    print(f"[Zig Parser] Output directory: {output_dir}", file=sys.stderr)
+    print(f"[Zig Parser] Processing level: {args.processing_level}", file=sys.stderr)
+    print(f"[Zig Parser] Skip tests: {args.skip_tests}", file=sys.stderr)
+
+    try:
+        # Stage 1: Repository Scanner
+        print("[Zig Parser] Stage 1: Scanning repository...", file=sys.stderr)
+        scanner = RepositoryScanner(
+            str(repo_path),
+            skip_tests=args.skip_tests,
+        )
+        scan_results = scanner.scan()
+        scanner.save_results(str(output_dir / "scan_results.json"), scan_results)
+        print(
+            f"  Found {scan_results['statistics']['total_files']} Zig files",
+            file=sys.stderr,
+        )
+
+        if scan_results["statistics"]["total_files"] == 0:
+            print("[Zig Parser] No Zig files found in repository", file=sys.stderr)
+            # Write empty dataset
+            empty_dataset = {
+                "name": args.name or repo_path.name,
+                "repository": str(repo_path),
+                "units": [],
+                "statistics": {"total_units": 0, "by_type": {}},
+                "metadata": {"generator": "zig_unit_generator.py"},
+            }
+            write_json(output_dir / "dataset.json", empty_dataset)
+            write_json(output_dir / "analyzer_output.json", {"repository": str(repo_path), "functions": {}})
+            return 0
+
+        # Stage 2: Function Extractor
+        print("[Zig Parser] Stage 2: Extracting functions...", file=sys.stderr)
+        extractor = FunctionExtractor(str(repo_path), scan_results)
+        extractor_output = extractor.extract()
+        print(
+            f"  Extracted {extractor_output['statistics']['total_functions']} functions",
+            file=sys.stderr,
+        )
+        print(
+            f"  Extracted {extractor_output['statistics']['total_classes']} structs",
+            file=sys.stderr,
+        )
+
+        # Stage 3: Call Graph Builder
+        print("[Zig Parser] Stage 3: Building call graph...", file=sys.stderr)
+        call_graph_builder = CallGraphBuilder(extractor_output)
+        call_graph_output = call_graph_builder.build()
+        call_graph_builder.save_results(
+            str(output_dir / "call_graph.json"), call_graph_output
+        )
+        print(
+            f"  Built graph with {call_graph_output['statistics']['total_edges']} edges",
+            file=sys.stderr,
+        )
+
+        # Apply processing level filters
+        if args.processing_level != "all":
+            call_graph_output = apply_processing_filter(
+                call_graph_output, args.processing_level, str(repo_path),
+                library_mode=args.library_mode,
+            )
+            print(
+                f"  After {args.processing_level} filter: {len(call_graph_output['functions'])} functions",
+                file=sys.stderr,
+            )
+
+        # Stage 4: Unit Generator
+        print("[Zig Parser] Stage 4: Generating analysis units...", file=sys.stderr)
+        generator = UnitGenerator(
+            call_graph_output,
+            str(repo_path),
+            dependency_depth=args.dependency_depth,
+        )
+        dataset, analyzer_output = generator.generate(name=args.name)
+        # #768: the filter's record reaches the DATASET (the reader surface).
+        _rf = call_graph_output.get("_reachability_filter")
+        if _rf is not None:
+            dataset.setdefault("metadata", {})["reachability_filter"] = _rf
+        generator.save_results(str(output_dir), dataset, analyzer_output)
+        print(
+            f"  Generated {dataset['statistics']['total_units']} units",
+            file=sys.stderr,
+        )
+
+        print("[Zig Parser] Pipeline complete!", file=sys.stderr)
+        return 0
+
+    except Exception as e:
+        print(f"[Zig Parser] Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return 1
+
+
+def apply_processing_filter(
+    call_graph_output: dict, level: str, repo_path: str, library_mode: bool = False
+) -> dict:
+    """
+    Apply processing level filters to reduce the function set.
+
+    Levels:
+    - all: No filtering (already handled)
+    - reachable: Filter to functions reachable from entry points
+    - codeql: Filter to reachable + CodeQL-flagged functions
+    - exploitable: Filter to reachable + CodeQL + LLM-classified exploitable
+    """
+    if level == "reachable":
+        return apply_reachability_filter(call_graph_output, repo_path, library_mode=library_mode)
+    elif level == "codeql":
+        # First apply reachability, then would filter by CodeQL results
+        filtered = apply_reachability_filter(call_graph_output, repo_path, library_mode=library_mode)
+        # CodeQL filtering would be applied here if results exist
+        return filtered
+    elif level == "exploitable":
+        # Apply all filters
+        filtered = apply_reachability_filter(call_graph_output, repo_path, library_mode=library_mode)
+        # CodeQL + LLM filtering would be applied here
+        return filtered
+    return call_graph_output
+
+
+def apply_reachability_filter(call_graph_output: dict, repo_path: str,
+                              library_mode: bool = False) -> dict:
+    """Filter to functions reachable from entry points.
+
+    Uses the real EntryPointDetector / ReachabilityAnalyzer contract, matching
+    the central core/parser_adapter.apply_reachability_filter and the C/Go/PHP/
+    Ruby/JS sibling pipelines. The previous implementation called an API that
+    never existed (``EntryPointDetector(repo_path)``, ``detector.detect()``,
+    ``ReachabilityAnalyzer(call_graph_output, entry_points)``,
+    ``analyzer.get_reachable_functions()``); because libs/vulscan-core is on
+    sys.path the imports succeeded, so the ``except ImportError`` guard never
+    fired and the resulting wrong-arity TypeError crashed every Zig parse at
+    --processing-level reachable.
+    """
+    try:
+        from utilities.agentic_enhancer.entry_point_detector import EntryPointDetector, blackout_warning, library_seed_ids, reachability_filter_record
+        from utilities.agentic_enhancer.reachability_analyzer import ReachabilityAnalyzer
+    except ImportError:
+        print(
+            "  Warning: Reachability analyzer not available, skipping filter",
+            file=sys.stderr,
+        )
+        return call_graph_output
+
+    functions = call_graph_output.get("functions", {})
+    call_graph = call_graph_output.get("call_graph", {})
+    reverse_call_graph = call_graph_output.get("reverse_call_graph", {})
+
+    # Detect entry points structurally (functions carry the snake_case
+    # 'unit_type' the Zig extractor emits, which the detector reads directly).
+    detector = EntryPointDetector(functions, call_graph)
+    entry_points = detector.detect_entry_points()
+
+    # Library-mode: seed the exported public API (a library has no main/route/CLI
+    # marker). Union-only — never drops a structurally-detected entry point.
+    if library_mode:
+        entry_points = entry_points | library_seed_ids(functions)
+
+    # Compute the reachable set via reverse-BFS from the entry points.
+    analyzer = ReachabilityAnalyzer(
+        functions=functions,
+        reverse_call_graph=reverse_call_graph,
+        entry_points=entry_points,
+    )
+    reachable = analyzer.get_all_reachable()
+
+    # N4 fix: empty-seed safety-net (mirrors core/parser_adapter.py). No entry
+    # points => the reachable set is empty => every function pruned, silently
+    # blacking out the dataset (dominant failure for library / no-entry targets).
+    # Degrade to keep-all + warn instead of a silent 0-unit result.
+    _keep_all_why = None
+    if not entry_points and functions:
+        _keep_all_why = "No entry points detected"
+        print("  [Warning] No entry points detected — keeping all units unfiltered "
+              "to avoid a silent blackout.", file=sys.stderr)
+        reachable = set(functions.keys())
+
+    # Filter functions to only reachable ones.
+    filtered_functions = {
+        fid: finfo for fid, finfo in functions.items() if fid in reachable
+    }
+
+    result = call_graph_output.copy()
+    result["functions"] = filtered_functions
+
+    # Filter the call graphs to the reachable subgraph too.
+    result["call_graph"] = {
+        k: [v for v in vs if v in reachable]
+        for k, vs in call_graph.items()
+        if k in reachable
+    }
+    result["reverse_call_graph"] = {
+        k: [v for v in vs if v in reachable]
+        for k, vs in reverse_call_graph.items()
+        if k in reachable
+    }
+
+    # #768: the ONE record shape (the core path's contract) — zig, like
+    # rust, had NO metadata.reachability_filter record at all (stderr was
+    # the only witness); the record rides the call-graph output and the
+    # pipeline's main stamps it into the dataset.
+    # r1-F1: the record counts DATASET UNITS, not call-graph functions —
+    # the generator drops the synthetic harnesses (instrumentation, not
+    # analysis targets), so a functions-based count would exceed the
+    # dataset's total_units (the reporter's --limit subset check reads the
+    # excess as a FALSE subset). The unit-aligned counts: the non-synthetic
+    # population (zig synthesizes no harnesses today — the parity holds the
+    # shape honest if it ever does).
+    _n_units = sum(1 for _f in functions.values()
+                   if not _f.get("synthetic_harness"))
+    _n_reachable_units = sum(1 for _f in filtered_functions.values()
+                             if not _f.get("synthetic_harness"))
+    result["_reachability_filter"] = reachability_filter_record(
+        detector, _n_units, len(entry_points),
+        _n_reachable_units, keep_all_why=_keep_all_why)
+    if not _keep_all_why:
+        # r1-F3 (core parity): the FILTERED arm stamps the advisory when it
+        # fires — the keep-all arm NEVER does (core's keep-all branch returns
+        # early; the keep-all warning IS the whole story there).
+        _blackout = blackout_warning(detector.entry_point_details,
+                                     _n_units, _n_reachable_units,
+                                     library_mode=library_mode)
+        if _blackout:
+            result["_reachability_filter"]["blackout_advisory"] = _blackout
+            print(f"  [Advisory] {_blackout}", file=sys.stderr)
+
+    return result
+
+
+if __name__ == "__main__":
+    sys.exit(main())

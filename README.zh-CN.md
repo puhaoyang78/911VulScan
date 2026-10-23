@@ -19,23 +19,23 @@ git clone --branch 911-dev https://github.com/puhaoyang78/911VulScan.git
 cd 911VulScan
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r libs/openant-core/requirements.txt
-python -m pip install -e 'libs/openant-core[dev]'
-cd apps/openant-cli
-go build -o bin/openant .
+python -m pip install -r libs/vulscan-core/requirements.txt
+python -m pip install -e 'libs/vulscan-core[dev]'
+cd apps/vulscan-cli
+go build -o bin/vulscan .
 cd ../..
-export OPENANT_PYTHON="$PWD/.venv/bin/python"
-./apps/openant-cli/bin/openant serve
+export VULSCAN_PYTHON="$PWD/.venv/bin/python"
+./apps/vulscan-cli/bin/vulscan serve
 ```
 
-打开终端显示的本机地址，默认为 `http://127.0.0.1:8080`。服务不提供多用户身份认证，请保留回环地址监听，不要直接暴露到公网。网页产物保存在 `~/.openant/webui/`。
+打开终端显示的本机地址，默认为 `http://127.0.0.1:8080`。服务不提供多用户身份认证，请保留回环地址监听，不要直接暴露到公网。网页产物保存在 `~/.vulscan/webui/`。
 
 ## 配置 DeepSeek
 
 推荐使用交互向导：
 
 ```bash
-./apps/openant-cli/bin/openant setup llm
+./apps/vulscan-cli/bin/vulscan setup llm
 ```
 
 也可在自己的终端设置 `DEEPSEEK_API_KEY`，或在网页中输入仅本次任务使用的密钥。网页输入不会保存到配置、任务元数据或日志中。`set-api-key --provider deepseek` 用于明确保存 DeepSeek 凭据；不要把密钥提交到代码库。
@@ -59,7 +59,7 @@ export OPENANT_PYTHON="$PWD/.venv/bin/python"
 }
 ```
 
-保存位置为 `~/.config/openant/config.json`，或 `$XDG_CONFIG_HOME/openant/config.json`。内置配置不必重复定义在 `llm_configs` 中。DeepSeek 适配器保留工具调用所需的历次 `reasoning_content`，支持明确关闭思考模式，不借用 OpenAI/Anthropic 密钥。
+保存位置为 `~/.config/vulscan/config.json`，或 `$XDG_CONFIG_HOME/vulscan/config.json`。内置配置不必重复定义在 `llm_configs` 中。DeepSeek 适配器保留工具调用所需的历次 `reasoning_content`，支持明确关闭思考模式，不借用 OpenAI/Anthropic 密钥。
 
 `--api-key` 保留旧版 Anthropic 覆盖语义；DeepSeek 请使用自己的环境变量、网页字段或配置向导。Auto Patcher 同样继承模型配置的默认分析绑定；已有显式供应商选择保持不变。
 
@@ -69,15 +69,15 @@ export OPENANT_PYTHON="$PWD/.venv/bin/python"
 
 ```bash
 # 只扫描自己有权测试的代码。未准备 Docker 时明确跳过动态测试。
-./apps/openant-cli/bin/openant scan /path/to/project \
+./apps/vulscan-cli/bin/vulscan scan /path/to/project \
   --llm-config deepseek-default --verify --skip-dynamic-test
 
 # C/C++ 完整扫描（需要 Docker）
-./apps/openant-cli/bin/openant scan /path/to/c-project \
+./apps/vulscan-cli/bin/vulscan scan /path/to/c-project \
   --language c --llm-config deepseek-default --verify
 
 # 对现有扫描结果单独进行动态验证
-./apps/openant-cli/bin/openant dynamic-test /path/to/pipeline_output.json \
+./apps/vulscan-cli/bin/vulscan dynamic-test /path/to/pipeline_output.json \
   --repo-path /path/to/c-project --llm-config deepseek-default
 ```
 
@@ -91,7 +91,7 @@ export OPENANT_PYTHON="$PWD/.venv/bin/python"
 - 固定容器模板、只读根文件系统、无运行时外网、移除 capabilities、禁止新增权限、资源限额；没有宿主卷挂载或宿主执行回退。
 - 镜像构建仍需拉取基础镜像和公开编译依赖。当前不提供 LeakSanitizer 内存泄漏检测保证。
 
-详细协议和限制见 [动态验证说明](libs/openant-core/utilities/dynamic_tester/README.md)。自动生成的驱动仍需人工核对，运行时诊断必须与原始发现和目标调用栈相符。
+详细协议和限制见 [动态验证说明](libs/vulscan-core/utilities/dynamic_tester/README.md)。自动生成的驱动仍需人工核对，运行时诊断必须与原始发现和目标调用栈相符。
 
 ## 二阶段资源回收与容量保护
 
@@ -102,7 +102,7 @@ export OPENANT_PYTHON="$PWD/.venv/bin/python"
 - 同一操作系统用户的动态验证尝试串行执行，跨进程文件锁在进程退出时释放；不会同时启动多个大构建。
 - 每个运行容器仍限制为 512 MiB 内存、1 个 CPU 和 256 个进程；Compose 最多允许 8 个服务。这些限制不等于整个构建过程的内存配额。
 - Docker 日志采用 `local` 驱动，每个容器最多保留 2 份、每份 10 MB；命令 stdout/stderr 各保留末尾 256 KiB，超出时明确标记截断。
-- 新尝试启动前检查默认 Docker builder 的共享构建缓存。达到 10 GiB 时拒绝继续构建；可用 `OPENANT_DOCKER_CACHE_MAX_BYTES` 设置正整数字节阈值。本地暂存目录所在磁盘可用空间不足 2 GiB 时也拒绝新尝试。
+- 新尝试启动前检查默认 Docker builder 的共享构建缓存。达到 10 GiB 时拒绝继续构建；可用 `VULSCAN_DOCKER_CACHE_MAX_BYTES` 设置正整数字节阈值。本地暂存目录所在磁盘可用空间不足 2 GiB 时也拒绝新尝试。
 
 需要支持 `--builder default` 的 Docker/Compose。程序显式使用所选 Docker context 的默认 builder，不沿用自定义 `BUILDKIT_HOST` 等构建后端覆盖，以免检查的缓存与实际构建后端不一致。环境或容量错误保留为动态验证错误，不表示漏洞不存在，也不应交给模型反复修改 PoC。
 
@@ -110,27 +110,27 @@ export OPENANT_PYTHON="$PWD/.venv/bin/python"
 
 清理失败会显示警告，并保留任务资源清单用于重试；不要直接删除清单或清空整个 Docker 主机来掩盖失败。升级后的所有权标签只适用于新验证任务，旧版本已经遗留的无标签资源需要管理员单独核对后处理。
 
-在支持文件租约锁的 Unix 系统上，CLI 将清单保存在系统用户配置目录下的 `openant/docker-lifecycle`（可用 `OPENANT_DOCKER_STATE_DIR` 指定私有目录）。下一次调用扫描引擎时，只重试没有活跃进程持有租约、且 Docker 后端身份匹配的遗留任务。后台恢复有独立时间预算，失败则保留记录。Windows 保留本次退出时的清理，但不自动判断旧任务是否已失效。直接调用 Python 而绕过 Go CLI，也没有 Go 外层强杀后的兜底；不能将这些场景描述为已经完成自动恢复。
+在支持文件租约锁的 Unix 系统上，CLI 将清单保存在系统用户配置目录下的 `vulscan/docker-lifecycle`（可用 `VULSCAN_DOCKER_STATE_DIR` 指定私有目录）。下一次调用扫描引擎时，只重试没有活跃进程持有租约、且 Docker 后端身份匹配的遗留任务。后台恢复有独立时间预算，失败则保留记录。Windows 保留本次退出时的清理，但不自动判断旧任务是否已失效。直接调用 Python 而绕过 Go CLI，也没有 Go 外层强杀后的兜底；不能将这些场景描述为已经完成自动恢复。
 
-真实 Docker 生命周期烟测默认跳过。需要验收时，仅在专用测试 Docker 主机上进入 `libs/openant-core`，执行 `OPENANT_DOCKER_LIFECYCLE_TESTS=1 python -m pytest tests/test_docker_lifecycle_integration.py -v`。该测试会拉取官方 `busybox:1.37`，验证正常退出、超时、构建失败、Compose 镜像隔离及 Python 被强杀后的回收；不调用模型，不运行外部项目 PoC，不执行全局缓存清理。Linux CI 单独启用这组测试。
+真实 Docker 生命周期烟测默认跳过。需要验收时，仅在专用测试 Docker 主机上进入 `libs/vulscan-core`，执行 `VULSCAN_DOCKER_LIFECYCLE_TESTS=1 python -m pytest tests/test_docker_lifecycle_integration.py -v`。该测试会拉取官方 `busybox:1.37`，验证正常退出、超时、构建失败、Compose 镜像隔离及 Python 被强杀后的回收；不调用模型，不运行外部项目 PoC，不执行全局缓存清理。Linux CI 单独启用这组测试。
 
 ## 验证方法
 
 ```bash
 # Python 静态检查和回归
-cd libs/openant-core
+cd libs/vulscan-core
 python -m ruff check .
 python -m pytest tests/test_llm_deepseek_adapter.py \
   tests/test_chinese_reports.py tests/test_dynamic_c_templates.py -q
 python -m pytest tests/ -q
 
 # Go 构建、静态检查及回归
-cd ../../apps/openant-cli
+cd ../../apps/vulscan-cli
 go vet ./...
 go test ./...
-go build -o bin/openant .
+go build -o bin/vulscan .
 ```
 
 DeepSeek 测试使用模拟响应，不调用付费接口。C/C++ 原生回归只编译仓库自带、已审阅的漏洞版/修复版 fixture；Docker 路由 mock 不等于真实镜像构建或容器验证通过。真实 DeepSeek、Docker 和浏览器视觉验收应在具备相应环境时分别执行，不应将单元测试通过视为全部验收完成。
 
-本分支的测试结果、证据边界和未执行项目见 [验证记录](VALIDATION.zh-CN.md)。
+最小部署包的构建与运行步骤见 [部署说明](README.deploy.md)。开发回归结果以对应提交的 CI 记录为准。

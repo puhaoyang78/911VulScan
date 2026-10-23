@@ -1,0 +1,328 @@
+# Modified 2026-10-23 for the VulScan-only product namespace.
+"""RED->GREEN test for fix #42 — centralize model IDs into utilities/model_config.py.
+
+Asserts the three properties the fix must satisfy:
+
+(a) No hard-coded model-ID *literal* remains in product source outside
+    ``utilities/model_config.py`` (grep-based scan over every product .py).
+(b) The new module imports resolve, and every consumer imports its IDs from it —
+    pricing now comes from the config/models.json registry (core.model_registry),
+    NOT from model_config — with no circular import.
+(c) The values match what was hard-coded before the refactor (behavior-preserving)
+    for CURRENT models; retired/unknown ids are omitted from pricing now (null in
+    the registry) so they can never price at $0. Cross-checked against each live
+    consumer.
+
+Run against the refactored tree (GREEN):
+    VULSCAN_CORE_ROOT=/path/to/vulscan-core \
+        python -m pytest \
+        model-config-centralize.test.py -q
+
+Run against the pristine tree (RED — literals still inline, module absent):
+    VULSCAN_CORE_ROOT=/path/to/pristine/vulscan-core ... (same command)
+
+With no VULSCAN_CORE_ROOT, it defaults to the repo's libs/vulscan-core.
+"""
+
+from __future__ import annotations
+
+import importlib
+import os
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+
+# --- locate the vulscan-core package under test ----------------------
+def _default_root() -> Path:
+    # This file lives in new-bugs-2/fixes/; core lives in
+    # new-bugs-2/VulScan/libs/vulscan-core.
+    return Path(__file__).resolve().parent.parent
+
+
+ROOT = Path(os.environ.get("VULSCAN_CORE_ROOT", str(_default_root()))).resolve()
+MODEL_CONFIG_REL = "utilities/model_config.py"
+
+
+@pytest.fixture(autouse=True)
+def _core_on_syspath():
+    """Put the core package root first on sys.path for the duration of a test."""
+    root = str(ROOT)
+    inserted = root not in sys.path
+    if inserted:
+        sys.path.insert(0, root)
+    # Put the original module objects BACK afterwards: a test module collected
+    # earlier that bound `utilities.X` at import time (e.g. tests/patch/
+    # test_progress_presentation.py's module-global `progress`) would
+    # otherwise configure an orphan while the code under test re-imports a
+    # fresh copy -- the same leak test_F3_verdict_taxonomy_shared_constant.py
+    # fixes for `core.*`.
+    saved_modules = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "utilities" or name.startswith("utilities.")
+    }
+    # Drop any cached target modules so a fresh ROOT is honored.
+    for name in list(sys.modules):
+        if name == "utilities" or name.startswith("utilities."):
+            del sys.modules[name]
+    try:
+        yield
+    finally:
+        for name in list(sys.modules):
+            if name == "utilities" or name.startswith("utilities."):
+                del sys.modules[name]
+        sys.modules.update(saved_modules)
+        if inserted and root in sys.path:
+            sys.path.remove(root)
+
+
+# --- (a) grep-based: no model-ID literal outside model_config.py ------
+# Quoted token that starts like a provider model family. Post-filtered to
+# require an embedded digit so prose placeholders such as "claude-..." and
+# fake ids such as "gemini_test" do not count.
+_CANDIDATE = re.compile(r"""["'](?:claude|gpt|gemini|o[0-9])[A-Za-z0-9.\-]*["']""")
+
+
+def _looks_like_real_model_id(token: str) -> bool:
+    inner = token[1:-1]
+    return bool(re.search(r"\d", inner)) and "..." not in inner
+
+
+_SKIP_DIRS = {"tests", "__pycache__", "site-packages", "node_modules"}
+
+
+def _product_py_files() -> list[Path]:
+    files: list[Path] = []
+    for path in ROOT.rglob("*.py"):
+        parts = path.relative_to(ROOT).parts
+        # Skip test trees, caches, and any bundled virtualenv / vendored
+        # third-party code (e.g. .venv-*/…/site-packages, hidden dirs).
+        if any(p in _SKIP_DIRS or p.startswith(".") for p in parts):
+            continue
+        if path.name.startswith("test_"):
+            continue
+        if path.as_posix().endswith(MODEL_CONFIG_REL):
+            continue
+        files.append(path)
+    return files
+
+
+def test_a_no_hardcoded_model_id_literal_outside_model_config():
+    offenders: list[str] = []
+    for path in _product_py_files():
+        text = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            for tok in _CANDIDATE.findall(line):
+                if _looks_like_real_model_id(tok):
+                    rel = path.relative_to(ROOT).as_posix()
+                    offenders.append(f"{rel}:{lineno}: {tok}")
+    assert not offenders, (
+        "Hard-coded model-ID literals must live only in "
+        f"{MODEL_CONFIG_REL}; found:\n" + "\n".join(offenders)
+    )
+
+
+# --- (b) imports resolve --------------------------------------------
+def test_b_model_config_module_imports():
+    mc = importlib.import_module("utilities.model_config")
+    for const in ("CLAUDE_OPUS", "CLAUDE_SONNET", "CLAUDE_HAIKU"):
+        assert isinstance(getattr(mc, const), str)
+    # Pricing moved OUT of model_config to the config/models.json registry
+    # (read by core.model_registry). Lock that removal so a stray dict cannot
+    # silently reintroduce a second, driftable source of truth.
+    for table in ("ANTHROPIC_PRICING", "OPENAI_PRICING", "GOOGLE_PRICING"):
+        assert not hasattr(mc, table), (
+            f"{table} must no longer live in model_config; pricing is registry-owned"
+        )
+
+
+def test_b_consumers_import_without_cycle():
+    # llm_client is imported transitively by the utilities.llm package
+    # (helpers -> llm_client); importing both proves no circular import.
+    for mod in (
+        "utilities.llm_client",
+        "utilities.context_enhancer",
+        "utilities.llm.builtins",
+        "utilities.llm.providers.anthropic",
+        "utilities.llm.providers.google",
+        "utilities.llm.providers.openai",
+    ):
+        importlib.import_module(mod)
+
+
+# --- (c) values mirror config/models.json ---------------------------
+# A hand-maintained mirror of the registry's CURRENT rates (NOT a frozen
+# pre-refactor snapshot: #344 corrected claude-opus-4-8 to the live rate —
+# every deliberate price change is a three-place edit: models.json, this
+# mirror, and any record_call-math pin). #626: the mirror pins the
+# input/output RATES — pricing entries may additionally carry cache
+# multipliers (pair-compare, not dict-compare).
+# Post-cutover, pricing_map("anthropic") OMITS retired/unknown ids (null-priced
+# in config/models.json), so the adapter table and MODEL_PRICING expose only the
+# CURRENT models. The retired ids were priced in the old dict but must never
+# price now (they resolve to warn + $0).
+_EXPECTED_ANTHROPIC_CURRENT = {
+    # #344: corrected to the live rate — Anthropic's pricing page and the live
+    # OpenRouter catalogue both say $5/$25 per MTok for Opus 4.8; the prior
+    # 15/75 was the retired Opus 4.1-era shipped-table rate.
+    "claude-opus-4-8": {"input": 5.00, "output": 25.00},
+    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
+    "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
+    # #601/#610: the direct-anthropic records added 2026-09-18 — every
+    # rate independently sourced (Anthropic's live pricing page; the live
+    # OpenRouter catalogue corroborates where it serves the model). The
+    # sonnet-5 rate is the page's introductory-made-standard price (the
+    # scheduled 2026-09-01 increase to $3/$15 did not occur).
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00},
+    "claude-opus-5": {"input": 5.00, "output": 25.00},
+    "claude-fable-5": {"input": 10.00, "output": 50.00},
+    "claude-fable-5-1": {"input": 10.00, "output": 50.00},
+    "claude-mythos-5": {"input": 10.00, "output": 50.00},
+    "claude-mythos-5-1": {"input": 10.00, "output": 50.00},
+    "claude-opus-4-7": {"input": 5.00, "output": 25.00},
+    # #648: the 4.5-generation census + the opus-4-6 status flip — every
+    # rate independently sourced (Anthropic's live pricing page + the live
+    # OpenRouter catalogue, both fetched 2026-10-20, both agreeing).
+    "claude-opus-4-5": {"input": 5.00, "output": 25.00},
+    "claude-sonnet-4-5": {"input": 3.00, "output": 15.00},
+    # #648: the dated snapshot spellings (their own records; the #434
+    # alias machinery also resolves them)
+    "claude-opus-4-5-20251101": {"input": 5.00, "output": 25.00},
+    "claude-sonnet-4-5-20250929": {"input": 3.00, "output": 15.00},
+    # #648: the liveness dispute RESOLVED (the page's priced row + the
+    # SDK literal + the OpenRouter listing)
+    "claude-opus-4-6": {"input": 5.00, "output": 25.00},
+    # #648 (the opus-r1 catch): the bare haiku-4-5 spelling — an SDK
+    # literal the census was missing; same rate as the dated form
+    "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
+    # #648 (the S6 witness's remainder): the 5.5 generation. The SDK's
+    # model-literal union carries claude-opus-5-5, claude-sonnet-5-5 and
+    # claude-haiku-5-5, and NO record priced them — the S6 census row
+    # failed on the first of them. Every rate independently sourced
+    # (Anthropic's live pricing page + the live OpenRouter catalogue, both
+    # fetched 2026-10-21, both agreeing to the cent). Note that Opus 5.5
+    # is the first Opus to price BELOW its predecessor ($4/$20 against
+    # Opus 5's $5/$25), so this snapshot's value is NOT the family rate.
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00},
+    # Haiku 5.5's BASE (prompts up to 100k) row — the page prices this one
+    # model by prompt length and the record models the base tier only; the
+    # record's own source field names the untracked over-100k tier.
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50},
+}
+_RETIRED_OR_UNKNOWN_ANTHROPIC = {
+    "claude-opus-4-20250514",
+    # #648: claude-opus-4-6 moved to _EXPECTED_ANTHROPIC_CURRENT (the
+    # liveness dispute resolved — the page prices it, the SDK carries it)
+    "claude-sonnet-4-20250514",
+    # #610: SDK-listed with NO published price row on Anthropic's page —
+    # deliberately unpriced (the registry's unknown/null form); pinned
+    # OMITTED here, and its EXISTENCE pinned in
+    # test_issue601_registry_completion.py (the omission assert alone
+    # cannot distinguish deliberately-unpriced from never-existed).
+    "claude-mythos-preview",
+}
+_EXPECTED_OPENAI = {
+    "gpt-4o": {"input": 2.50, "output": 10.00},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+    "gpt-4.1": {"input": 2.00, "output": 8.00},
+    "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
+    "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
+    "o1": {"input": 15.00, "output": 60.00},
+    "o3": {"input": 2.00, "output": 8.00},
+    "o3-mini": {"input": 1.10, "output": 4.40},
+    "o4-mini": {"input": 1.10, "output": 4.40},
+}
+_EXPECTED_GOOGLE = {
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
+    "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
+    "gemini-2.0-flash": {"input": 0.10, "output": 0.40},
+    "gemini-2.0-flash-lite": {"input": 0.075, "output": 0.30},
+    "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
+    "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
+    # #434: the stale-family gap closed — live-verified on BOTH sources
+    # (Google's pricing page and the OpenRouter catalogue agree at
+    # $0.75/$3.75; the page documents a Jan-1-2027 step to $1.50/$7.50).
+    "gemini-3.7-flash": {"input": 0.75, "output": 3.75},
+}
+_EXPECTED_PHASE_MODELS = {
+    "analyze": "claude-opus-4-8",
+    "enhance": "claude-sonnet-4-6",
+    "verify": "claude-opus-4-8",
+    "report": "claude-opus-4-8",
+    "dynamic_test": "claude-sonnet-4-6",
+    "llm_reach": "claude-opus-4-8",
+    "app_context": "claude-sonnet-4-6",
+}
+_EXPECTED_LEGACY_ENHANCE = "claude-sonnet-4-20250514"
+
+
+def test_c_pricing_maps_match_pre_refactor_snapshot():
+    # Values are now sourced from config/models.json via core.model_registry.
+    # Behavior-preserving for CURRENT models; retired/unknown ids are omitted.
+    # #434: the maps now ALSO carry each record's conventional alias
+    # spellings (bare/dotted/dashed — a config that spells a model any
+    # conventional way keeps its cost accounting). The snapshot holds as a
+    # SUBSET: every exact key keeps its exact value; every additional key
+    # must be an alias of a snapshot record, never a new price.
+    from core.model_registry import pricing_map, _alias_spellings
+
+    def _assert_snapshot(provider, expected):
+        got = pricing_map(provider)
+        # #626: pair-compare — entries may carry additive cache multipliers.
+        for k, v in expected.items():
+            assert (got[k]["input"], got[k]["output"]) == (v["input"], v["output"]), (
+                provider, k, got.get(k), v)
+        allowed_alias_keys = set()
+        for rid in expected:
+            allowed_alias_keys.update(_alias_spellings(rid))
+        for k in got:
+            if k not in expected:
+                assert k in allowed_alias_keys, (provider, k)
+                for v in expected.values():
+                    if (got[k].get("input"), got[k].get("output")) == (v["input"], v["output"]):
+                        break
+                else:
+                    raise AssertionError((provider, k, got[k]))
+
+    _assert_snapshot("anthropic", _EXPECTED_ANTHROPIC_CURRENT)
+    for retired in _RETIRED_OR_UNKNOWN_ANTHROPIC:
+        assert retired not in pricing_map("anthropic"), f"{retired} must be omitted, not priced"
+    _assert_snapshot("openai", _EXPECTED_OPENAI)
+    _assert_snapshot("google", _EXPECTED_GOOGLE)
+
+
+def test_c_consumers_resolve_to_pre_refactor_values():
+    from utilities.llm_client import MODEL_PRICING
+    from utilities.llm.providers.anthropic import AnthropicAdapter
+    from utilities.llm.providers.google import GoogleAdapter
+    from utilities.llm.providers.openai import OpenAIAdapter
+    from utilities.llm.builtins import VULSCAN_DEFAULT
+    from utilities.context_enhancer import CONTEXT_ENHANCEMENT_MODEL_LEGACY
+
+    # #434: subset semantics — the maps gained alias spellings; the exact
+    # keys keep their exact values. #626: pair-compare (cache multipliers
+    # are additive on the anthropic entries).
+    for k, v in _EXPECTED_ANTHROPIC_CURRENT.items():
+        assert (MODEL_PRICING[k]["input"], MODEL_PRICING[k]["output"]) == (v["input"], v["output"]), k
+        assert (AnthropicAdapter.pricing[k]["input"], AnthropicAdapter.pricing[k]["output"]) == (v["input"], v["output"]), k
+    for k, v in _EXPECTED_OPENAI.items():
+        assert (OpenAIAdapter.pricing[k]["input"], OpenAIAdapter.pricing[k]["output"]) == (v["input"], v["output"]), k
+    for k, v in _EXPECTED_GOOGLE.items():
+        assert (GoogleAdapter.pricing[k]["input"], GoogleAdapter.pricing[k]["output"]) == (v["input"], v["output"]), k
+    assert CONTEXT_ENHANCEMENT_MODEL_LEGACY == _EXPECTED_LEGACY_ENHANCE
+
+    resolved = {p: VULSCAN_DEFAULT.phases[p].model for p in _EXPECTED_PHASE_MODELS}
+    assert resolved == _EXPECTED_PHASE_MODELS
+
+
+def test_c_legacy_global_stays_pinned_to_adapter():
+    # Pre-existing drift guard invariant must survive the refactor.
+    from utilities.llm_client import MODEL_PRICING
+    from utilities.llm.providers.anthropic import AnthropicAdapter
+
+    assert MODEL_PRICING == AnthropicAdapter.pricing

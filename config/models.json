@@ -1,5 +1,5 @@
 {
-  "_comment": "Provider-model registry: the single source of truth for model IDs and pricing, read by BOTH the Python engine (core/model_registry.py) and the Go CLI (internal/models). status is OpenAnt's shipped claim; source+retrieved are its provenance. price is null for any model that must not be auto-dispatched (retired/unknown) so it never resolves to a silent $0 in cost accounting. Prices are OpenAnt's shipped rates and are NOT verified against live provider pricing in the build environment — see each record's source. Recency of `retrieved` is an operational/CI concern, not asserted in the unit tests. INVARIANT (test_models_price_cross_check.py): records for the same model family across providers must agree on price unless the diverging record carries an explicit `price_diverges` reason string (#344); the same rule holds for the cache multipliers (#690), with `cache_diverges` the analogous annotation (a non-empty reason string on the diverging record, e.g. the OpenRouter google routes listing cache writes at their own prices while Google's own page publishes none). `cache` carries {read, write?, source} — the multipliers of the base input rate with a per-record vendor receipt (#690); an UNRATED cache with a known reason carries `cache_unrated_reason` (e.g. the z-ai routes' shipped base prices diverging from the listing — the loud cost_incomplete path, never a pasted rate against a stale base). The Go registry reader (internal/models) drops unknown keys by design.",
+  "_comment": "Provider-model registry: the single source of truth for model IDs and pricing, read by BOTH the Python engine (core/model_registry.py) and the Go CLI (internal/models). status is VulScan's shipped claim; source+retrieved are its provenance. price is null for any model that must not be auto-dispatched (retired/unknown) so it never resolves to a silent $0 in cost accounting. Prices are VulScan's shipped rates and are NOT verified against live provider pricing in the build environment — see each record's source. Recency of `retrieved` is an operational/CI concern, not asserted in the unit tests. INVARIANT (test_models_price_cross_check.py): records for the same model family across providers must agree on price unless the diverging record carries an explicit `price_diverges` reason string (#344); the same rule holds for the cache multipliers (#690), with `cache_diverges` the analogous annotation (a non-empty reason string on the diverging record, e.g. the OpenRouter google routes listing cache writes at their own prices while Google's own page publishes none). `cache` carries {read, write?, source} — the multipliers of the base input rate with a per-record vendor receipt (#690); an UNRATED cache with a known reason carries `cache_unrated_reason` (e.g. the z-ai routes' shipped base prices diverging from the listing — the loud cost_incomplete path, never a pasted rate against a stale base). The Go registry reader (internal/models) drops unknown keys by design.",
   "schema_version": 1,
   "models": [
     {
@@ -26,7 +26,7 @@
         "input": 3.0,
         "output": 15.0
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live Anthropic pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live Anthropic pricing",
       "retrieved": "2026-07-23",
       "cache": {
         "read": 0.1,
@@ -42,7 +42,7 @@
         "input": 1.0,
         "output": 5.0
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live Anthropic pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live Anthropic pricing",
       "retrieved": "2026-07-23",
       "cache": {
         "read": 0.1,
@@ -223,7 +223,7 @@
       "provider": "anthropic",
       "status": "retired",
       "price": null,
-      "source": "labeled retired in openant source (model_config.py); no live verification in build env",
+      "source": "labeled retired in vulscan source (model_config.py); no live verification in build env",
       "retrieved": "2026-07-23"
     },
     {
@@ -231,7 +231,7 @@
       "provider": "anthropic",
       "status": "retired",
       "price": null,
-      "source": "labeled retired in openant source (model_config.py, cmd/setup.go); no live verification in build env",
+      "source": "labeled retired in vulscan source (model_config.py, cmd/setup.go); no live verification in build env",
       "retrieved": "2026-07-23"
     },
     {
@@ -437,7 +437,7 @@
         "input": 2.5,
         "output": 10.0
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23",
       "cache": {
         "read": 0.5,
@@ -453,7 +453,7 @@
         "input": 0.15,
         "output": 0.6
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23",
       "cache": {
         "read": 0.5,
@@ -469,7 +469,7 @@
         "input": 2.0,
         "output": 8.0
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 32768,
       "cache": {
@@ -486,7 +486,7 @@
         "input": 0.4,
         "output": 1.6
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 32768,
       "cache": {
@@ -503,7 +503,7 @@
         "input": 0.1,
         "output": 0.4
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 32768,
       "cache": {
@@ -520,7 +520,7 @@
         "input": 15.0,
         "output": 60.0
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 100000,
       "cache": {
@@ -537,7 +537,7 @@
         "input": 2.0,
         "output": 8.0
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 100000,
       "cache": {
@@ -554,7 +554,7 @@
         "input": 1.1,
         "output": 4.4
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 100000,
       "cache": {
@@ -571,7 +571,7 @@
         "input": 1.1,
         "output": 4.4
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 100000,
       "cache": {
@@ -588,7 +588,7 @@
         "input": 1.25,
         "output": 10.0
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 65536,
       "cache": {
@@ -604,7 +604,7 @@
         "input": 0.3,
         "output": 2.5
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 65536,
       "cache": {
@@ -620,7 +620,7 @@
         "input": 0.1,
         "output": 0.4
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
       "retrieved": "2026-07-23",
       "max_output_tokens": 65536,
       "cache": {
@@ -636,7 +636,7 @@
         "input": 0.1,
         "output": 0.4
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
       "retrieved": "2026-07-23"
     },
     {
@@ -647,7 +647,7 @@
         "input": 0.075,
         "output": 0.3
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
       "retrieved": "2026-07-23"
     },
     {
@@ -658,7 +658,7 @@
         "input": 1.25,
         "output": 5.0
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
       "retrieved": "2026-07-23"
     },
     {
@@ -669,7 +669,7 @@
         "input": 0.075,
         "output": 0.3
       },
-      "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
+      "source": "vulscan shipped pricing table (utilities/model_config.py); not re-verified against live Google pricing",
       "retrieved": "2026-07-23"
     },
     {

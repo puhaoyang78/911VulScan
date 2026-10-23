@@ -1,10 +1,10 @@
-# Adding a Parser to OpenAnt
+# Adding a Parser to VulScan
 
-This guide explains how to add support for a new programming language to OpenAnt's parsing pipeline.
+This guide explains how to add support for a new programming language to VulScan's parsing pipeline.
 
 ## Overview
 
-OpenAnt parsers transform source code repositories into **analysis units** — self-contained code snippets with dependency context that can be analyzed for vulnerabilities. Every parser follows the same 4-stage pipeline:
+VulScan parsers transform source code repositories into **analysis units** — self-contained code snippets with dependency context that can be analyzed for vulnerabilities. Every parser follows the same 4-stage pipeline:
 
 ```
 Repository → [1. Scanner] → [2. Extractor] → [3. Call Graph] → [4. Unit Generator] → Dataset
@@ -16,14 +16,14 @@ The output is a standardized `dataset.json` that downstream stages (analyzer, ve
 
 Adding a new language requires:
 
-1. **Create parser directory**: `libs/openant-core/parsers/<language>/`
+1. **Create parser directory**: `libs/vulscan-core/parsers/<language>/`
 2. **Implement 4 stage modules** (see [Pipeline Stages](#the-4-stage-pipeline))
 3. **Create pipeline orchestrator**: `test_pipeline.py`
-4. **Register in adapter**: `libs/openant-core/core/parser_adapter.py`
+4. **Register in adapter**: `libs/vulscan-core/core/parser_adapter.py`
 5. **Update language detection**: Add file extensions to `detect_language()`
-6. **Add to CLI whitelist**: `libs/openant-core/openant/cli.py` (required for `--language` flag)
+6. **Add to CLI whitelist**: `libs/vulscan-core/vulscan/cli.py` (required for `--language` flag)
 7. **Add dependencies**: `requirements.txt` and `pyproject.toml` (for venv auto-install)
-8. **Update CLI help**: `apps/openant-cli/cmd/parse.go` (optional, help text only)
+8. **Update CLI help**: `apps/vulscan-cli/cmd/parse.go` (optional, help text only)
 9. **Update README**: Add language to "Supported languages" list
 
 ## The 4-Stage Pipeline
@@ -334,11 +334,11 @@ The `reachable` filter uses `utilities/agentic_enhancer/entry_point_detector.py`
 > ".rs": "rust",
 > "rust": { "extensions": [".rs"], "parser": {"mode": "subprocess", "script": "parsers/rust/test_pipeline.py"}, "fence": "rust", "enabled": true }
 > ```
-> Adding the language flips the repo's own registry tests (e.g. `test_<lang>_is_not_supported` / `_is_rejected`) — update those in the same change, and add your language to the supported-language prose in README/CLAUDE/DOCUMENTATION/OPENANT/PIPELINE_MANUAL (a repo test enforces it). The manual steps below describe the pre-registry architecture; keep them only for older checkouts.
+> Adding the language flips the repo's own registry tests (e.g. `test_<lang>_is_not_supported` / `_is_rejected`) — update those in the same change, and add your language to the supported-language prose in README/CLAUDE/DOCUMENTATION/VULSCAN/PIPELINE_MANUAL (a repo test enforces it). The manual steps below describe the pre-registry architecture; keep them only for older checkouts.
 
 ### 1. Update `parser_adapter.py`
 
-Location: `libs/openant-core/core/parser_adapter.py`
+Location: `libs/vulscan-core/core/parser_adapter.py`
 
 Add your language to three places:
 
@@ -416,7 +416,7 @@ def _parse_rust(repo_path: str, output_dir: str, processing_level: str,
 
 ### 2. Add to CLI Whitelist (required)
 
-Location: `libs/openant-core/openant/cli.py`
+Location: `libs/vulscan-core/vulscan/cli.py`
 
 The CLI validates the `--language` flag against a whitelist. Without this, users get:
 ```
@@ -443,15 +443,15 @@ parse_p.add_argument(
 
 ### 3. Add Dependencies (required for venv)
 
-When users run `openant init` or any command for the first time, OpenAnt creates a managed venv at `~/.openant/venv/` and installs dependencies from `pyproject.toml`. For your parser's dependencies to be included, add them to **both** files:
+When users run `vulscan init` or any command for the first time, VulScan creates a managed venv at `~/.vulscan/venv/` and installs dependencies from `pyproject.toml`. For your parser's dependencies to be included, add them to **both** files:
 
-**a) `libs/openant-core/requirements.txt`**:
+**a) `libs/vulscan-core/requirements.txt`**:
 
 ```
 tree-sitter-rust>=0.21.0
 ```
 
-**b) `libs/openant-core/pyproject.toml`**:
+**b) `libs/vulscan-core/pyproject.toml`**:
 
 ```toml
 dependencies = [
@@ -464,7 +464,7 @@ Without this, users will see `ModuleNotFoundError` when running the parser.
 
 ### 4. Update CLI help (optional)
 
-Location: `apps/openant-cli/cmd/parse.go`
+Location: `apps/vulscan-cli/cmd/parse.go`
 
 Update the `--language` flag description:
 
@@ -489,7 +489,7 @@ For most languages, [tree-sitter](https://tree-sitter.github.io/tree-sitter/) is
 
 **Dependencies**:
 
-Add to both `libs/openant-core/requirements.txt` and `libs/openant-core/pyproject.toml`:
+Add to both `libs/vulscan-core/requirements.txt` and `libs/vulscan-core/pyproject.toml`:
 
 ```
 tree-sitter>=0.21.0
@@ -528,7 +528,7 @@ If tree-sitter doesn't have a grammar for your language, you can:
 
 ## Reference Implementation
 
-The **Ruby parser** (`libs/openant-core/parsers/ruby/`) is the cleanest tree-sitter implementation to use as a template:
+The **Ruby parser** (`libs/vulscan-core/parsers/ruby/`) is the cleanest tree-sitter implementation to use as a template:
 
 | File | Purpose |
 |------|---------|
@@ -551,7 +551,7 @@ Copy this directory, rename it, and adapt:
 ### 1. Run on a test repository
 
 ```bash
-cd libs/openant-core
+cd libs/vulscan-core
 python parsers/<language>/test_pipeline.py /path/to/test/repo --output /tmp/test-output
 ```
 
@@ -588,9 +588,9 @@ for unit in dataset["units"]:
 
 ```bash
 # From repo root
-openant init /path/to/test/repo -l <language> --name test/repo
-openant parse
-openant analyze  # Requires ANTHROPIC_API_KEY
+vulscan init /path/to/test/repo -l <language> --name test/repo
+vulscan parse
+vulscan analyze  # Requires ANTHROPIC_API_KEY
 ```
 
 ### 5. Compare with existing parsers

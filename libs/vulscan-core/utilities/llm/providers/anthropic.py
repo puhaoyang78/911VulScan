@@ -1,0 +1,586 @@
+# Modified 2026-10-23 for the VulScan-only product namespace.
+"""Anthropic adapter — reference implementation of :class:`LLMAdapter`.
+
+This is the only adapter that ships with VulScan's open-source release.
+It implements the full ``LLMAdapter`` contract against Anthropic's
+``anthropic`` Python SDK, and supports tool calling for the agentic
+``enhance`` and ``verify`` phases.
+
+Translation details:
+
+* **Unified blocks → Anthropic content:** ``TextBlock`` becomes
+  ``{"type": "text", "text": ...}``, ``ToolUseBlock`` becomes
+  ``{"type": "tool_use", ...}``, ``ToolResultBlock`` becomes
+  ``{"type": "tool_result", "tool_use_id": ..., "content": ...}``.
+* **Anthropic content → unified blocks:** the response's
+  ``content`` is a list of ``TextBlock``-like and
+  ``ToolUseBlock``-like SDK objects, which we walk by ``.type``.
+* **Stop reason:** the SDK's strings ``end_turn``, ``tool_use``,
+  ``max_tokens``, ``stop_sequence`` map 1:1 to our union. Anything
+  else is normalised to ``end_turn`` to avoid breaking pipeline
+  code on a future SDK addition.
+* **Errors:** the anthropic SDK's class hierarchy maps cleanly to
+  ours. A 529 ("overloaded") is treated as a transient rate-limit
+  per the design call recorded in plan §10.
+
+The adapter calls the existing global ``RateLimiter`` before each
+request and reports 429/529 back to it, so multi-worker scans still
+coordinate backoff the way they do today.
+"""
+
+from __future__ import annotations
+
+import sys
+import threading
+from typing import Any, Optional
+
+import anthropic
+
+from ._ratelimit import report_rate_limit, wait_for_rate_limit
+from .._pricing import LazyProviderPricing
+from .._redact import redact_secrets, redacted_cause_from
+from .. import LLMConfigError
+from ..adapter import (
+    CompletionResult,
+    ContentBlock,
+    LLMAuthError,
+    LLMConnectionError,
+    LLMNotFoundError,
+    LLMRateLimitError,
+    LLMRefusalError,
+    LLMResponseError,
+    Message,
+    StopReason,
+    TextBlock,
+    ToolDef,
+    ToolResultBlock,
+    ToolUseBlock,
+)
+
+
+_ANTHROPIC_STOP_REASONS: dict[str, StopReason] = {
+    "end_turn": "end_turn",
+    "tool_use": "tool_use",
+    "max_tokens": "max_tokens",
+    "stop_sequence": "stop_sequence",
+}
+
+# Anthropic's SDK ``StopReason`` literal (anthropic.types.StopReason)
+# includes ``"refusal"`` — the model declined for safety/policy reasons.
+# It is NOT in ``_ANTHROPIC_STOP_REASONS`` because it doesn't map to a
+# normal termination; we surface it as a typed ``LLMRefusalError`` so a
+# security scan doesn't read a refusal as a clean, finding-free pass.
+_ANTHROPIC_REFUSAL_STOP_REASON = "refusal"
+
+# Track stop_reasons we've already warned about so the stderr noise
+# is one-line-per-novel-value, not per call. Guarded by a lock for
+# consistency with ``_unknown_pricing_warned`` in
+# ``utilities/llm_client.py`` — multiple worker threads can hit
+# ``_response_to_unified`` concurrently when a scan parallelises
+# units, and we don't want even a benign double-warning race.
+_warned_stop_reasons: set[str] = set()
+_warned_stop_reasons_lock = threading.Lock()
+
+# Response content-block kinds we received but don't translate (dropped
+# on the way to the pipeline). Warn once per kind. Per-process, lock-guarded.
+_warned_block_kinds: set[str] = set()
+_warned_block_kinds_lock = threading.Lock()
+
+
+def _warn_unknown_block_kind(kind: str, *, adapter: str = "AnthropicAdapter") -> None:
+    """One-time stderr warning when the response carries a content-block
+    kind the adapter doesn't translate, so a dropped block isn't silent."""
+    should_warn = False
+    with _warned_block_kinds_lock:
+        if kind not in _warned_block_kinds:
+            _warned_block_kinds.add(kind)
+            should_warn = True
+    if should_warn:
+        sys.stderr.write(
+            f"warning: {adapter} received unknown content block "
+            f"kind {kind!r}; dropping it. If the pipeline should consume "
+            f"this, add a ContentBlock kind in utilities/llm/adapter.py "
+            f"and translate it here.\n"
+        )
+
+
+def reset_warnings() -> None:
+    """Clear this adapter's one-time-warning memory (for tests / new scans)."""
+    with _warned_stop_reasons_lock:
+        _warned_stop_reasons.clear()
+    with _warned_block_kinds_lock:
+        _warned_block_kinds.clear()
+
+
+# #646: the validate() probe's per-request timeout (SECONDS) — a cheap
+# 1-token liveness check, not a full request: with the 600 s adapter
+# default and max_retries=5 a black-holed probe fails after ~61
+# minutes worst case; 15 s anchors the Go wizard's probe
+# (llm_probe_google.go: http.Client{Timeout: 15 * time.Second}), so
+# the probe fails in ~104 s worst case (the client's max_retries=5
+# inherited: 6 jittered attempts under a 15 s deadline — the
+# opus-r1 wire measurement), down from the ~61 minutes of the
+# unbounded 600 s shape; the Go wizard's ONE-attempt probe is
+# tighter still. The request path's 600 s default and its
+# max_retries are UNTOUCHED.
+PROBE_TIMEOUT_SECONDS = 15
+
+
+class AnthropicAdapter:
+    """:class:`LLMAdapter` implementation backed by ``anthropic.Anthropic``."""
+
+    name = "anthropic"
+    supports_tools = True
+
+    # Per-million-token rates the adapter ships with. Authoritative
+    # for Anthropic-hosted models AND for Anthropic-format proxies
+    # that route those exact model IDs (e.g. an OpenRouter
+    # provider that exposes claude-opus-4-6). When the adapter is
+    # pointed at a non-Claude model ID (qwen/qwen-3-coder-480b via
+    # OpenRouter), the lookup misses and the tracker reports $0 +
+    # warning. Resolved lazily from config/models.json (the shared
+    # registry) on first access — retired/unknown ids are OMITTED, so
+    # they route to the tracker's warn+$0 path, never a silent $0 dict.
+    pricing = LazyProviderPricing("anthropic")
+
+    def __init__(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        max_retries: int = 5,
+        thinking: Optional[dict] = None,
+        _client: Optional[anthropic.Anthropic] = None,
+    ):
+        """Construct the adapter.
+
+        Args:
+            api_key: Anthropic-format API key. When ``None``, the SDK
+                reads ``ANTHROPIC_API_KEY`` from the environment.
+            base_url: Override the API host. ``None`` means the SDK's
+                default (api.anthropic.com). Required when pointing
+                at OpenRouter or any other Anthropic-compat endpoint.
+            max_retries: Forwarded to the SDK. The SDK's built-in
+                retry covers transient network blips; our rate limiter
+                handles 429-coordinated backoff on top.
+            thinking: #625 — the request-side thinking policy, passed
+                VERBATIM as the request's ``thinking`` value when set
+                (the SDK validates the shape; the newer SDKs accept
+                adaptive, older enabled/disabled with a budget).
+                ``None`` (the default) sends NO thinking parameter —
+                the instrument stays byte-identical to the pre-#625
+                request (#242: changing the default changes the
+                instrument; verdict behavior must be evaluated
+                separately, never mixed with a usage-accounting
+                change).
+            _client: Injected SDK instance for testing. Production
+                callers should not pass this.
+        """
+        # The effective policy, readable by the checkpoint fingerprint
+        # (backend_identity) and the step-report policy summary (#625).
+        self.thinking = thinking
+        if _client is not None:
+            self._client = _client
+            return
+
+        kwargs: dict[str, Any] = {"max_retries": max_retries}
+        if api_key is not None:
+            kwargs["api_key"] = api_key
+        if base_url is not None:
+            kwargs["base_url"] = base_url
+        self._client = anthropic.Anthropic(**kwargs)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def complete(
+        self,
+        *,
+        model: str,
+        system: Optional[str],
+        messages: list[Message],
+        max_tokens: int,
+        tools: Optional[list[ToolDef]] = None,
+    ) -> CompletionResult:
+        # supports_tools=True so we don't gate-check `tools` here —
+        # the contract allows tools through.
+        request: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [_message_to_anthropic(m) for m in messages],
+        }
+        if system is not None:
+            request["system"] = system
+        if tools:
+            request["tools"] = [_tool_to_anthropic(t) for t in tools]
+        # #625: the configured thinking policy, verbatim. Absent ⇒ NO key —
+        # the default request is byte-identical to the pre-#625 shape.
+        if self.thinking is not None:
+            request["thinking"] = self.thinking
+
+        # #696 trigger 3: the thinking budget must leave room for the
+        # response — a budget >= max_tokens reaches messages.create with no
+        # check and the provider rejects it AFTER iteration 1 is billed.
+        # Refuse it up front as a config error (it recurs on every unit —
+        # the designed-abort class the analyze stage re-raises).
+        if (self.thinking is not None
+                and self.thinking.get("type") not in (None, "disabled")):
+            budget = self.thinking.get("budget_tokens")
+            if isinstance(budget, int) and budget >= max_tokens:
+                raise LLMConfigError(
+                    f"thinking budget_tokens ({budget}) must be less than "
+                    f"max_tokens ({max_tokens}) — the budget is carved out "
+                    "of the response allowance and leaves no room for the "
+                    "response itself; lower budget_tokens or raise max_tokens"
+                )
+
+        # #625 T1 guard (2026-09-21, the retro bug-hunt finding): a
+        # thinking-enabled request WITH tools requires the thinking blocks
+        # preserved on the echoed assistant turn (Anthropic's documented
+        # contract) — this adapter's loop echo filters to text/tool-use, so
+        # iteration 2 would 400 AFTER paying for iteration 1. Refuse the
+        # combination loudly at build time instead of paying for the
+        # failure; the full preserved-blocks handling is a separate change.
+        if (tools and self.thinking is not None
+                and self.thinking.get("type") not in (None, "disabled")):
+            raise LLMConfigError(
+                f"AnthropicAdapter refuses thinking+tools: thinking blocks must be "
+                "preserved on the echoed assistant turn for multi-turn tool "
+                "loops, and this adapter's loop echo does not carry them "
+                "(iteration 2 would fail after iteration 1 is billed). "
+                "Remove `thinking` from the provider entry for tool-using "
+                "phases, or set it to {\"type\": \"disabled\"}.")
+
+        # Cooperate with the cross-worker backoff before issuing the
+        # call — same pattern the legacy AnthropicClient used, now
+        # shared with the OpenAI and Google adapters (see _ratelimit.py).
+        wait_for_rate_limit()
+
+        try:
+            response = self._client.messages.create(**request)
+        except anthropic.AuthenticationError as exc:
+            raise LLMAuthError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+        except anthropic.PermissionDeniedError as exc:
+            # 403 is auth-shaped enough to ride the same error class;
+            # the user message is still informative.
+            raise LLMAuthError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+        except anthropic.RateLimitError as exc:
+            retry_after = _retry_after_from(exc)
+            kind = _anthropic_rate_limit_kind(exc)
+            # #716 hunt defect 3: a QUOTA never arms the all-worker backoff —
+            # the global pause clears short-window throttles; a quota's
+            # recovery is never "wait N seconds" (it stalled every worker
+            # for 30s while the entitlement stayed exhausted).
+            if kind != "quota":
+                report_rate_limit(retry_after)
+            raise LLMRateLimitError(redact_secrets(str(exc)), retry_after=retry_after,
+                                    kind=kind) from redacted_cause_from(exc)
+        except anthropic.NotFoundError as exc:
+            raise LLMNotFoundError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+        except anthropic.APIConnectionError as exc:
+            # Covers DNS, TCP, TLS, and SDK-mapped timeouts (the
+            # SDK's APITimeoutError inherits from APIConnectionError).
+            raise LLMConnectionError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+        except anthropic.APIStatusError as exc:
+            # 529 "overloaded" is transient; treat it like a 429 per
+            # the design call so the rate-limiter coordinates backoff.
+            status = getattr(exc, "status_code", None)
+            if status == 529:
+                retry_after = _retry_after_from(exc)
+                report_rate_limit(retry_after)
+                raise LLMRateLimitError(redact_secrets(str(exc)), retry_after=retry_after) from redacted_cause_from(exc)
+            # Everything else (400, 422, 500, ...) is a structural
+            # response problem from the pipeline's perspective.
+            raise LLMResponseError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+
+        return _response_to_unified(response)
+
+    def validate(self, model: str) -> None:
+        # Cheapest valid request: 1-token cap, single "hi" message.
+        # Probing the actual configured model (not a hardcoded
+        # haiku) catches typo'd model IDs at init, per plan §5.
+        #
+        # Note: this path deliberately does NOT call
+        # ``rate_limiter.wait_if_needed()`` the way ``complete()``
+        # does. validate() is a one-shot probe at scan startup
+        # (registry.validate()), not a worker request — there's
+        # nothing for the cross-worker backoff to coordinate yet.
+        # A 429 returned here is still mapped to LLMRateLimitError
+        # below so the caller sees a typed error.
+        try:
+            self._client.messages.create(
+                timeout=PROBE_TIMEOUT_SECONDS,  # #646: the probe's tight deadline
+                model=model,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        except anthropic.AuthenticationError as exc:
+            raise LLMAuthError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+        except anthropic.PermissionDeniedError as exc:
+            raise LLMAuthError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+        except anthropic.RateLimitError as exc:
+            # 429 at init time is rare but possible (org-wide
+            # quota cooling from a recent scan). Surface it as a
+            # typed error so the caller can decide whether to
+            # retry — same shape as the run-time path in complete().
+            retry_after = _retry_after_from(exc)
+            raise LLMRateLimitError(redact_secrets(str(exc)), retry_after=retry_after) from redacted_cause_from(exc)
+        except anthropic.NotFoundError as exc:
+            raise LLMNotFoundError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+        except anthropic.APIConnectionError as exc:
+            raise LLMConnectionError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+        except anthropic.APIStatusError as exc:
+            # 529 "overloaded" at init time is the validation
+            # equivalent of a 429; same transient-retry classification.
+            status = getattr(exc, "status_code", None)
+            if status == 529:
+                retry_after = _retry_after_from(exc)
+                raise LLMRateLimitError(redact_secrets(str(exc)), retry_after=retry_after) from redacted_cause_from(exc)
+            # Everything else (400, 422, 500, ...) is a structural
+            # response problem from the pipeline's perspective.
+            raise LLMResponseError(redact_secrets(str(exc))) from redacted_cause_from(exc)
+
+
+# ----------------------------------------------------------------------
+# Translation helpers
+# ----------------------------------------------------------------------
+
+
+def _message_to_anthropic(message: Message) -> dict[str, Any]:
+    return {
+        "role": message.role,
+        "content": [_block_to_anthropic(block) for block in message.content],
+    }
+
+
+def _block_to_anthropic(block: ContentBlock) -> dict[str, Any]:
+    if isinstance(block, TextBlock):
+        return {"type": "text", "text": block.text}
+    if isinstance(block, ToolUseBlock):
+        return {
+            "type": "tool_use",
+            "id": block.id,
+            "name": block.name,
+            "input": block.input,
+        }
+    if isinstance(block, ToolResultBlock):
+        return {
+            "type": "tool_result",
+            "tool_use_id": block.tool_use_id,
+            "content": block.content,
+        }
+    # Unreachable: ContentBlock is a closed union. Defending against
+    # a future block kind that someone forgot to teach this adapter.
+    raise LLMResponseError(f"AnthropicAdapter: cannot serialise block of type {type(block).__name__}")
+
+
+def _tool_to_anthropic(tool: ToolDef) -> dict[str, Any]:
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "input_schema": tool.input_schema,
+    }
+
+
+def _extract_usage_details(usage: Any) -> Optional[dict]:
+    """Pass-through capture (#211): provider-supplied cache billing fields.
+
+    Copies ``cache_read_input_tokens`` / ``cache_creation_input_tokens``
+    VERBATIM when the provider reported them; returns ``None`` when neither
+    is present (absent ≠ 0 — fabricated zeros would poison reconciliation
+    against a provider bill). #626 AMENDED the blanket exclusion for the CACHE
+    fields: they now price at their own multipliers (#661) and total as separate
+    line items — never into total_input_tokens. The REASONING fields remain
+    outside the cost formula verbatim: ``TokenTracker`` stores them unsummed. (Anthropic's
+    ``output_tokens`` includes thinking tokens; there is no separate
+    reasoning field to capture on this path.)
+    """
+    if usage is None:
+        return None
+    details: dict = {}
+    for field_name in ("cache_read_input_tokens",
+                       "cache_creation_input_tokens"):
+        value = getattr(usage, field_name, None)
+        if value is not None:
+            details[field_name] = value
+    return details or None
+
+
+def _response_to_unified(
+    response: Any, *, adapter: str = "AnthropicAdapter"
+) -> CompletionResult:
+    """Translate an anthropic SDK ``Message`` object into our types.
+
+    ``adapter`` labels error/warning text so a derivative adapter that reuses
+    this translation (e.g. Bedrock) attributes failures to itself, not to
+    ``AnthropicAdapter``.
+    """
+    content_blocks: list[ContentBlock] = []
+    dropped_block_kinds: dict[str, int] = {}
+    for block in response.content:
+        kind = getattr(block, "type", None)
+        if kind == "text":
+            content_blocks.append(TextBlock(text=block.text))
+        elif kind == "tool_use":
+            content_blocks.append(
+                ToolUseBlock(
+                    id=block.id,
+                    name=block.name,
+                    input=block.input or {},
+                )
+            )
+        elif kind:
+            # Unknown block kind (e.g. a future "thinking" or "refusal"
+            # block). Pipeline code only knows Text and ToolUse in
+            # assistant turns, so we drop it — but warn once so the
+            # symptom isn't silent. For a security tool, a silently
+            # dropped "refusal" paired with a benign stop_reason could
+            # read as an empty success.
+            # #625: count it per kind — the dropped-block diagnostic (a
+            # count, never a token split; usage cannot split thinking).
+            _warn_unknown_block_kind(str(kind), adapter=adapter)
+            dropped_block_kinds[str(kind)] = (
+                dropped_block_kinds.get(str(kind), 0) + 1)
+
+    # R4-5: a usage-less response (rare, but seen on some proxies and on
+    # error-shaped 200s) must not AttributeError here — the downstream
+    # ``getattr(usage, ..., 0)`` already tolerates ``None``.
+    usage = getattr(response, "usage", None)
+    raw_stop = getattr(response, "stop_reason", None) or "end_turn"
+
+    # R4-2: a populated refusal is the more specific signal — raise it
+    # BEFORE the empty-content guard (a refusal may or may not carry
+    # text). Anthropic reports this as ``stop_reason == "refusal"``.
+    if raw_stop == _ANTHROPIC_REFUSAL_STOP_REASON:
+        raise LLMRefusalError(
+            f"{adapter} refused the request (stop_reason='refusal'); the "
+            "model declined to answer for safety or policy reasons"
+        )
+
+    # R4-1: an empty completion — no TextBlock AND no ToolUseBlock —
+    # carries nothing the pipeline can act on. This happens when
+    # ``response.content == []`` or when every block was an unknown kind
+    # we dropped above. Surface it via the taxonomy instead of returning
+    # an empty ``end_turn`` (mirrors the OpenAI empty-``choices`` and
+    # Gemini empty-``candidates`` guards); for a SECURITY tool an empty
+    # end_turn would read as a clean, passing result. A tool-use-only
+    # response (ToolUseBlock present, no text) is VALID and is not caught
+    # here because ``content_blocks`` is non-empty.
+    if not content_blocks:
+        # #561: the same cause-clause branch as the openai chat path — a
+        # max_tokens stop is the budget, not a filter; anything else keeps
+        # the honest non-assertion (#212).
+        _cause = ("the output budget was consumed before any visible "
+                  "content (reasoning models spend it on hidden reasoning)"
+                  if raw_stop == "max_tokens"
+                  else "the request may have been filtered or the response "
+                       "was malformed")
+        # #564: the rejected reply's usage travels ON the error (the #537
+        # carriage the openai sites already have — the successful return
+        # below reads the same response object; the guard used to raise
+        # before the read, recording 0/0 for a call the provider may have
+        # billed).
+        raise LLMResponseError(
+            f"{adapter} returned no usable content (empty completion; "
+            f"stop_reason={raw_stop!r}); {_cause}",
+            input_tokens=getattr(usage, "input_tokens", 0) if usage else 0,
+            output_tokens=getattr(usage, "output_tokens", 0) if usage else 0,
+            # F-A1: the DETAIL fields travel too, from the same extractor
+            # the successful return below calls on this same usage object.
+            # #626 prices the cache portion off these and nowhere else, and
+            # on this EXCLUSIVE shape the cached read is OUTSIDE
+            # input_tokens — dropping it under-reports real spend.
+            usage_details=_extract_usage_details(usage),
+        )
+
+    if raw_stop not in _ANTHROPIC_STOP_REASONS:
+        # A future SDK release adding "refusal" / "content_filter" /
+        # similar would otherwise look like a normal completion to
+        # pipeline code. Warn once so the symptom doesn't go silent.
+        # For a security-tool, treating a refusal as end_turn could
+        # mask false negatives — the next pipeline release should
+        # widen StopReason to include the new value explicitly.
+        should_warn = False
+        with _warned_stop_reasons_lock:
+            if raw_stop not in _warned_stop_reasons:
+                _warned_stop_reasons.add(raw_stop)
+                should_warn = True
+        if should_warn:
+            sys.stderr.write(
+                f"warning: {adapter} received unknown stop_reason "
+                f"{raw_stop!r}; treating as 'max_tokens' (not a clean finish). "
+                f"Add this value to StopReason in utilities/llm/adapter.py and the "
+                f"_ANTHROPIC_STOP_REASONS table if it's a new SDK addition.\n"
+            )
+    return CompletionResult(
+        content=content_blocks,
+        input_tokens=getattr(usage, "input_tokens", 0),
+        output_tokens=getattr(usage, "output_tokens", 0),
+        usage_details=_extract_usage_details(usage),
+        # #625: present-only diagnostic (None when nothing was dropped).
+        dropped_block_kinds=dropped_block_kinds or None,
+        # R2-C: an unknown/abnormal stop_reason defaults to "max_tokens" (not
+        # "end_turn") — as the warning above notes, treating a refusal/abnormal
+        # termination as end_turn masks false negatives. Known values (end_turn/
+        # max_tokens/tool_use/stop_sequence) use their explicit mapping.
+        stop_reason=_ANTHROPIC_STOP_REASONS.get(raw_stop, "max_tokens"),
+        raw=response,
+    )
+
+
+def _anthropic_rate_limit_kind(exc: Any) -> str:
+    """Classify an Anthropic 429 from its error body (#663).
+
+    Anthropic's 429 is normally the short-window rate_limit_error (a
+    throttle), BUT the enforced spend cap surfaces as the SAME 429 type
+    with error.details.error_code == "enforced_spend_limit_reached"
+    (docs: platform.claude.com/docs/en/api/rate-limits#reaching-your-
+    spend-cap) — a hard limit backoff cannot restore. The 400
+    usage-limits and 402 billing shapes already raise non-rate-limit
+    classes and are unaffected.
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            # T1 round-1 (F2): the documented shape carries details as a
+            # DICT ({"error_code": "enforced_spend_limit_reached"}); the
+            # list form is accepted too (older/observed variants).
+            details = err.get("details")
+            shapes = []
+            if isinstance(details, dict):
+                shapes = [details]
+            elif isinstance(details, list):
+                shapes = [d for d in details if isinstance(d, dict)]
+            for d in shapes:
+                ec = d.get("error_code")
+                if (ec == "enforced_spend_limit_reached"
+                        or "enforced_spend_limit" in str(ec or "")):
+                    return "quota"
+    return "throttle"
+
+
+def _retry_after_from(exc: Any) -> Optional[float]:
+    """Extract a retry-after header value from an SDK exception.
+
+    Returns ``None`` when the header is absent or unparseable — the
+    rate limiter then falls back to its configured default backoff.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    raw = None
+    try:
+        raw = headers.get("retry-after")
+    except AttributeError:
+        return None
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None

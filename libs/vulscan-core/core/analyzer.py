@@ -1,0 +1,1207 @@
+# Modified 2026-10-23 for the VulScan-only product namespace.
+"""
+Analysis wrapper (Stage 1 — detection only).
+
+Wraps the experiment.py analysis logic, accepting file paths instead of
+hardcoded dataset names. Reuses the existing analysis functions directly.
+
+Stage 2 verification is handled separately by ``core.verifier``.
+
+Checkpoints are always enabled. Per-unit results are saved to
+``{output_dir}/analyze_checkpoints/`` so interrupted runs can resume.
+On successful completion the checkpoint dir is removed.
+"""
+
+import json
+import os
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+
+from core.schemas import AnalyzeResult, AnalysisMetrics
+from utilities.llm import LLMAuthError, LLMConfigError
+from core import tracking
+from core.checkpoint import (StepCheckpoint, analyze_result_is_error,
+                             build_resume_delta)
+from core.progress import ProgressReporter
+
+# Import existing analysis machinery
+from utilities.llm_client import (get_global_tracker,
+                                  incomplete_markers,
+                                  turn_has_spend,
+                                  unpriced_kinds_from)
+from utilities.llm import (
+    PhaseBinding,
+    PhaseRegistry,
+    build_phase_registry,
+    load_config_file,
+    resolve_llm_config,
+)
+from utilities.file_io import read_json, write_json
+from utilities.json_corrector import JSONCorrector
+from utilities.llm import DEFAULT_MAX_TOKENS
+from utilities.context_enhancer import _build_error_info, _summary_error_bucket
+from utilities.rate_limiter import (
+    get_rate_limiter,
+    is_budget_exhausted_error,
+    is_retryable_error,
+)
+
+# #569 (choice c): the budget-retry cap — raised above the analyze
+# default but under the Anthropic non-streaming ceiling (the SDK rejects
+# >~21,333 with "Streaming is required" — see helpers.py:29-31; the
+# adapters call non-streaming). The deterministic length-empty class gets
+# ONE retry that attacks the cause (the budget) within that envelope.
+# #569 follow-up (2b): the envelope is PER-MODEL where the registry knows
+# the ceiling (config/models.json max_output_tokens) — the review round's
+# granularity fix: a per-ADAPTER number over-raises for small-output
+# models, and a 400 on the retry would be an un-retried error, strictly
+# worse than the coin flip. Unlisted models keep this default-derived cap.
+BUDGET_RETRY_MAX_TOKENS = min(DEFAULT_MAX_TOKENS * 2, 21000)
+
+def budget_retry_cap(index: int, budget_set: set, binding=None) -> int | None:
+    """#569: the per-index retry cap — the raised cap for the budget class,
+    None (the unchanged default) for every other retryable. With a binding,
+    the cap honors the model's documented max-output ceiling
+    (model_registry.max_output_tokens): a listed model gets
+    min(2x default, ceiling); an unlisted model keeps the default-derived
+    BUDGET_RETRY_MAX_TOKENS. A ceiling that admits no raise (<= the
+    default) returns None — a same-cap retry beats a guaranteed 400."""
+    if index not in budget_set:
+        return None
+    if binding is None:
+        return BUDGET_RETRY_MAX_TOKENS
+    from core import model_registry
+    ceiling = model_registry.max_output_tokens(
+        binding.provider_name, binding.model)
+    if ceiling is None:
+        return BUDGET_RETRY_MAX_TOKENS
+    cap = min(DEFAULT_MAX_TOKENS * 2, ceiling)
+    if cap <= DEFAULT_MAX_TOKENS:
+        return None
+    return cap
+
+
+# These live in core/ because core is shipped and experiment.py is not: importing
+# them from the research harness made `import core.analyzer` fail in any installed
+# environment (ModuleNotFoundError: no module named 'experiment').
+from core.analysis_core import (
+    analyze_unit,
+)
+from core.verdict_taxonomy import fold_legacy_finding, SENTINEL_CLASSIFICATIONS
+
+# Import application context (optional)
+try:
+    # ApplicationContext is the availability probe's residue — load_context
+    # alone proves the module imports (the try/except stays honest)
+    from context.application_context import load_context
+    HAS_APP_CONTEXT = True
+except ImportError:
+    HAS_APP_CONTEXT = False
+    load_context = None
+
+
+def _unit_security_classification(unit):
+    """Return a unit's security_classification, regardless of enhance mode.
+
+    Agentic enhance writes ``unit['agent_context']['security_classification']``;
+    single-shot enhance writes ``unit['llm_context']`` and historically had no
+    classification at all. Reading only ``agent_context`` silently dropped every
+    single-shot unit from ``--exploitable-only/all``. Prefer
+    agent_context, fall back to llm_context, else None.
+    """
+    agent_ctx = unit.get("agent_context")
+    if isinstance(agent_ctx, dict) and agent_ctx.get("security_classification") is not None:
+        cls = agent_ctx["security_classification"]
+        # #611: the same string guard the row/predicate readers carry — a
+        # non-str stamp (hand-edited/foreign dataset) must never raise out
+        # of the census's set-membership test
+        return cls if isinstance(cls, str) else None
+    llm_ctx = unit.get("llm_context")
+    if isinstance(llm_ctx, dict) and llm_ctx.get("security_classification") is not None:
+        cls = llm_ctx["security_classification"]
+        return cls if isinstance(cls, str) else None
+    return None
+
+
+# Truncation priority: higher score = kept first when --limit drops units.
+# Units the enhancer flagged as exploitable/vulnerable_internal must outrank
+# unclassified/neutral code so a limited run does not silently drop the most
+# security-relevant units.
+_LIMIT_PRIORITY = {"exploitable": 2, "vulnerable_internal": 1}
+
+
+def _limit_classification(unit):
+    """Return a unit's security_classification regardless of enhance mode.
+
+    Agentic enhance writes ``unit['agent_context']['security_classification']``;
+    single-shot enhance writes ``unit['llm_context']``. Reading only one mode
+    would treat the other's classified units as un-prioritized.
+    """
+    for ctx_key in ("agent_context", "llm_context"):
+        ctx = unit.get(ctx_key)
+        if isinstance(ctx, dict) and ctx.get("security_classification") is not None:
+            return ctx.get("security_classification")
+    return None
+
+
+def _apply_limit(units, limit):
+    """Truncate ``units`` to ``limit``, keeping the highest-priority units.
+
+    Units arrive from the parser in alphabetical-by-path order
+    (repository_scanner.py sorts ``self.files`` by path). A raw head-slice
+    therefore kept the first N alphabetical units (``Doc/`` before ``Lib/``)
+    with no relevance weighting, silently dropping high-value code on a
+    ``--limit`` run.
+
+    Sort by enhancement security_classification (exploitable >
+    vulnerable_internal > other) before slicing. The sort is stable, so units
+    in the same classification tier keep their original (alphabetical) order;
+    a no-limit call returns the list unchanged.
+    """
+    if not limit:
+        return units
+    prioritized = sorted(
+        units,
+        key=lambda u: _LIMIT_PRIORITY.get(_limit_classification(u), 0),
+        reverse=True,
+    )
+    return prioritized[:limit]
+
+
+def _process_unit(binding: PhaseBinding, unit, index, json_corrector, app_context,
+                  max_tokens=None):
+    """Process a single unit for Stage 1 detection.
+
+    Returns a dict with all result data. Does not mutate shared state.
+    """
+    uid = unit.get("id", f"unit_{index}")
+    start = time.monotonic()
+    tracker = get_global_tracker()
+    tracker.start_unit_tracking()
+
+    try:
+        result = analyze_unit(
+            binding, unit,
+            use_multifile=True,
+            json_corrector=json_corrector,
+            app_context=app_context,
+            max_tokens=max_tokens,
+        )
+
+        # Ensure unit_id is always present
+        result["unit_id"] = uid
+
+        # Ensure finding field is always set (may be None after JSON correction)
+        # and normalize its casing at ingestion. A model may emit a capitalized
+        # finding (e.g. "Vulnerable"); the downstream verifier/reporter gates
+        # compare against lowercase literals, so an un-normalized value would be
+        # silently dropped (a security false-negative). Recover-only: lowercase
+        # an existing verdict/finding string, never manufacture one.
+        if result.get("finding"):
+            result["finding"] = str(result["finding"]).lower()
+        elif result.get("verdict"):
+            result["finding"] = str(result["verdict"]).lower()
+
+        # Extract code for verify step
+        route_key = result.get("route_key", uid)
+        code_field = unit.get("code", {})
+        if isinstance(code_field, dict):
+            code_for_route = code_field.get("primary_code", "")
+        else:
+            code_for_route = code_field
+
+        finding = result.get("finding", "error")
+        elapsed = time.monotonic() - start
+        worker = threading.current_thread().name
+
+        return {
+            "index": index,
+            "result": result,
+            "route_key": route_key,
+            "code_for_route": code_for_route,
+            "finding": finding,
+            "elapsed": elapsed,
+            "error": None,
+            "worker": worker,
+            "usage": tracker.get_unit_usage(),
+        }
+
+    except (LLMAuthError, LLMConfigError):
+        # #696: the designed-abort classes re-raise — the llm_reachability
+        # parity anchor ("Auth failures are fatal and recur on every batch —
+        # surface them instead of burying them as a per-batch 'failed'
+        # line"). A rejected thinking policy (LLMConfigError) recurs on
+        # every unit the same way an auth failure does: converting either
+        # into a per-unit ERROR row lets an all-fatal scan read green
+        # (status success, exit 0) while every unit failed. The re-raise
+        # aborts the phase; step_context marks the step error and the
+        # envelope/exit contract follows.
+        raise
+    except Exception as e:
+        elapsed = time.monotonic() - start
+        worker = threading.current_thread().name
+        return {
+            "index": index,
+            "result": {
+                "unit_id": uid,
+                "verdict": "ERROR",
+                "finding": "error",
+                "error": str(e),
+                # #663 (audit round): the STRUCTURED error rides the INNER
+                # result dict -- run_analysis stores THIS dict into
+                # results[i], so the retry decision (which prefers
+                # error_info over the string) actually sees the kind.
+                "error_info": _build_error_info(e),
+            },
+            "route_key": uid,
+            "code_for_route": "",
+            "finding": "error",
+            "elapsed": elapsed,
+            "error": str(e),
+            # #663 (T1 round-1 F4): the STRUCTURED error rides alongside the
+            # string -- the retry decision prefers it (the kind-carrying
+            # dict), while every string consumer keeps its shape.
+            "error_info": _build_error_info(e),
+            "worker": worker,
+            "usage": tracker.get_unit_usage(),
+        }
+
+
+def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, workers,
+                   checkpoint=None, summary_callback=None):
+    """Run Stage 1 detection across all units.
+
+    Uses ThreadPoolExecutor for parallel processing when workers > 1.
+    Supports checkpoint/resume via the checkpoint parameter.
+
+    Args:
+        summary_callback: Optional callable(finding, usage=None,
+            error_msg=None, error_info=None) called from main thread after
+            each unit completes. Used for _summary.json updates (#800:
+            the error args carry the material the breakdown classifies).
+
+    Returns (results_list, code_by_route_dict) in original unit order.
+    """
+    total = len(units)
+    tracker = get_global_tracker()
+
+    # Load checkpoint state
+    checkpointed = {}
+    if checkpoint is not None:
+        checkpointed = checkpoint.load()
+        if checkpointed:
+            print(f"[Detect] Restored {len(checkpointed)} units from checkpoints",
+                  file=sys.stderr, flush=True)
+
+    # Pre-populate results from checkpoints, but ONLY for successfully-completed
+    # units. Errored units are loaded into the "units_to_process" list so they
+    # get retried on resume (matches enhance's behavior).
+    results = [None] * total
+    code_by_route = {}
+    units_to_process = []
+
+    # Hoisted to module level (testable; mirrors checkpoint.py's predicates).
+    for i, unit in enumerate(units):
+        uid = unit.get("id", f"unit_{i}")
+        cp_data = checkpointed.get(uid)
+        # #611 recovery blocker: a sentinel-stamped analyze checkpoint (the
+        # prior run analyzed a unit whose enhancement had not completed)
+        # re-analyzes when re-enhancement CHANGES its classification — the
+        # two-sided predicate (a completed-classification checkpoint stays
+        # adopted; a still-sentinel checkpoint stays adopted too, matching
+        # the run's own dataset; only the transition re-analyzes — the
+        # sentinel→completed migration off the old hint policy).
+        cp_is_stale = bool(cp_data) and _cp_is_stale(cp_data, unit)
+        if cp_data and not _cp_is_error(cp_data) and not cp_is_stale:
+            results[i] = cp_data.get("result", {})
+            code_by_route[cp_data.get("route_key", uid)] = cp_data.get("code_for_route", "")
+        else:
+            units_to_process.append((i, unit))
+
+    # #435 (wave r1, three axes): done/remaining derive from the retry queue
+    # itself — total minus what actually runs — so the narration can never
+    # disagree with the queue by ANY input class. The round-1 fix tallied
+    # non-error rows over checkpointed.values(), but the queue's predicate is
+    # "non-error row whose id IS IN the units list": checkpoint.load()
+    # returns every file in the dir, nothing invalidates stale entries when
+    # units legitimately shrink on a resume (--limit, --exploitable, the
+    # diff filter, a re-parse), so a foreign row overcounted again — the
+    # same 3/2 shape, a different trigger. (finding_verifier.py computes the
+    # same quantity the same way: remaining = len(results_to_verify).)
+    _done = total - len(units_to_process)
+    # #685: no cost_baseline holder here BY CALL ORDER, not by omission —
+    # run_analysis takes the #281 post-injection re-snapshot before it
+    # invokes _run_detection, so this reporter's own construction-time
+    # snapshot is already past the restored spend. Pinned by
+    # tests/test_issue685_progress_step_own_cost.py.
+    progress = ProgressReporter("Detect", total, tracker=tracker, completed=_done)
+
+    mode = "sequential" if workers <= 1 else f"parallel ({workers} workers)"
+    remaining = len(units_to_process)
+    print(f"[Detect] Mode: {mode}, {remaining} units to process ({_done} already done)",
+          file=sys.stderr, flush=True)
+
+    def _process_and_save(i, unit):
+        out = _process_unit(binding, unit, i, json_corrector, app_context)
+        # Save checkpoint
+        if checkpoint is not None:
+            uid = out["result"].get("unit_id", f"unit_{i}")
+            cp_data = {
+                "result": out["result"],
+                "route_key": out["route_key"],
+                "code_for_route": out["code_for_route"],
+            }
+            if out.get("usage"):
+                cp_data["usage"] = out["usage"]
+            checkpoint.save(uid, cp_data)
+        return out
+
+    if workers <= 1:
+        # Sequential mode
+        try:
+            for i, unit in units_to_process:
+                out = _process_and_save(i, unit)
+                results[i] = out["result"]
+                code_by_route[out["route_key"]] = out["code_for_route"]
+                if summary_callback:
+                    summary_callback(out["finding"], usage=out.get("usage"),
+                                     error_msg=out["result"].get("error"),
+                                     error_info=out["result"].get("error_info"))
+                progress.report(
+                    out["result"].get("unit_id", f"unit_{i}"),
+                    detail=out["finding"],
+                    unit_elapsed=out["elapsed"],
+                )
+        except KeyboardInterrupt:
+            print(_interrupt_report(results, total), file=sys.stderr, flush=True)
+            progress.finish()
+            # #313: stop swallowing the interrupt. The checkpoints are
+            # written (per-unit saves happen in _process_and_save) and the
+            # report is printed; swallowing it made the None placeholders
+            # reach _count_verdicts (AttributeError) and the resulting
+            # error envelope made the Go CLI record the interrupt as a
+            # FAILED scan — the interrupt short-circuit fires only on
+            # empty stdout.
+            raise
+        progress.finish()
+        return results, code_by_route
+
+    # Parallel mode
+    executor = ThreadPoolExecutor(max_workers=workers)
+    future_to_index = {}
+    for i, unit in units_to_process:
+        future = executor.submit(_process_and_save, i, unit)
+        future_to_index[future] = i
+
+    try:
+        for future in as_completed(future_to_index):
+            out = future.result()
+            idx = out["index"]
+            results[idx] = out["result"]
+            code_by_route[out["route_key"]] = out["code_for_route"]
+            if summary_callback:
+                summary_callback(out["finding"], usage=out.get("usage"),
+                                 error_msg=out["result"].get("error"),
+                                 error_info=out["result"].get("error_info"))
+            worker = out.get("worker", "?")
+            progress.report(
+                out["result"].get("unit_id", f"unit_{idx}"),
+                detail=f"{out['finding']}  [{worker}]",
+                unit_elapsed=out["elapsed"],
+            )
+    except KeyboardInterrupt:
+        print("[Detect] Interrupted — cancelling pending work...",
+              file=sys.stderr, flush=True)
+        executor.shutdown(wait=False, cancel_futures=True)
+        print(_interrupt_report(results, total), file=sys.stderr, flush=True)
+        progress.finish()
+        raise  # #313: see the sequential handler note
+    except (LLMAuthError, LLMConfigError):
+        # #696 (the fable-hunt zombie catch): the DESIGNED-ABORT classes —
+        # every pending unit is a doomed API call against the same bad
+        # key/policy, so cancel the unstarted (the KI arm's mirror) and
+        # never swallow the raise.
+        executor.shutdown(wait=False, cancel_futures=True)
+        progress.finish()
+        raise
+    except Exception:
+        # #696 (the in-suite wedge catch — the patch-pipeline regression):
+        # a GENERIC exception must keep the base contract — the pending
+        # futures' checkpoint saves COMPLETE (shutdown WITHOUT
+        # cancel_futures), because the checkpointed pipeline's resume
+        # machinery polls for them; cancelling them wedged the pipeline's
+        # retry loop. The raise still aborts the phase; step_context marks
+        # the step error; the envelope/exit contract follows.
+        executor.shutdown(wait=False)
+        progress.finish()
+        raise
+    else:
+        executor.shutdown(wait=False)
+
+    progress.finish()
+
+    return results, code_by_route
+
+
+def _interrupt_report(results, total):
+    """#313: what an interrupted run actually did — N analysed, M not
+    started, checkpoints written. Both numbers derive from the results
+    list (the None placeholders are the not-started units)."""
+    analysed = sum(1 for r in results if r is not None)
+    not_started = total - analysed
+    return (
+        f"[Detect] Interrupted after {analysed}/{total} unit(s) "
+        f"({not_started} not started); progress saved to checkpoints")
+
+
+def _result_security_classification(result) -> str | None:
+    """#611: a results-row's enhancement classification, mode-agnostic:
+    the row stamp (the agentic path), falling back to None (the
+    single-shot row carries no stamp today — the counter's documented
+    agentic-only scope)."""
+    cls = (result or {}).get("security_classification")
+    return cls if isinstance(cls, str) else None
+
+
+def _cp_is_stale(cp_data, unit):
+    """#611 recovery blocker: is this adoptable checkpoint STALE — a
+    sentinel-stamped analyze row whose unit now carries a COMPLETED
+    classification (re-enhancement migrated it off the old hint policy)?
+    Two-sided: a completed-classification checkpoint is never stale; a
+    still-sentinel checkpoint matches the run's own dataset and stays
+    adopted."""
+    cp_cls = (cp_data.get("result", {}) or {}).get("security_classification")
+    # the same string guard _result_security_classification carries — a
+    # non-str/unhashable stamp must never raise out of the predicate
+    if not isinstance(cp_cls, str):
+        return False
+    current_cls = _unit_security_classification(unit)
+    return (
+        cp_cls in SENTINEL_CLASSIFICATIONS
+        and current_cls is not None
+        and current_cls not in SENTINEL_CLASSIFICATIONS
+    )
+
+
+def _cp_is_error(cp_data):
+    """Is this checkpointed unit an error (must be re-analyzed, not adopted)?
+
+    Delegates to ``checkpoint.analyze_result_is_error`` — the one shared
+    predicate (load_ids / status / the summary seed below all use it; four
+    hand-copies drifted within one PR).
+    """
+    res = cp_data.get("result", {}) if cp_data else {}
+    return analyze_result_is_error(res)
+
+
+def _seed_summary(existing: dict, unit_ids: frozenset | set | None = None,
+                  units: list | None = None) -> dict:
+    """Seed the _summary.json counters from checkpointed rows.
+
+    Counts as completed ONLY the rows adoption will keep: an errored row
+    (``analyze_result_is_error``) is re-analyzed and its outcome is owned by
+    ``_summary_callback`` — seeding it here (as completed OR as an error)
+    double-counts on resume (completed + errors > total; the pre-existing
+    verdict=="ERROR" over-count, which #316/#324 was extending to the
+    neither-key shape). Usage tokens accumulate over ALL rows — the spend
+    happened regardless of the row's fate.
+
+    famD panel (sonnet): when unit_ids is given, a FOREIGN row — a stale
+    checkpoint entry whose id is not in the current units list (units can
+    legitimately shrink on a resume: --limit, --exploitable, the diff
+    filter, a re-parse) — is excluded from the completed seed, the same
+    id-membership predicate the retry queue and the narration now use; the
+    #316/#324 seed would otherwise over-count completed past total. Usage
+    excludes foreign rows too — the summary describes THIS run's units; a
+    prior run's spend on units no longer in the set is not this run's
+    spend (the test pins the consistency both ways).
+
+    Returns: completed, input_tokens, output_tokens, cost_usd,
+    unpriced_models (the #216 marker), resume_delta (the #802 kept-set
+    delta: the dropped foreign rows classified by their prior verdicts —
+    PRESENT-ONLY: the key is absent when nothing dropped or the population
+    is unconstrained).
+    """
+    completed = 0
+    input_tokens = 0
+    output_tokens = 0
+    cost_usd = 0.0
+    unpriced: set = set()
+    # #626/PR#661 hunt F4: the cache kind's own set. The per-unit checkpoint
+    # has always carried ``unpriced_cache_models`` (get_unit_usage writes
+    # it); this seed read ``unpriced_models`` only, so the kind died here and
+    # the resumed phase reported a complete cost after cache-unpriced spend.
+    unpriced_cache: set = set()
+    _unit_by_id = {u.get("id"): u for u in (units or [])}
+    # #802: the foreign rows — checkpointed units NOT in this run's
+    # population — were skipped "counted nowhere" (the #316/#324 famD
+    # exclusion). A row that ERRORED in the prior run is the exact work a
+    # resume exists to finish; when it leaves scope the headline error
+    # count falls and reads as repair. The delta records what left, with
+    # prior verdicts, so the absorption is visible.
+    _dropped_rows: list[tuple] = []
+    for _id, _cp in existing.items():
+        if unit_ids is not None and _id not in unit_ids:
+            _dropped_rows.append(
+                (_id, analyze_result_is_error(_cp.get("result") or {})))
+            continue
+        # #611: a STALE row (sentinel-stamped, re-enhancement migrated it)
+        # is re-analyzed — seeding it as completed double-counts on the
+        # migration resume. Its USAGE still accumulates (the spend happened
+        # regardless; the row is this run's unit — the same shape as the
+        # errored-row gate below).
+        _stale = bool(
+            units is not None and _id in _unit_by_id
+            and _cp_is_stale(_cp, _unit_by_id[_id]))
+        if (not _stale
+                and not analyze_result_is_error(_cp.get("result") or {})):
+            completed += 1
+        _usage = _cp.get("usage", {})
+        input_tokens += _usage.get("input_tokens", 0)
+        output_tokens += _usage.get("output_tokens", 0)
+        cost_usd += _usage.get("cost_usd", 0.0)
+        # #216 + #626: restore BOTH incomplete-cost kinds from the per-unit
+        # records, through the one reader that knows which keys carry them.
+        _u, _c = unpriced_kinds_from(_usage)
+        unpriced.update(_u)
+        unpriced_cache.update(_c)
+    _resume_delta = build_resume_delta(_dropped_rows)
+    seed = {
+        "completed": completed,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": cost_usd,
+        "unpriced_models": unpriced,
+        "unpriced_cache_models": unpriced_cache,
+    }
+    if _resume_delta is not None:
+        # #802: present-only in the seed too (the callers thread it the
+        # same way into _summary.json).
+        seed["resume_delta"] = _resume_delta
+    return seed
+
+
+def _count_verdicts(results):
+    """Count verdict categories from a results list."""
+    counts = {
+        "vulnerable": 0,
+        "bypassable": 0,
+        "inconclusive": 0,
+        "protected": 0,
+        "safe": 0,
+        "errors": 0,
+    }
+    for r in results:
+        # #313: an interrupted run leaves None placeholders for units that
+        # never ran — skip them (an un-run unit is not a verdict; the
+        # checkpoint-resume semantics own those units).
+        if r is None:
+            continue
+        # #324/null-verdict: an INEFFECTIVE finding (absent/None/non-string/
+        # empty) falls back to the verdict, which must itself be an effective
+        # string — the eager ``.lower()`` default crashed post-LLM-spend on
+        # ``{"verdict": null}``.
+        finding = r.get("finding")
+        verdict = r.get("verdict")
+        if not isinstance(finding, str) or not finding.strip():
+            finding = verdict if isinstance(verdict, str) and verdict.strip() else None
+        if finding is None:
+            # Neither an effective finding nor an effective verdict — the
+            # malformed shape (#324; null/empty verdicts): an error, not a
+            # silent drop.
+            counts["errors"] += 1
+            continue
+        # #623: the legacy INSUFFICIENT_CONTEXT value is INCONCLUSIVE's
+        # legacy synonym at every counting sink (a rescue-schema artifact the
+        # Stage-1 prompt never offered) — completed per #293, resumed as
+        # legal (analyze_result_is_error's STAGE1_VERDICTS admits it), and
+        # previously folded to ``errors`` HERE by the #427 catch-all while
+        # the summary counted it completed: four consumers, four answers.
+        # Counted as inconclusive now (the row's own stored values are NEVER
+        # rewritten — raw_finding/verdict keep the provenance; resume
+        # adoption unchanged).
+        _f = fold_legacy_finding(finding.lower())
+        if _f in counts:
+            counts[_f] += 1
+        elif verdict == "ERROR" or _f == "error":
+            # finding=="error" without verdict=="ERROR" (a legacy
+            # half-stamped row): agree with analyze_result_is_error, which
+            # classifies it as an error.
+            counts["errors"] += 1
+        # #427: an unrecognized verdict is a malformed model reply — the
+        # error bucket (the F13 partition closes; the sink-side
+        # analyze_result_is_error agrees, so resume retries the row too).
+        else:
+            counts["errors"] += 1
+    return counts
+
+
+def _analyze_fingerprint(binding, ctx_sha=None) -> dict:
+    """Build the analyze-phase backend-identity fingerprint.
+
+    The static system + user-analysis templates are rendered with
+    ``app_context=None`` (mandatory: the LLM-generated threat model is
+    non-deterministic per scan and must not enter the key). An unrenderable
+    template becomes a sentinel via ``render_template_texts`` → forces re-run
+    rather than a stale adoption.
+    """
+    from core.backend_identity import fingerprint_for_binding, render_template_texts
+    from prompts.vulnerability_analysis import get_system_prompt
+    from prompts.prompt_selector import get_analysis_prompt
+    texts = render_template_texts([
+        lambda: get_system_prompt(app_context=None),
+        lambda: get_analysis_prompt(code="", language="code", app_context=None),
+    ])
+    # #546: the context's deterministic-derivation identity joins the KEY
+    # (the narration stays excluded — this is the SOURCES hash, not the
+    # text). None (no context / a pre-#546 artifact) leaves the key
+    # member absent-equivalent; a changed derivation archives the stale
+    # records and re-pays.
+    return fingerprint_for_binding(
+        binding, texts,
+        extra_key=({"ctx_sources_sha256": ctx_sha} if ctx_sha else None))
+
+
+def _archive_stale_results(output_dir: str, current_fp: str) -> None:
+    """Preserve a prior scan's report before this run overwrites it.
+
+    If ``output_dir/results.json`` exists and was produced under a DIFFERENT
+    ``analyze_fingerprint``, rename it to ``results__<short-fp>.json`` (an
+    unstamped file → ``results__legacy.json``) so a re-scan with a different
+    model/config preserves the prior analyze report. The suffix is the SAME short
+    form as ``StepCheckpoint._archive_dir`` — the last ``:``-split segment, first 8
+    hex — so the ``sha256:`` prefix's colon never lands in a filename (a colon
+    breaks ``os.replace`` on Windows: the OSError is swallowed and a later run
+    overwrites the prior results.json, defeating the preservation promise).
+
+    Scope (named residual): this preserves the Stage-1 ``results.json`` only.
+    ``results_verified.json`` (Stage-2, and the file the serve/report layer
+    prefers) is NOT fingerprint-checked or archived here — a backend-swap re-scan
+    run without ``--verify`` leaves the prior verified file in place. That is
+    pre-existing base behaviour (base overwrote ``results.json`` unconditionally);
+    extending identity/preservation to ``results_verified.json`` is a follow-up.
+
+    Collision-safe: if the target archive name already exists (an A→B→A config
+    alternation, or two unstamped reports both → ``results__legacy.json``), a
+    ``-<n>`` suffix is appended rather than overwriting — mirroring
+    ``_archive_dir`` — so no prior report is ever destroyed. Best-effort: any error
+    leaves the file in place (preserve-not-destroy; never crash the scan).
+    """
+    results_path = os.path.join(output_dir, "results.json")
+    if not os.path.exists(results_path):
+        return
+    try:
+        prior = read_json(results_path)
+    except (json.JSONDecodeError, OSError, ValueError):
+        return
+    if not isinstance(prior, dict):
+        return
+    old_fp = prior.get("analyze_fingerprint")
+    if old_fp == current_fp:
+        return
+    # Short, filesystem-safe suffix: drop the ``sha256:`` prefix (its colon is
+    # illegal in a Windows filename) and keep the first 8 hex chars. A machine
+    # stamp is always a str; a hand-corrupted non-string stamp must NOT crash the
+    # scan (the function's contract is best-effort) — treat it as unstamped.
+    suffix = old_fp.split(":")[-1][:8] if isinstance(old_fp, str) and old_fp else "legacy"
+    # Never clobber an existing archive (distinct prior report under the same
+    # short suffix): append -<n> until the name is free, as _archive_dir does.
+    base = os.path.join(output_dir, f"results__{suffix}")
+    archive = f"{base}.json"
+    n = 1
+    while os.path.exists(archive):
+        archive = f"{base}-{n}.json"
+        n += 1
+    try:
+        os.replace(results_path, archive)
+        print(f"[Analyze] Prior scan's results.json (fingerprint {suffix}) "
+              f"preserved as {os.path.basename(archive)}.", file=sys.stderr)
+    except OSError:
+        pass
+
+
+def run_analysis(
+    dataset_path: str,
+    output_dir: str,
+    analyzer_output_path: str | None = None,
+    app_context_path: str | None = None,
+    repo_path: str | None = None,
+    limit: int | None = None,
+    registry: PhaseRegistry | None = None,
+    llm_config_name: str | None = None,
+    exploitable_filter: str | None = None,
+    workers: int = 8,
+    checkpoint_path: str | None = None,
+    backoff_seconds: int = 30,
+) -> AnalyzeResult:
+    """Run Stage 1 vulnerability detection on a dataset.
+
+    This is the clean wrapper around experiment.py's run_experiment() logic,
+    accepting file paths instead of dataset names. Stage 1 only — for Stage 2
+    verification use ``core.verifier.run_verification()``.
+
+    Checkpoints are always enabled. Per-unit results are saved to
+    ``{output_dir}/analyze_checkpoints/`` so interrupted runs resume
+    automatically.
+
+    Args:
+        dataset_path: Path to dataset.json produced by a parser.
+        output_dir: Directory to write results.json.
+        analyzer_output_path: Path to analyzer_output.json (unused here,
+            accepted for interface compatibility).
+        app_context_path: Path to application_context.json (reduces false positives).
+        repo_path: Path to the repository (for context correction).
+        limit: Max number of units to analyze.
+        registry: Pre-built PhaseRegistry. Scanners pass theirs;
+            standalone callers leave this None and a registry is
+            constructed from ``llm_config_name`` (and probed upfront).
+        llm_config_name: Name of the llm-config when ``registry`` is
+            None. ``None`` falls through to the active/default config.
+        exploitable_filter: Filter by enhancement classification. Options:
+            None (default) — no filtering, analyze all units.
+            "all" — keep exploitable + vulnerable_internal (recommended).
+            "strict" — keep exploitable only (use after parser fixes).
+        checkpoint_path: Path to checkpoint directory. If None, auto-derived
+            from output_dir.
+        workers: Number of parallel workers (default: 8).
+        backoff_seconds: Seconds to wait on rate limit before retry (default: 30).
+
+    Returns:
+        AnalyzeResult with results path, metrics, and usage.
+    """
+    # #214: snapshot cumulative usage at phase start so the "Stage 1" summary
+    # below reports this phase's delta, not the prior phases' total.
+    _phase_baseline = tracking.get_usage()
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Configure global rate limiter
+    from utilities.rate_limiter import configure_rate_limiter
+    configure_rate_limiter(backoff_seconds=float(backoff_seconds))
+
+    # Set up checkpoint
+    if checkpoint_path is None:
+        checkpoint_path = os.path.join(output_dir, "analyze_checkpoints")
+    checkpoint = StepCheckpoint("Analyze", output_dir)
+    checkpoint.dir = checkpoint_path
+
+    # Resolve the binding for the analyze phase from the registry.
+    # When this function builds its own registry (standalone
+    # `vulscan analyze` invocation), probe it upfront so a bad key /
+    # typo'd model fails loudly here rather than mid-scan. Callers
+    # that pass an explicit ``registry`` are expected to have done
+    # their own validation (e.g. the scanner).
+    if registry is None:
+        from utilities.llm import probe_registry_or_raise
+
+        cf = load_config_file()
+        registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
+        probe_registry_or_raise(registry)
+    binding = registry.get("analyze")
+    print(f"[Analyze] Provider: {binding.provider_name}, Model: {binding.model}", file=sys.stderr)
+
+    # #546: the application context loads BEFORE the I2 fingerprint — the
+    # adopt gate folds the context's deterministic-derivation identity
+    # (source_sha256), so the prior order (fingerprint-then-load) would key
+    # on None forever.
+    app_context = None
+    if app_context_path and HAS_APP_CONTEXT and os.path.exists(app_context_path):
+        app_context = load_context(Path(app_context_path))
+        print(f"[Analyze] App context: {app_context.application_type}", file=sys.stderr)
+
+    # I2 adopt gate: BEFORE loading any prior checkpoints, verify the backend
+    # identity that produced them matches the current one. A changed model /
+    # provider / adapter / static template archives the stale dir aside and
+    # forces a re-run rather than silently adopting another backend's verdicts.
+    # Run AFTER the checkpoint.dir override above.
+    analyze_fp = _analyze_fingerprint(
+        binding, ctx_sha=getattr(app_context, "source_sha256", None))
+    checkpoint.sync_identity(analyze_fp)
+    # Preserve a prior scan's final report before this run overwrites it.
+    _archive_stale_results(output_dir, analyze_fp["key_digest"])
+
+    # JSON corrector inherits the analyze binding so correction calls
+    # route through the same provider+model.
+    json_corrector = JSONCorrector(binding)
+
+    # Load dataset
+    print(f"[Analyze] Loading dataset: {dataset_path}", file=sys.stderr)
+    dataset = read_json(dataset_path)
+    units = dataset.get("units", [])
+
+    # Diff filter: if upstream parse stamped diff_selected on units (PR-diff
+    # mode), drop the unselected ones. Pre-diff datasets have no field and
+    # are processed unchanged.
+    if any("diff_selected" in u for u in units):
+        _pre = len(units)
+        units = [u for u in units if u.get("diff_selected")]
+        print(f"[Analyze] Diff filter: {_pre} -> {len(units)} units", file=sys.stderr)
+
+    # Optional: filter by enhancement security classification
+    if exploitable_filter:
+        original_count = len(units)
+        if exploitable_filter == "strict":
+            keep = ("exploitable",)
+        else:  # "all" — default when filtering is enabled
+            keep = ("exploitable", "vulnerable_internal")
+        # Read classification mode-agnostically (agent_context OR llm_context)
+        # so single-shot-enhanced datasets are not silently dropped.
+        # #611: a sentinel-stamped unit is NOT classified for this census
+        # (the guard fired only when NONE carried a classification, but a
+        # dataset whose every unit is sentinel-stamped is the same
+        # un-enhanced shape the warning exists for).
+        classified = sum(
+            1 for u in units
+            if _unit_security_classification(u) is not None
+            and _unit_security_classification(u) not in SENTINEL_CLASSIFICATIONS)
+        units = [u for u in units if _unit_security_classification(u) in keep]
+        # Loud guard: a filter that matches nothing because the dataset carries
+        # NO classifications at all is almost always an un-enhanced / wrong-mode
+        # input, not a genuine "0 exploitable units" result. Warn instead of
+        # silently returning an empty analysis.
+        if original_count and classified == 0:
+            print(
+                f"[Analyze] WARNING: --exploitable filter ({exploitable_filter}) "
+                f"requested but NONE of the {original_count} units carry a "
+                "COMPLETED security_classification "
+                "(all are unenhanced or carry a non-verdict sentinel — "
+                "incomplete/error/unknown; run `enhance` first; single-shot mode "
+                "must populate llm_context.security_classification). "
+                "Filter matched 0 units.",
+                file=sys.stderr,
+            )
+        print(f"[Analyze] Exploitable filter ({exploitable_filter}): {original_count} -> {len(units)} units", file=sys.stderr)
+
+    if limit:
+        # Priority-sort before truncating so a --limit run keeps the most
+        # security-relevant units rather than the alphabetically-first ones.
+        units = _apply_limit(units, limit)
+
+    total = len(units)
+    print(f"[Analyze] Analyzing {total} units...", file=sys.stderr)
+
+    # Initialize summary tracking for _summary.json
+    # Count checkpointed units to seed the counters and sum existing usage
+    _existing = checkpoint.load()
+    _summary_error_breakdown = {}
+    # #293 adjudication: analyze has NO third state — "inconclusive" is a
+    # first-class COMPLETED verdict (verdict_taxonomy FINDING_VERDICT_ORDER;
+    # the Stage-1 prompt's own enum), not a degenerate no-verdict marker like
+    # verify's verification.incomplete or enhance's INCOMPLETE_CLASSIFICATION.
+    # The third bucket stays 0 here but is still emitted for shape consistency.
+    _summary_incomplete = 0
+    _seed = _seed_summary(_existing, {u.get("id") for u in units},
+                          units=units)
+    _summary_completed = _seed["completed"]
+    _summary_errors = 0  # errored rows are re-analyzed; _summary_callback owns them
+    _summary_input_tokens = _seed["input_tokens"]
+    _summary_output_tokens = _seed["output_tokens"]
+    _summary_cost_usd = _seed["cost_usd"]
+    _summary_unpriced: set[str] = _seed["unpriced_models"]
+    _summary_unpriced_cache: set[str] = _seed["unpriced_cache_models"]
+    # #802: the kept-set delta — the prior run's checkpoint rows whose
+    # units are not in THIS run's population, classified by prior verdict.
+    # Threaded into every _summary.json write (present-only) and the
+    # AnalyzeResult, so a resume that absorbs the prior run's unfinished
+    # work reports what left instead of reading clean while the error
+    # count falls.
+    _resume_delta = _seed.get("resume_delta")
+
+    def _usage_dict():
+        usage = {"input_tokens": _summary_input_tokens,
+                 "output_tokens": _summary_output_tokens,
+                 "cost_usd": round(_summary_cost_usd, 6)}
+        # #216: persist the unpriced set into _summary.json so a resume of
+        # a resume keeps the marker (run-cumulative semantics).
+        #
+        # #626/PR#661 hunt F4: the cache kind is unioned from the tracker the
+        # same way, which fixes TWO cases at once — the resumed phase (the
+        # seed above) and a FRESH phase, because this dict never consulted the
+        # tracker's own ``cost_incomplete`` and so wrote a complete-looking
+        # analyze/_summary.json even on a first run whose only incompleteness
+        # was cache-unpriced. ``incomplete_markers`` stamps both kinds under
+        # their own keys, present-only.
+        _totals = get_global_tracker().get_totals()
+        usage.update(incomplete_markers(
+            set(_summary_unpriced) | set(_totals.get("unpriced_models") or []),
+            set(_summary_unpriced_cache)
+            | set(_totals.get("unpriced_cache_models") or [])))
+        return usage
+
+    # Inject prior usage into tracker so step_report captures the total
+    # F661-3: the ONE spend predicate (see utilities.llm_client) — cost
+    # included, or a resumed analyze whose restored spend was cache-only
+    # injects nothing and every later step report under-counts.
+    if turn_has_spend(input_tokens=_summary_input_tokens,
+                      output_tokens=_summary_output_tokens,
+                      cost_usd=_summary_cost_usd,
+                      unpriced=_summary_unpriced,
+                      unpriced_cache=_summary_unpriced_cache):
+        get_global_tracker().add_prior_usage(
+            _summary_input_tokens, _summary_output_tokens, _summary_cost_usd,
+            unpriced_models=sorted(_summary_unpriced) or None,
+            unpriced_cache_models=sorted(_summary_unpriced_cache) or None)
+        # #281: re-snapshot the phase baseline AFTER the injection — the
+        # pre-injection baseline made the "Stage 1" delta include the prior
+        # session's tokens/cost (calls exclude restored units while
+        # tokens/cost included them: an internally inconsistent line, and
+        # #214's "this phase's delta" contract broken on resumed runs).
+        # The step reports' totals still include the prior usage (the
+        # run-total contract); only the per-phase stderr line is the delta.
+        _phase_baseline = tracking.get_usage()
+
+    # Write initial summary
+    checkpoint.write_summary(total, _summary_completed, _summary_errors,
+                             _summary_error_breakdown, phase="in_progress",
+                             usage=_usage_dict(), incomplete=_summary_incomplete,
+                             resume_delta=_resume_delta)
+
+    def _summary_callback(finding, usage=None, error_msg=None,
+                         error_info=None):
+        """Update summary counters after each unit. Called from main thread."""
+        nonlocal _summary_completed, _summary_incomplete, _summary_errors
+        nonlocal _summary_error_breakdown
+        nonlocal _summary_input_tokens, _summary_output_tokens, _summary_cost_usd
+        if finding == "error":
+            _summary_errors += 1
+            # #800: the taxonomy split — a permanent context-overflow 400
+            # files under its own class, distinct from a transient 429 (the
+            # hardcoded "api" bucket made the two indistinguishable in
+            # _summary.json, and the two demand opposite operator
+            # responses: never retry vs. retry later).
+            _bucket = _summary_error_bucket(error_msg, error_info)
+            _summary_error_breakdown[_bucket] = \
+                _summary_error_breakdown.get(_bucket, 0) + 1
+        else:
+            # #293 adjudication: "inconclusive"/"insufficient_context" are
+            # completed verdicts (taxonomy), not incomplete — no third state.
+            _summary_completed += 1
+        if usage:
+            _summary_input_tokens += usage.get("input_tokens", 0)
+            _summary_output_tokens += usage.get("output_tokens", 0)
+            _summary_cost_usd += usage.get("cost_usd", 0.0)
+        checkpoint.write_summary(total, _summary_completed, _summary_errors,
+                                 _summary_error_breakdown, phase="in_progress",
+                                 usage=_usage_dict(), incomplete=_summary_incomplete,
+                                 resume_delta=_resume_delta)
+
+    # --- Stage 1: Detection ---
+    results, code_by_route = _run_detection(
+        units, binding, json_corrector, app_context, workers, checkpoint=checkpoint,
+        summary_callback=_summary_callback,
+    )
+
+    # Auto-retry failed units with transient errors (rate limit, connection, timeout, 5xx)
+    retryable_indices = [
+        i for i, r in enumerate(results)
+        if r and is_retryable_error(r.get("error_info") or r.get("error"))
+    ]
+    # #716 hunt defect 2 (the incomplete-scan contract): units that leave
+    # analysis unretried are COUNTED, not silently dropped — 'not analyzed'
+    # must never read as 'safe' on the operator channel.
+    _retryable_set = set(retryable_indices)
+    _skipped_err = [i for i, r in enumerate(results)
+                    if r and (r.get("error_info") or r.get("error"))
+                    and i not in _retryable_set]
+    if _skipped_err:
+        _quota_n = sum(
+            1 for i in _skipped_err
+            if isinstance(results[i].get("error_info"), dict)
+            and results[i]["error_info"].get("kind") == "quota")
+        _other_n = len(_skipped_err) - _quota_n
+        _detail = (f"{_quota_n} quota-exhausted"
+                   + (f", {_other_n} other non-retryable" if _other_n else ""))
+        print(f"[Analyze] {len(_skipped_err)} unit(s) not retried "
+              f"({_detail}) — error rows carry the per-unit reason",
+              file=sys.stderr)
+    # #569 (choice c): the deterministic budget-exhaustion empties (the
+    # length-stop class #561 named) retry ONCE at a RAISED cap — a same-cap
+    # re-roll of a budget exhaustion is a coin flip; the raised cap attacks
+    # the cause. Every other retryable (the filtered/malformed empties, the
+    # transient network class) keeps the #292 same-cap rationale.
+    budget_retry_indices = [
+        i for i in retryable_indices
+        if is_budget_exhausted_error(results[i].get("error"))
+    ]
+    _budget_set = set(budget_retry_indices)
+    if retryable_indices:
+        rate_limiter = get_rate_limiter()
+        backoff = rate_limiter.time_until_ready()
+        if backoff > 0:
+            print(f"[Analyze] Retrying {len(retryable_indices)} failed units "
+                  f"(waiting {backoff:.0f}s for rate limit to clear)...", file=sys.stderr)
+            rate_limiter.wait_if_needed()
+        else:
+            _cap_desc = ""
+            if budget_retry_indices:
+                _caps = sorted({c for c in (budget_retry_cap(
+                    i, _budget_set, binding) for i in budget_retry_indices)
+                    if c is not None})
+                if _caps:
+                    _cap_desc = (f" ({len(budget_retry_indices)} at a raised "
+                                 f"output cap {_caps} — budget exhaustion)")
+                else:
+                    _cap_desc = (f" ({len(budget_retry_indices)} budget-"
+                                 f"exhausted; no ceiling admits a raise — "
+                                 f"same-cap retry)")
+            print(f"[Analyze] Retrying {len(retryable_indices)} failed units "
+                  f"(transient errors){_cap_desc}...", file=sys.stderr)
+
+        # Retry sequentially to avoid re-triggering rate limit
+        for i in retryable_indices:
+            unit = units[i]
+            _cap = budget_retry_cap(i, _budget_set, binding)
+            # #800 (r1-F1): the FIRST-ATTEMPT class must retire with the
+            # first attempt — capture the bucket BEFORE the retry
+            # overwrites the result (the storm-then-overflow pattern: a
+            # 429 first attempt retried into a permanent context-overflow
+            # 400 must file as context_overflow, the residual class the
+            # operator needs — never as the transient first-attempt
+            # class; the enhance phase's own retry already retires its
+            # bucket, the analyzer's loop did not).
+            _prev_bucket = _summary_error_bucket(
+                results[i].get("error"), results[i].get("error_info"))
+            if _prev_bucket in _summary_error_breakdown:
+                _n = _summary_error_breakdown[_prev_bucket] - 1
+                if _n > 0:
+                    _summary_error_breakdown[_prev_bucket] = _n
+                else:
+                    # the enhance phase's own retire precedent: a zeroed
+                    # count drops the key (a "rate_limit: 0" artifact
+                    # invites the question the split was meant to answer)
+                    _summary_error_breakdown.pop(_prev_bucket, None)
+            out = _process_unit(binding, unit, i, json_corrector, app_context,
+                                max_tokens=_cap)
+            results[i] = out["result"]
+            code_by_route[out["route_key"]] = out["code_for_route"]
+
+            # Update summary: retry produced a verdict → flip error to
+            # completed (#293 adjudication: inconclusive is a completed
+            # verdict; analyze has no third state)
+            if out["finding"] != "error":
+                _summary_errors = max(0, _summary_errors - 1)
+                _summary_completed += 1
+            else:
+                # the retry errored again: re-file under the RETRY's
+                # class (the first-attempt bucket already retired above;
+                # the error COUNT stays — the unit never left the error
+                # side)
+                _new_bucket = _summary_error_bucket(
+                    out["result"].get("error"),
+                    out["result"].get("error_info"))
+                _summary_error_breakdown[_new_bucket] = \
+                    _summary_error_breakdown.get(_new_bucket, 0) + 1
+            retry_usage = out.get("usage", {})
+            _summary_input_tokens += retry_usage.get("input_tokens", 0)
+            _summary_output_tokens += retry_usage.get("output_tokens", 0)
+            _summary_cost_usd += retry_usage.get("cost_usd", 0.0)
+            checkpoint.write_summary(total, _summary_completed, _summary_errors,
+                                     _summary_error_breakdown, phase="in_progress",
+                                     usage=_usage_dict(), incomplete=_summary_incomplete,
+                                 resume_delta=_resume_delta)
+
+            # Update checkpoint
+            if checkpoint is not None:
+                uid = out["result"].get("unit_id", f"unit_{i}")
+                cp_data = {
+                    "result": out["result"],
+                    "route_key": out["route_key"],
+                    "code_for_route": out["code_for_route"],
+                }
+                if out.get("usage"):
+                    cp_data["usage"] = out["usage"]
+                checkpoint.save(uid, cp_data)
+
+            print(f"  Retry {i+1}/{len(retryable_indices)}: {out['finding']} (retry)",
+                  file=sys.stderr, flush=True)
+
+    # Write final summary with phase="done"
+    checkpoint.write_summary(total, _summary_completed, _summary_errors,
+                             _summary_error_breakdown, phase="done",
+                             usage=_usage_dict(), incomplete=_summary_incomplete,
+                             resume_delta=_resume_delta)
+
+    tracking.log_usage("Stage 1", _phase_baseline)
+
+    # Compute verdict counts from results
+    counts = _count_verdicts(results)
+
+    # --- Stage 1 Consistency Check ---
+    consistency_corrections = 0
+    try:
+        from utilities.stage1_consistency import run_stage1_consistency_check
+        print("\n[Analyze] Running consistency check...", file=sys.stderr)
+        results = run_stage1_consistency_check(results, code_by_route, binding, get_global_tracker())
+        # Count corrections
+        for r in results:
+            if r.get("stage1_consistency_update"):
+                consistency_corrections += 1
+        if consistency_corrections:
+            print(f"  Consistency corrections: {consistency_corrections}", file=sys.stderr)
+            counts = _count_verdicts(results)  # rebuilt: the #611 counter lands AFTER this
+    except ImportError:
+        print("[Analyze] Stage 1 consistency check not available, skipping.", file=sys.stderr)
+    except Exception as e:
+        print(f"[Analyze] Consistency check error (non-fatal): {e}", file=sys.stderr)
+
+    # #611: how many units were analyzed WITHOUT a completed enhancement
+    # classification — the sentinel-stamped rows. Placed AFTER the consistency
+    # check's rebuild (the counter would vanish on correction-runs otherwise).
+    # NOT a third analyze state (#293 stands — an input-provenance counter).
+    counts["enhance_unclassified_analyzed"] = sum(
+        1 for r in results
+        if r is not None
+        and _result_security_classification(r) in SENTINEL_CLASSIFICATIONS)
+
+    # --- Write results ---
+    results_path = os.path.join(output_dir, "results.json")
+    experiment_result = {
+        "dataset": os.path.basename(dataset_path),
+        "model": binding.model,
+        "provider": binding.provider_name,
+        "timestamp": datetime.now().isoformat(),
+        "metrics": {
+            "total": len(units),
+            **counts,
+        },
+        "results": results,
+        "code_by_route": code_by_route,
+        # Stamp the analyze-phase KEY digest so (a) a later re-scan with a
+        # different config archives this report instead of overwriting it, and
+        # (b) the verify phase can fold it into its own adopt-gate KEY — an
+        # analyze-model/provider/template swap regenerates this digest and
+        # thereby invalidates any verify checkpoints produced against the old
+        # analyze run (closes the verify-overwrite corruption). Deterministic +
+        # persisted → zero re-pay.
+        "analyze_fingerprint": analyze_fp["key_digest"],
+    }
+
+    write_json(results_path, experiment_result)
+    print(f"\n[Analyze] Results written to {results_path}", file=sys.stderr)
+
+    # Checkpoints are preserved as a permanent artifact alongside results.
+    # Final summary (phase="done") was already written before result writing.
+
+    # Build return value
+    usage = tracking.get_usage()
+    metrics = AnalysisMetrics(
+        total=len(units),
+        vulnerable=counts["vulnerable"],
+        bypassable=counts["bypassable"],
+        inconclusive=counts["inconclusive"],
+        protected=counts["protected"],
+        safe=counts["safe"],
+        errors=counts["errors"],
+    )
+
+    return AnalyzeResult(
+        results_path=results_path,
+        metrics=metrics,
+        usage=usage,
+        # #802: the kept-set delta rides the result (the scan-level
+        # consumer's field; present-only in to_dict).
+        resume_delta=_resume_delta,
+    )

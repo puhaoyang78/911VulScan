@@ -14,7 +14,7 @@ document's terms, everything below happens in the last two canonical stages,
 together by `_build_report` in `utilities/autopatcher/pipeline.py`.
 
 Function names are cited so each statement can be checked against the code in
-`libs/openant-core/utilities/autopatcher/`. If this document and the code
+`libs/vulscan-core/utilities/autopatcher/`. If this document and the code
 disagree, the code is authoritative.
 
 ## Contents
@@ -74,7 +74,7 @@ A run ends in one of three ways. They must not be confused.
 |---|---|---|
 | A **recommendation** (one of four labels below) | A final candidate patch exists and the policy evaluated it. | Yes |
 | ⚫ **NO PATCH PRODUCED** | The run completed, but it ended without a final candidate patch, usually because a fail-closed gate stopped generation (see [the architecture document](auto-patcher-architecture.md#fail-closed-boundaries)). There is nothing to review or deploy. | Yes |
-| **Run failure** | The run itself failed (for example an LLM API error in a stage that is not best-effort, an invalid LLM configuration, an ineligible finding, a missing `--repo-root`, or an NVD fetch failure). | No. `openant patch` prints the error and exits with code 2. |
+| **Run failure** | The run itself failed (for example an LLM API error in a stage that is not best-effort, an invalid LLM configuration, an ineligible finding, a missing `--repo-root`, or an NVD fetch failure). | No. `vulscan patch` prints the error and exits with code 2. |
 
 The four recommendation labels (`_build_recommendation_v1`):
 
@@ -635,7 +635,7 @@ change the decision:
     summary, affected areas, reviewer notes.
 
 `core/patch.py` then appends a Run Metadata section: timestamp, input source,
-repository root and commit, OpenAnt commit, provider and model, LLM mode,
+repository root and commit, VulScan commit, provider and model, LLM mode,
 configured max tokens, and per-stage stop reasons. For CVE input it also adds
 an input-source disclosure.
 
@@ -655,7 +655,7 @@ an input-source disclosure.
   Comparison does run the repository's existing tests (Docker only; Python,
   Node or Go runtimes), but only when explicitly requested. It is available as
   `--compare-existing-tests` on the Python CLI and `tools/run_traced.py`, not
-  on the Go `openant patch` command. Its signal is displayed only. When enabled,
+  on the Go `vulscan patch` command. Its signal is displayed only. When enabled,
   it can also make one bounded LLM call to amend an existing test that
   contradicts the patch's stated security intent. If that amended patch is
   accepted, it becomes the reported patch (see the

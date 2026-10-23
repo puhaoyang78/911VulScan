@@ -10,12 +10,12 @@ Related documents:
 
 - [recommendation-policy.md](recommendation-policy.md): the Trust Signals and
   the recommendation decision in detail, and what they do and do not prove.
-- [TRACING_AND_DEBUGGING.md](../../libs/openant-core/utilities/autopatcher/tools/TRACING_AND_DEBUGGING.md):
+- [TRACING_AND_DEBUGGING.md](../../libs/vulscan-core/utilities/autopatcher/tools/TRACING_AND_DEBUGGING.md):
   commands for traced runs, manifests, and single-stage replay.
-- [RUN_CVE_BATCH.md](../../libs/openant-core/utilities/autopatcher/tools/RUN_CVE_BATCH.md):
+- [RUN_CVE_BATCH.md](../../libs/vulscan-core/utilities/autopatcher/tools/RUN_CVE_BATCH.md):
   the parallel real-CVE evaluation runner.
 
-Code lives under `libs/openant-core/utilities/autopatcher/` unless stated
+Code lives under `libs/vulscan-core/utilities/autopatcher/` unless stated
 otherwise. Function names are cited so each statement can be checked; if this
 document and the code disagree, the code is authoritative.
 
@@ -37,10 +37,10 @@ document and the code disagree, the code is authoritative.
 ## System overview
 
 ```
-openant patch  (Go CLI: apps/openant-cli/cmd/patch.go)
+vulscan patch  (Go CLI: apps/vulscan-cli/cmd/patch.go)
       │  flag validation, active-project defaults; no LLM or patch logic
       ▼
-python -m openant patch  (libs/openant-core/openant/cli.py: cmd_patch)
+python -m vulscan patch  (libs/vulscan-core/vulscan/cli.py: cmd_patch)
       │  verbosity, deprecated-flag notice, JSON result envelope
       ▼
 core/patch.py: run_patch()  /  run_patch_cve()
@@ -58,20 +58,20 @@ tools/run_stage.py   ── replays one canonical stage from a recorded run
 tools/run_cve_batch.py ── runs run_traced.py for many historical CVEs in parallel
 ```
 
-A normal `openant patch` run writes only `<output>/patch/` (two Markdown
+A normal `vulscan patch` run writes only `<output>/patch/` (two Markdown
 files and the repository-parse artifacts) and `<output>/patch.report.json`
-(OpenAnt's step report). Tracing adds observers; it does not change what the
+(VulScan's step report). Tracing adds observers; it does not change what the
 pipeline does.
 
 ## Components
 
 | Component | Responsibility |
 |---|---|
-| `apps/openant-cli/cmd/patch.go` | Go transport. Validates `--finding-id`/`--cve` (exactly one; CVE id format), resolves defaults from the active project, forwards flags to Python, prints the result or errors, and exits with the Python exit code. |
-| `openant/cli.py` (`cmd_patch`) | Python CLI. Configures progress verbosity, prints the deprecation notice for the context-budget flags, builds a `ContextBudgetController`, calls `core.patch`, and emits the JSON envelope (exit 0 on success, 2 on failure). |
+| `apps/vulscan-cli/cmd/patch.go` | Go transport. Validates `--finding-id`/`--cve` (exactly one; CVE id format), resolves defaults from the active project, forwards flags to Python, prints the result or errors, and exits with the Python exit code. |
+| `vulscan/cli.py` (`cmd_patch`) | Python CLI. Configures progress verbosity, prints the deprecation notice for the context-budget flags, builds a `ContextBudgetController`, calls `core.patch`, and emits the JSON envelope (exit 0 on success, 2 on failure). |
 | `core/patch.py` | Turns a Finding (after the `PATCH_ELIGIBLE` verdict check) or an NVD CVE record into `(vulnerability_text, repo_root)`. Checks LLM configuration (and Docker, when test comparison is requested) before any repository work. Writes `{id}-vulnerability.md`, runs the pipeline, and writes `{id}-trust-report.md` with a Run Metadata section appended. |
 | `pipeline.py` | Orchestrates the stages (`run()`), applies the deterministic gates, and renders the report (`_build_report`, `_compute_trust_signals`, `_build_recommendation_v1`). |
-| `repo_locator.py`, `candidate_selection.py`, `candidate_enrichment.py`, `evidence_fusion.py`, `vulnerability_patterns.py` | Deterministic repository grounding and Repository Understanding: locate candidate code, parse the repository with OpenAnt's parsers, compute call-graph/reachability facts, and render them. |
+| `repo_locator.py`, `candidate_selection.py`, `candidate_enrichment.py`, `evidence_fusion.py`, `vulnerability_patterns.py` | Deterministic repository grounding and Repository Understanding: locate candidate code, parse the repository with VulScan's parsers, compute call-graph/reachability facts, and render them. |
 | `remediation_planner.py` | Planner and Strategy prompts, deterministic evidence acquisition and verification, the Final-Target Remediation Slice, the Edit Readiness Gate, guided acquisition, Patch Target Conformance, and Post-Patch Recovery. |
 | `remediation_verifier.py` | The Planner Claim Verifier (one bounded LLM check of the Planner's narrower-alternative claim). |
 | `patch_generator.py` | Patch Generation prompt, response-contract classification, and context fitting for Patch Generation's capacity. |
@@ -83,7 +83,7 @@ pipeline does.
 | `impact_surface.py`, `behavior_summary.py`, `testing_support.py`, `source_verification.py`, `language_support.py` | Deterministic evidence: blast radius (Python only), diff-only behavior summary, test discovery (Python only), hunk source verification, language detection. |
 | `existing_test_regression.py`, `test_plan_discovery.py`, `test_plan_validation.py`, `test_executors.py`, `existing_test_amendment.py` | Opt-in Existing Test Comparison in Docker, plus the bounded test-amendment step. |
 | `technical_capacity.py`, `context_budget.py` | Per-call source-evidence capacity (see [Context capacity](#context-capacity)). |
-| `llm_client.py` | Provider/model resolution from OpenAnt's `analyze` phase binding (or `LLM_PROVIDER=mock`), shared adapters, usage tracking, per-stage call metadata. |
+| `llm_client.py` | Provider/model resolution from VulScan's `analyze` phase binding (or `LLM_PROVIDER=mock`), shared adapters, usage tracking, per-stage call metadata. |
 | `progress.py` | Terminal output for the five user-facing phases (default / verbose / quiet). |
 | `run_metadata.py` | The Run Metadata report section and CVE-input disclosure. |
 | `stage_registry.py`, `execution_recorder.py`, `lineage.py`, `replay_engine.py`, `stage_replay.py`, `llm_call_tracing.py` | Canonical stage identities, opt-in execution recording, manifests and lineage, and single-stage replay. |
@@ -127,7 +127,7 @@ Executor: `pipeline._run_repository_analysis_and_remediation_planning`.
    technical capacity. With no repository root, or nothing found, the run
    continues on a best-effort basis with a warning.
 2. **Repository Understanding** (deterministic): candidate selection; one
-   parse of the repository with OpenAnt's parsers
+   parse of the repository with VulScan's parsers
    (`candidate_enrichment.build_investigation_context`, artifacts in
    `<output>/patch/{id}-investigation/`); per-candidate call-graph and
    reachability enrichment; fusion and rendering (`evidence_fusion`). Pre-patch
@@ -565,7 +565,7 @@ Post-Patch Investigation context, and calibration evidence.
 Evidence is included or omitted as whole blocks, never truncated, and every
 omission is recorded as `technical_capacity`.
 
-`ContextBudgetController`, which `openant patch` and `run_traced.py` always
+`ContextBudgetController`, which `vulscan patch` and `run_traced.py` always
 construct, caches one ceiling per stage per run and records usage for traces.
 It is constructed without a provider or model, so the stages that read through
 it (planner evidence, the Final-Target Slice, Post-Patch Recovery) always use
@@ -601,12 +601,12 @@ characters (`FINAL_TARGET_SLICE_MAX_CHARS // 3`).
 ## Recording, provenance, and replay
 
 Commands and walkthroughs are in
-[TRACING_AND_DEBUGGING.md](../../libs/openant-core/utilities/autopatcher/tools/TRACING_AND_DEBUGGING.md).
+[TRACING_AND_DEBUGGING.md](../../libs/vulscan-core/utilities/autopatcher/tools/TRACING_AND_DEBUGGING.md).
 This section describes the model behind them.
 
 | Mode | Invocation | Records `StageExecution`s? | Output |
 |---|---|---|---|
-| Production run | `openant patch` → `core.patch` → `pipeline.run()` | No (`execution_recorder=None`) | `<output>/patch/…`, `<output>/patch.report.json` |
+| Production run | `vulscan patch` → `core.patch` → `pipeline.run()` | No (`execution_recorder=None`) | `<output>/patch/…`, `<output>/patch.report.json` |
 | Traced run | `tools/run_traced.py` → the same `core.patch` functions in-process | Yes: one v3 `run_manifest.json`, `kind: "full_run"` | `<output>/patch/…` plus `<output>/trace/` (or `--trace-dir`) |
 | Single-stage replay | `tools/run_stage.py --source-run <dir> --stage <name> --output <dir>` | Yes: `kind: "replay"`, exactly one execution | an isolated output directory |
 | Chained replay | Repeated `run_stage.py`, each `--source-run` pointing at the previous `--output` | Yes, once per hop | one directory per hop, `parent`-linked |
@@ -639,7 +639,7 @@ Executions are numbered in finish order, `NNN_<canonical_stage>`. S1–S6 are
 contains:
 
 - `schema_version: 3`, `kind`, `parent: null`;
-- `target_repository {repo_root, repo_commit, worktree_clean}`, `openant {patcher_commit}`,
+- `target_repository {repo_root, repo_commit, worktree_clean}`, `vulscan {patcher_commit}`,
   `llm {provider, model}`, `executions`;
 - flat run fields: `status`, input and output paths, `compare_existing_tests`,
   the raw values of the deprecated budget flags, `llm_call_count`,
@@ -787,7 +787,7 @@ repo_root_override=None)` runs these steps in order:
    and return them as extra `consumed` entries.
 6. Write `run_manifest.json`: `kind: "replay"`, one execution with
    `sequence: 1`, and source and replay commits and models
-   (`openant.source_patcher_commit`/`replay_patcher_commit`/`replay_openant_dirty`,
+   (`vulscan.source_patcher_commit`/`replay_patcher_commit`/`replay_vulscan_dirty`,
    `llm.source_*`/`replay_*`).
 
 `REPLAY_HANDLERS` covers **12 of the 13 stages**: every stage except
@@ -819,13 +819,13 @@ is replayable" is not a meaningful statement today.
 
 ## Evaluation-only tooling
 
-None of the following is used by `openant patch`.
+None of the following is used by `vulscan patch`.
 
 | Tool | Purpose |
 |---|---|
 | `tools/run_traced.py` | A full run with LLM-call capture and execution recording. Optional `--blind-evaluation`. |
 | `tools/run_stage.py` | Single-stage replay. |
-| `tools/run_cve_batch.py` (+ `run_patcheval_python_37.py`, `cfp_evaluation_cases.yaml`, `smoke_cases.yaml`) | Parallel, resumable real-CVE batches over YAML manifests: a fresh clone and an isolated output directory and CWD per case, summaries (Markdown, JSON, CSV), a results ZIP, and provenance. GRAY (NO PATCH PRODUCED) is counted as a valid outcome, distinct from FAILED. See [RUN_CVE_BATCH.md](../../libs/openant-core/utilities/autopatcher/tools/RUN_CVE_BATCH.md). |
+| `tools/run_cve_batch.py` (+ `run_patcheval_python_37.py`, `cfp_evaluation_cases.yaml`, `smoke_cases.yaml`) | Parallel, resumable real-CVE batches over YAML manifests: a fresh clone and an isolated output directory and CWD per case, summaries (Markdown, JSON, CSV), a results ZIP, and provenance. GRAY (NO PATCH PRODUCED) is counted as a valid outcome, distinct from FAILED. See [RUN_CVE_BATCH.md](../../libs/vulscan-core/utilities/autopatcher/tools/RUN_CVE_BATCH.md). |
 | `tools/blind_evaluation.py` | **Blind evaluation** for historical regressions. It removes references to the known upstream fix (filter `blind-evaluation-filter/v1`, or `/v2`, and an optional same-repository GitHub policy) from the rendered CVE text before the pipeline sees it. It verifies by hash that the pipeline received the blinded text, and fails closed on references it cannot classify. In production those references are legitimate evidence and are left alone. |
 | `tools/replay_challenger_reparse.py` | Re-derives an archived Challenger result through the current parser, with no LLM call. |
 | `tools/concern_tree_harness.py`, `simple_concern_harness.py`, `concrete_trace_harness.py` | Research harnesses for the experimental `concern_tree.py`, `simple_concern_resolver.py` and `concrete_trace.py`. These modules are not wired into the production pipeline, and their LLM tags are not in `STAGE_OWNED_LLM_TAGS`. |
@@ -834,7 +834,7 @@ Debug artifacts: when `AUTOPATCHER_DEBUG` is set (`run_traced.py` sets it),
 the pipeline writes `reports/debug/*.json` and `prompt_*.txt` relative to the
 **current working directory**. That is why the batch runner gives every case
 its own CWD. When that directory is inside the analyzed repository, an
-`openant patch` run writes them to `<output>/debug` instead, so prompts that
+`vulscan patch` run writes them to `<output>/debug` instead, so prompts that
 carry repository source never land in the analyzed working copy. An explicit
 `AUTOPATCHER_DEBUG_DIR` overrides both.
 

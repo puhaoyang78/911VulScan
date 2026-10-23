@@ -1,1 +1,0 @@
-# PHP parser for OpenAnt
