@@ -16,10 +16,12 @@ Usage: scripts/install-deployment.sh [options]
   --allow-unsupported-docker  Opt into frozen Docker packages on Ubuntu 20.04.
   --help            Show this help.
 Python >=3.11 (venv/ensurepip), Go >=1.26, Node 20 or >=22, npm >=7 required.
-Docker Engine, Compose v2 and Buildx are checked separately; Docker is optional
+Docker Engine/CLI, Compose v2+ and Buildx are checked separately; Docker is optional
 for application installation. --install-deps includes missing Docker components.
 Docker package scripts may start/enable services; fresh installation therefore
-requires --start-docker as well as plan approval. No group/daemon/credential edits.
+requires --start-docker as well as plan approval. Missing CLI plugins on an
+existing Engine install are user-local only; no --start-docker or frozen-engine
+opt-in is needed. No group/daemon/credential edits.
 EOF
 }
 BOOTSTRAP=0; DEPS_ONLY=0; CHECK=0; DRY=0; YES=0; START_DOCKER=0; ALLOW_OLD_DOCKER=0
@@ -58,17 +60,23 @@ node_ok() {
     version_at_least "$nv" 20 0 && { [ "$nm" = 20 ] || version_at_least "$nv" 22 0; }
 }
 npm_ok() { npmv=$(npm --version 2>/dev/null) && version_at_least "$npmv" 7 0; }
-docker_ok() {
-    dockerd --version >/dev/null 2>&1 && docker --version >/dev/null 2>&1 &&
-    docker compose version --short 2>/dev/null | grep -Eq '^v?[2-9][0-9]*\.' &&
-    docker buildx version >/dev/null 2>&1
-}
+engine_ok() { dockerd --version >/dev/null 2>&1 && docker --version >/dev/null 2>&1; }
+compose_ok() { docker compose version --short 2>/dev/null | grep -Eq '^v?([2-9]|[1-9][0-9]+)\.'; }
+buildx_ok() { docker buildx version >/dev/null 2>&1; }
+docker_ok() { engine_ok && compose_ok && buildx_ok; }
+package_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed$'; }
 NEED_PY=0; NEED_GO=0; NEED_NODE=0; NEED_DOCKER=0
+NEED_ENGINE=0; NEED_COMPOSE=0; NEED_BUILDX=0; LOCAL_PLUGINS=0
 python_ok || NEED_PY=1
 go_ok || NEED_GO=1
 if ! node_ok || ! npm_ok; then NEED_NODE=1; fi
-docker_ok || NEED_DOCKER=1
+engine_ok || NEED_ENGINE=1
+compose_ok || NEED_COMPOSE=1
+buildx_ok || NEED_BUILDX=1
+if [ "$NEED_ENGINE$NEED_COMPOSE$NEED_BUILDX" != 000 ]; then NEED_DOCKER=1; fi
+if [ "$NEED_ENGINE" = 0 ] && [ "$NEED_COMPOSE$NEED_BUILDX" != 00 ]; then LOCAL_PLUGINS=1; fi
 printf 'Dependencies (0=ready, 1=missing/incompatible): Python=%s Go=%s Node/npm=%s Docker/Compose/Buildx=%s\n' "$NEED_PY" "$NEED_GO" "$NEED_NODE" "$NEED_DOCKER"
+printf 'Docker components: Engine/CLI=%s Compose=%s Buildx=%s\n' "$NEED_ENGINE" "$NEED_COMPOSE" "$NEED_BUILDX"
 if [ "$CHECK" = 1 ]; then
     [ "$NEED_PY$NEED_GO$NEED_NODE$NEED_DOCKER" = 0000 ] || exit 1
     printf 'All dependency checks passed (Docker daemon access is checked only at runtime).\n'
@@ -93,26 +101,47 @@ if [ "$BOOTSTRAP" = 1 ]; then
             *) PACKAGES="$PACKAGES python3 python3-venv";;
         esac
     fi
-    if [ "$NEED_GO" = 1 ] || [ "$NEED_NODE" = 1 ] || [ "$BUILD_PY" = 1 ] || { [ "$os_version" = 20.04 ] && [ "$NEED_DOCKER" = 1 ]; }; then
+    if [ "$NEED_GO" = 1 ] || [ "$NEED_NODE" = 1 ] || [ "$BUILD_PY" = 1 ] || { [ "$os_version" = 20.04 ] && [ "$NEED_ENGINE" = 1 ]; }; then
         PACKAGES="$PACKAGES ca-certificates"
         command -v curl >/dev/null 2>&1 || PACKAGES="$PACKAGES curl"
         command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum is required before bootstrap'
     fi
-    if [ "$NEED_DOCKER" = 1 ]; then
+    if [ "$NEED_ENGINE" = 1 ]; then
         # Never remove CE, Podman shims, containerd.io or an unmanaged Docker CLI.
         for pkg in docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin podman-docker; do
-            if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q '^install ok installed$'; then
+            if package_installed "$pkg"; then
                 DOCKER_CONFLICT="Existing $pkg detected. Complete your existing Docker installation (Compose v2/Buildx) using its original provider; no packages were removed."
             fi
         done
-        if command -v docker >/dev/null 2>&1 && ! dpkg-query -W -f='${Status}' docker.io 2>/dev/null | grep -q '^install ok installed$'; then
+        if command -v docker >/dev/null 2>&1 && ! package_installed docker.io; then
             DOCKER_CONFLICT='Existing non-Ubuntu/unmanaged Docker detected. Install missing Compose v2/Buildx with its original provider; refusing to replace it.'
         fi
         if [ "$os_version" = 20.04 ]; then
             FOCAL_DOCKER=1
             if command -v docker >/dev/null 2>&1; then DOCKER_CONFLICT='Existing incomplete Docker on Ubuntu 20.04: complete it using its original provider; refusing to replace or downgrade it.'; fi
         else
-            PACKAGES="$PACKAGES docker.io docker-compose-v2 docker-buildx"
+            PACKAGES="$PACKAGES docker.io"
+            [ "$NEED_COMPOSE" = 0 ] || PACKAGES="$PACKAGES docker-compose-v2"
+            [ "$NEED_BUILDX" = 0 ] || PACKAGES="$PACKAGES docker-buildx"
+        fi
+    fi
+    if [ "$LOCAL_PLUGINS" = 1 ]; then
+        command -v curl >/dev/null 2>&1 || fail 'curl is required for user-local Docker plugin downloads; install curl first.'
+        command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum is required for user-local Docker plugin downloads.'
+        if [ -n "${DOCKER_CONFIG:-}" ]; then
+            PLUGIN_DIR="$DOCKER_CONFIG/cli-plugins"
+        else
+            [ -n "${HOME:-}" ] || fail 'HOME or DOCKER_CONFIG is required for user-local Docker plugins.'
+            PLUGIN_DIR="$HOME/.docker/cli-plugins"
+        fi
+        for plugin in compose buildx; do
+            case "$plugin" in compose) needed=$NEED_COMPOSE;; buildx) needed=$NEED_BUILDX;; esac
+            if [ "$needed" = 1 ] && { [ -e "$PLUGIN_DIR/docker-$plugin" ] || [ -L "$PLUGIN_DIR/docker-$plugin" ]; }; then
+                fail "Existing $PLUGIN_DIR/docker-$plugin is not working. Inspect/move it aside manually; it will not be overwritten."
+            fi
+        done
+        if package_installed docker.io && package_installed docker-ce; then
+            printf 'Notice: both docker.io and docker-ce report installed; keeping Engine packages untouched and adding only missing user-local plugins.\n'
         fi
     fi
     printf '\nBootstrap plan:\n'
@@ -121,7 +150,8 @@ if [ "$BOOTSTRAP" = 1 ]; then
     [ "$FOCAL_DOCKER" = 0 ] || printf '  WARNING: Docker no longer supports Ubuntu 20.04. Optional frozen official Focal packages: Engine/CLI 28.1.1, containerd 1.7.27, Compose 2.35.1, Buildx 0.23.0. No current security support; upgrade Ubuntu recommended. Requires --allow-unsupported-docker.\n'
     [ "$NEED_GO" = 0 ] || printf '  Download latest stable Go 1.26 patch from go.dev/dl metadata; verify SHA-256; install .tools/go.\n'
     [ "$NEED_NODE" = 0 ] || printf '  Download latest Node 22 LTS from nodejs.org; verify vendor SHA-256 manifest; install .tools/node (includes npm).\n'
-    [ "$NEED_DOCKER" = 0 ] || printf '  Docker package scripts may START/ENABLE Docker/containerd services (requires --start-docker).\n'
+    [ "$LOCAL_PLUGINS" = 0 ] || printf '  Add only missing Docker CLI plugins (Compose=%s Buildx=%s) to %s; verify official release SHA-256. Existing Engine and working plugins stay unchanged. No sudo/service changes for plugins.\n' "$NEED_COMPOSE" "$NEED_BUILDX" "$PLUGIN_DIR"
+    [ "$NEED_ENGINE" = 0 ] || printf '  Docker package scripts may START/ENABLE Docker/containerd services (requires --start-docker).\n'
     [ "$START_DOCKER" = 0 ] || printf '  Start existing/local docker.service using systemctl (no explicit enable or daemon changes).\n'
     printf '  No system Python replacement, Docker group changes, daemon configuration or credential changes.\n'
 fi
@@ -141,7 +171,7 @@ if [ "$BOOTSTRAP" = 1 ]; then
     if [ "$FOCAL_DOCKER" = 1 ] && [ "$ALLOW_OLD_DOCKER" = 0 ]; then
         fail 'Docker on Ubuntu 20.04 is unsupported. Upgrade Ubuntu, prepare Docker independently, or explicitly accept frozen packages with --allow-unsupported-docker.'
     fi
-    if [ "$NEED_DOCKER" = 1 ] && [ "$START_DOCKER" = 0 ]; then
+    if [ "$NEED_ENGINE" = 1 ] && [ "$START_DOCKER" = 0 ]; then
         fail 'Installing Docker can start services. Review --dry-run, then explicitly add --start-docker to consent; or prepare Docker manually.'
     fi
     if [ "$YES" = 0 ]; then
@@ -164,10 +194,10 @@ if [ "$BOOTSTRAP" = 1 ]; then
         privileged apt-get install --yes --no-remove --no-install-recommends $PACKAGES || fail 'APT install failed; check package availability/conflicts. No fallback repositories or PPAs are added.'
         if [ "$NEED_PY" = 1 ] && [ "$BUILD_PY" = 0 ]; then PYTHON=/usr/bin/python3; fi
     fi
-    if [ "$NEED_GO" = 1 ] || [ "$NEED_NODE" = 1 ] || [ "$BUILD_PY" = 1 ] || [ "$FOCAL_DOCKER" = 1 ]; then
+    if [ "$NEED_GO" = 1 ] || [ "$NEED_NODE" = 1 ] || [ "$BUILD_PY" = 1 ] || [ "$FOCAL_DOCKER" = 1 ] || [ "$LOCAL_PLUGINS" = 1 ]; then
         mkdir -p "$ROOT/.tools"
         TMP=$(mktemp -d "$ROOT/.tools/.bootstrap.XXXXXXXX")
-        trap 'rm -rf -- "$TMP"' EXIT
+        trap 'rm -rf -- "$TMP"; if [ -n "${PLUGIN_TMP:-}" ]; then rm -f -- "$PLUGIN_TMP"; fi' EXIT
         trap 'exit 129' HUP
         trap 'exit 130' INT
         trap 'exit 143' TERM
@@ -188,9 +218,11 @@ if [ "$BOOTSTRAP" = 1 ]; then
             # Official retained distribution metadata provides exact .deb SHA-256.
             # No APT repository, trust key, daemon config, or package hold is changed.
             fetch "https://download.docker.com/linux/ubuntu/dists/focal/stable/binary-$ARCH/Packages.gz" "$TMP/docker-Packages.gz"
-            "$PYTHON" - "$TMP/docker-Packages.gz" "$ARCH" > "$TMP/docker-selection" <<'PYDOCKER'
+            "$PYTHON" - "$TMP/docker-Packages.gz" "$ARCH" "$NEED_COMPOSE" "$NEED_BUILDX" > "$TMP/docker-selection" <<'PYDOCKER'
 import gzip, re, sys
-pins = {'docker-ce': '28.1.1', 'docker-ce-cli': '28.1.1', 'containerd.io': '1.7.27', 'docker-compose-plugin': '2.35.1', 'docker-buildx-plugin': '0.23.0'}
+pins = {'docker-ce': '28.1.1', 'docker-ce-cli': '28.1.1', 'containerd.io': '1.7.27'}
+if sys.argv[3] == '1': pins['docker-compose-plugin'] = '2.35.1'
+if sys.argv[4] == '1': pins['docker-buildx-plugin'] = '0.23.0'
 found = {}
 for block in gzip.open(sys.argv[1], 'rt').read().split('\n\n'):
     fields = dict(line.split(': ', 1) for line in block.splitlines() if ': ' in line and not line.startswith(' '))
@@ -214,6 +246,43 @@ PYDOCKER
                 (cd "$TMP/debs"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Docker package checksum mismatch; package not installed.'
             done < "$TMP/docker-selection"
             privileged apt-get install --yes --no-remove --no-install-recommends "$TMP"/debs/*.deb || fail 'Frozen Docker package installation failed; no alternate repositories were added.'
+        fi
+        if [ "$LOCAL_PLUGINS" = 1 ]; then
+            # Official standalone CLI plugins; do not touch engine packages or config.json.
+            # Buildx documents Engine >=19.03; CLI validation below does not
+            # claim daemon/build compatibility. Plugin updates are explicit.
+            for plugin in compose buildx; do
+                case "$plugin" in
+                    compose)
+                        [ "$NEED_COMPOSE" = 1 ] || continue
+                        case "$ARCH" in amd64) plugin_arch=x86_64;; arm64) plugin_arch=aarch64;; esac
+                        file="docker-compose-linux-$plugin_arch"
+                        base='https://github.com/docker/compose/releases/download/v5.5.1'
+                        manifest=checksums.txt;;
+                    buildx)
+                        [ "$NEED_BUILDX" = 1 ] || continue
+                        file="buildx-v0.38.1.linux-$ARCH"
+                        base='https://github.com/docker/buildx/releases/download/v0.38.1'
+                        manifest=checksums.txt;;
+                esac
+                fetch "$base/$manifest" "$TMP/$plugin-checksums.txt"
+                sha=$(awk -v name="$file" '$2 == name || $2 == "*" name {print $1}' "$TMP/$plugin-checksums.txt")
+                [ "${#sha}" = 64 ] && printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{64}$' || fail "Missing or invalid $plugin SHA-256 in official release manifest."
+                fetch "$base/$file" "$TMP/$file"
+                (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail "$plugin checksum mismatch; plugin not installed."
+                mkdir -p "$PLUGIN_DIR"
+                # Stage in the same filesystem; hard-link publication refuses replacement
+                # even if another process created the destination after our preflight.
+                PLUGIN_TMP=$(mktemp "$PLUGIN_DIR/.$plugin.XXXXXXXX")
+                cp "$TMP/$file" "$PLUGIN_TMP"
+                chmod 755 "$PLUGIN_TMP"
+                if ! ln -T "$PLUGIN_TMP" "$PLUGIN_DIR/docker-$plugin"; then
+                    rm -f "$PLUGIN_TMP"
+                    fail "Could not install $PLUGIN_DIR/docker-$plugin without replacement."
+                fi
+                rm -f "$PLUGIN_TMP"
+                docker "$plugin" version >/dev/null 2>&1 || fail "Installed plugin $PLUGIN_DIR/docker-$plugin failed Docker CLI validation; inspect its platform compatibility and Docker plugin discovery. No Engine or working plugin was replaced."
+            done
         fi
         if [ "$NEED_GO" = 1 ]; then
             [ ! -e "$ROOT/.tools/go" ] || fail 'Existing .tools/go is incompatible; move it aside manually before retrying (not replaced automatically).'

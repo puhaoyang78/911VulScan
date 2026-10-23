@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import gzip
+import hashlib
 import os
 import shutil
 import subprocess
@@ -22,11 +23,13 @@ class InstallerTest(unittest.TestCase):
         self.bin = self.root / 'mockbin'
         self.bin.mkdir()
         # Closed PATH: only these non-mutating/core file tools can reach real binaries.
-        for name in ['dirname', 'sed', 'tr', 'awk', 'grep', 'mkdir', 'mktemp', 'rm', 'mv', 'chmod', 'sha256sum', 'cat']:
+        for name in ['dirname', 'sed', 'tr', 'awk', 'grep', 'mkdir', 'mktemp', 'rm', 'mv', 'chmod', 'sha256sum', 'cat', 'cp', 'ln']:
             (self.bin / name).symlink_to(shutil.which(name))
         self.env = dict(os.environ, PATH=str(self.bin), TEST_ROOT=str(self.root), REAL_PYTHON=sys.executable,
                         VULSCAN_OS_RELEASE=str(self.root / 'os-release'), ARCH='x86_64', NODE_VERSION='v22.15.0',
                         GO_VERSION='1.26.1', NPM_VERSION='10.9.0', PYTHON_READY='1', DOCKER_READY='1')
+        self.env['HOME'] = str(self.root / 'home')
+        self.env.pop('DOCKER_CONFIG', None)
         self.os('24.04')
         self.mock('uname', 'echo "$ARCH"')
         self.mock('id', 'echo 1000')
@@ -304,6 +307,159 @@ exit 0
         (self.root / '.tools/go').mkdir(parents=True)
         self.env['GO_VERSION'] = '1.25.0'
         self.assertIn('move it aside', self.run_script('--install-deps', '--yes', success=False))
+        self.assertEqual(self.actions(), '')
+
+    def plugin_fixtures(self, compose='5.5.1', buildx_missing=True):
+        """User's Engine26.1.3 + working Compose5 + absent Buildx, no server access."""
+        self.os('20.04')
+        self.env['COMPOSE_VERSION'] = compose
+        self.env['BUILDX_MISSING'] = '1' if buildx_missing else '0'
+        self.mock('dockerd', 'echo "Docker version 26.1.3, build 26.1.3-0ubuntu1~20.04.1"')
+        self.mock('dpkg-query', r"""
+case "$3" in
+ docker.io) printf 'install ok installed';;
+ docker-ce) printf "${CE_STATUS:-deinstall ok config-files}";;
+ *) exit 1;;
+esac
+""")
+        self.mock('docker', r"""
+case "$1" in
+ --version) echo 'Docker version 26.1.3, build 26.1.3-0ubuntu1~20.04.1';;
+ compose)
+   if [ -n "$COMPOSE_VERSION" ]; then echo "$COMPOSE_VERSION"; exit 0; fi
+   plugin="${DOCKER_CONFIG:-$HOME/.docker}/cli-plugins/docker-compose"
+   [ -x "$plugin" ] && "$plugin" version;;
+ buildx)
+   [ "${PLUGIN_FAIL:-0}" = 0 ] || exit 1
+   if [ "$BUILDX_MISSING" = 0 ]; then echo 'buildx v0.23.0'; exit 0; fi
+   plugin="${DOCKER_CONFIG:-$HOME/.docker}/cli-plugins/docker-buildx"
+   [ -x "$plugin" ] && "$plugin" version;;
+esac
+""")
+        buildx = b'#!/bin/sh\necho "github.com/docker/buildx v0.38.1 fixture"\n'
+        compose_data = b'#!/bin/sh\necho 5.5.1\n'
+        (self.root / 'buildx-binary').write_bytes(buildx)
+        (self.root / 'compose-binary').write_bytes(compose_data)
+        manifests = []
+        for arch in ['amd64', 'arm64']:
+            manifests.append(hashlib.sha256(buildx).hexdigest() + f' *buildx-v0.38.1.linux-{arch}\n')
+        (self.root / 'buildx-checksums').write_text(''.join(manifests))
+        (self.root / 'compose-checksums').write_text(''.join(
+            hashlib.sha256(compose_data).hexdigest() + f'  docker-compose-linux-{arch}\n'
+            for arch in ['x86_64', 'aarch64']))
+        doc = json.loads((self.root / 'go.json').read_text())
+        for f in doc[0]['files']:
+            f['sha256'] = hashlib.sha256(b'go-fixture').hexdigest()
+        (self.root / 'go.json').write_text(json.dumps(doc))
+        self.mock('curl', r"""
+echo "download $*" >> "$TEST_ROOT/actions"
+while [ "$1" != --output ]; do shift; done
+out=$2; url=$3
+case "$url" in
+ *buildx*/checksums.txt) cat "$TEST_ROOT/buildx-checksums" > "$out";;
+ *buildx-v*.linux-*) cat "$TEST_ROOT/buildx-binary" > "$out";;
+ *compose*/checksums.txt) cat "$TEST_ROOT/compose-checksums" > "$out";;
+ *docker-compose-linux-*) cat "$TEST_ROOT/compose-binary" > "$out";;
+ *mode=json*) cat "$TEST_ROOT/go.json" > "$out";;
+ *go1.26*.tar.gz) printf go-fixture > "$out";;
+ *) exit 23;;
+esac
+""")
+        self.mock('tar', r"""
+echo "EXTRACT $*" >> "$TEST_ROOT/actions"
+while [ "$1" != -C ]; do shift; done
+mkdir -p "$2/go/bin"
+printf '#!/bin/sh\necho "go version go1.26.1 linux/amd64"\n' > "$2/go/bin/go"
+chmod +x "$2/go/bin/go"
+""")
+
+    def test_user_focal_only_buildx_missing(self):
+        self.plugin_fixtures()
+        config = self.root / "Docker config's space"
+        config.mkdir()
+        (config / 'config.json').write_text('{"auths":{"private.example":{"auth":"unchanged"}}}')
+        (config / 'cli-plugins').mkdir()
+        compose = config / 'cli-plugins/docker-compose'
+        compose.write_text('existing Compose v5.5.1 - do not replace')
+        self.env['DOCKER_CONFIG'] = str(config)
+        output = self.run_script('--install-deps', '--deps-only', '--yes')
+        self.assertIn('Engine/CLI=0 Compose=0 Buildx=1', output)
+        self.assertTrue((config / 'cli-plugins/docker-buildx').is_file())
+        self.assertEqual(compose.read_text(), 'existing Compose v5.5.1 - do not replace')
+        self.assertIn('unchanged', (config / 'config.json').read_text())
+        self.assertNotIn('sudo', self.actions())
+        self.assertNotIn('apt ', self.actions())
+        self.assertNotIn('service ', self.actions())
+        self.assertNotIn('compose/releases', self.actions())
+        self.assertNotIn('Packages.gz', self.actions())
+        self.assertNotIn('both docker.io', output)
+        self.assertFalse(list((config / 'cli-plugins').glob('.buildx.*')))
+
+    def test_only_buildx_and_go_missing_mixed_package_status(self):
+        self.plugin_fixtures()
+        self.env.update(GO_VERSION='1.25.0', CE_STATUS='install ok installed')
+        output = self.run_script('--install-deps', '--deps-only', '--yes')
+        self.assertIn('both docker.io and docker-ce', output)
+        self.assertIn('go1.26', self.actions())
+        self.assertIn('apt install --yes --no-remove --no-install-recommends ca-certificates', self.actions())
+        self.assertNotIn('docker.io', self.actions())
+        self.assertNotIn('.deb', self.actions())
+        self.assertNotIn('service ', self.actions())
+        self.assertNotIn('compose/releases', self.actions())
+
+    def test_plugin_checksum_failure(self):
+        self.plugin_fixtures()
+        (self.root / 'buildx-binary').write_text('corrupted download')
+        self.assertIn('buildx checksum mismatch', self.run_script('--install-deps', '--deps-only', '--yes', success=False))
+        self.assertFalse((self.root / 'home/.docker/cli-plugins/docker-buildx').exists())
+        self.assertNotIn('sudo', self.actions())
+
+    def test_broken_existing_plugin_refused_before_writes(self):
+        self.plugin_fixtures()
+        target = self.root / 'home/.docker/cli-plugins/docker-buildx'
+        target.parent.mkdir(parents=True)
+        target.symlink_to(self.root / 'nonexistent')
+        self.assertIn('will not be overwritten', self.run_script('--install-deps', '--yes', success=False))
+        self.assertTrue(target.is_symlink())
+        self.assertEqual(self.actions(), '')
+
+    def test_plugin_postcheck_failure_not_success(self):
+        self.plugin_fixtures()
+        self.env['PLUGIN_FAIL'] = '1'
+        self.assertIn('failed Docker CLI validation', self.run_script('--install-deps', '--deps-only', '--yes', success=False))
+        self.assertNotIn('service ', self.actions())
+
+    def test_missing_compose_only_arm64(self):
+        self.plugin_fixtures(compose='', buildx_missing=False)
+        self.env['ARCH'] = 'aarch64'
+        self.run_script('--install-deps', '--deps-only', '--yes')
+        self.assertIn('docker-compose-linux-aarch64', self.actions())
+        self.assertNotIn('buildx/releases', self.actions())
+        self.assertNotIn('sudo', self.actions())
+
+    def test_plugin_dry_run_does_not_download(self):
+        self.plugin_fixtures()
+        self.assertIn('Add only missing Docker CLI plugins', self.run_script('--install-deps', '--dry-run'))
+        self.assertEqual(self.actions(), '')
+        self.assertFalse((self.root / 'home').exists())
+
+    def test_plugin_target_directory_race_does_not_install_inside(self):
+        self.plugin_fixtures()
+        self.env['REAL_LN'] = shutil.which('ln')
+        self.mock('ln', 'mkdir -p "$3"; exec "$REAL_LN" "$@"')
+        self.assertIn('without replacement', self.run_script('--install-deps', '--deps-only', '--yes', success=False))
+        target = self.root / 'home/.docker/cli-plugins/docker-buildx'
+        self.assertTrue(target.is_dir())
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertFalse(list(target.parent.glob('.buildx.*')))
+
+    def test_both_plugins_and_second_run_no_changes(self):
+        self.plugin_fixtures(compose='')
+        self.run_script('--install-deps', '--deps-only', '--yes')
+        self.assertIn('compose/releases', self.actions())
+        self.assertIn('buildx/releases', self.actions())
+        (self.root / 'actions').unlink()
+        self.run_script('--install-deps', '--deps-only', '--yes')
         self.assertEqual(self.actions(), '')
 
 
