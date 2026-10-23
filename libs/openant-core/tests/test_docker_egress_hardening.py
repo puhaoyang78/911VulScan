@@ -200,25 +200,16 @@ def test_scrubbed_env_keeps_docker_essentials_and_proxy():
 
 
 def test_run_command_passes_scrubbed_env(monkeypatch):
-    """_run_command must hand the scrubbed env to the subprocess (not inherit os.environ)."""
-    import os
+    """A real child observes the allowlisted environment, without provider secrets."""
+    import json
+    import sys
     from utilities.dynamic_tester import docker_executor
 
-    os.environ["ANTHROPIC_API_KEY"] = "sk-should-not-leak"
-    captured = {}
-
-    def fake_run_utf8(cmd, **kwargs):
-        captured["env"] = kwargs.get("env")
-        class R:
-            stdout, stderr, returncode = "", "", 0
-        return R()
-
-    monkeypatch.setattr(docker_executor, "run_utf8", fake_run_utf8)
-    try:
-        docker_executor._run_command(["docker", "version"], timeout=5)
-    finally:
-        os.environ.pop("ANTHROPIC_API_KEY", None)
-
-    assert captured["env"] is not None, "_run_command must pass an explicit env= (scrubbed)"
-    assert "ANTHROPIC_API_KEY" not in captured["env"]
-    assert "PATH" in captured["env"]
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+    monkeypatch.delenv("OPENANT_DOCKER_OWNER", raising=False)
+    stdout, stderr, code, timed_out = docker_executor._run_command(
+        [sys.executable, "-c", "import os,json; print(json.dumps(dict(os.environ)))"], timeout=5)
+    assert code == 0 and not timed_out, stderr
+    env = json.loads(stdout)
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "PATH" in env

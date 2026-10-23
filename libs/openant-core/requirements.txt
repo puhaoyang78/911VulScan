@@ -23,6 +23,7 @@ typing-inspection==0.4.4
 typing_extensions==4.16.0
 PyYAML>=6.0
 requests>=2.31.0
+psutil>=5.9.0  # bounded Docker CLI/plugin process-tree cleanup on timeout
 tree-sitter>=0.21.0
 tree-sitter-c>=0.21.0
 tree-sitter-cpp>=0.21.0

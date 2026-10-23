@@ -93,6 +93,27 @@ export OPENANT_PYTHON="$PWD/.venv/bin/python"
 
 详细协议和限制见 [动态验证说明](libs/openant-core/utilities/dynamic_tester/README.md)。自动生成的驱动仍需人工核对，运行时诊断必须与原始发现和目标调用栈相符。
 
+## 二阶段资源回收与容量保护
+
+每次验证使用独立的任务及尝试标识。结束、失败或超时后，按归属标签回收容器、临时镜像和网络；Compose 中需要构建的服务使用本次尝试的专属镜像标签，直接引用的公共镜像不删除。临时工作目录只在核对目录身份后删除，报告、检查点和重现材料继续保留。网页和 CLI 的外层进程在扫描子进程退出后另行执行有时间上限的清理，避免取消任务后仅杀死 Python、留下 Docker 资源。
+
+默认保护：
+
+- 同一操作系统用户的动态验证尝试串行执行，跨进程文件锁在进程退出时释放；不会同时启动多个大构建。
+- 每个运行容器仍限制为 512 MiB 内存、1 个 CPU 和 256 个进程；Compose 最多允许 8 个服务。这些限制不等于整个构建过程的内存配额。
+- Docker 日志采用 `local` 驱动，每个容器最多保留 2 份、每份 10 MB；命令 stdout/stderr 各保留末尾 256 KiB，超出时明确标记截断。
+- 新尝试启动前检查默认 Docker builder 的共享构建缓存。达到 10 GiB 时拒绝继续构建；可用 `OPENANT_DOCKER_CACHE_MAX_BYTES` 设置正整数字节阈值。本地暂存目录所在磁盘可用空间不足 2 GiB 时也拒绝新尝试。
+
+需要支持 `--builder default` 的 Docker/Compose。程序显式使用所选 Docker context 的默认 builder，不沿用自定义 `BUILDKIT_HOST` 等构建后端覆盖，以免检查的缓存与实际构建后端不一致。环境或容量错误保留为动态验证错误，不表示漏洞不存在，也不应交给模型反复修改 PoC。
+
+**临时镜像删除不等于 BuildKit 缓存删除。** 程序不会执行全局 `docker system prune` 或 `docker builder prune`，不会修改 daemon 配置。上述阈值是新任务准入保护，不是硬磁盘配额：单次构建或服务器上的其他程序仍可能使占用超过阈值。共享缓存的实际回收由服务器管理员或已有 Docker/BuildKit GC 策略管理。使用远程 Docker context 时，本地磁盘检查不能代表远程服务器的磁盘余量，仍需在远程主机配置存储监控与预算。
+
+清理失败会显示警告，并保留任务资源清单用于重试；不要直接删除清单或清空整个 Docker 主机来掩盖失败。升级后的所有权标签只适用于新验证任务，旧版本已经遗留的无标签资源需要管理员单独核对后处理。
+
+在支持文件租约锁的 Unix 系统上，CLI 将清单保存在系统用户配置目录下的 `openant/docker-lifecycle`（可用 `OPENANT_DOCKER_STATE_DIR` 指定私有目录）。下一次调用扫描引擎时，只重试没有活跃进程持有租约、且 Docker 后端身份匹配的遗留任务。后台恢复有独立时间预算，失败则保留记录。Windows 保留本次退出时的清理，但不自动判断旧任务是否已失效。直接调用 Python 而绕过 Go CLI，也没有 Go 外层强杀后的兜底；不能将这些场景描述为已经完成自动恢复。
+
+真实 Docker 生命周期烟测默认跳过。需要验收时，仅在专用测试 Docker 主机上进入 `libs/openant-core`，执行 `OPENANT_DOCKER_LIFECYCLE_TESTS=1 python -m pytest tests/test_docker_lifecycle_integration.py -v`。该测试会拉取官方 `busybox:1.37`，验证正常退出、超时、构建失败、Compose 镜像隔离及 Python 被强杀后的回收；不调用模型，不运行外部项目 PoC，不执行全局缓存清理。Linux CI 单独启用这组测试。
+
 ## 验证方法
 
 ```bash

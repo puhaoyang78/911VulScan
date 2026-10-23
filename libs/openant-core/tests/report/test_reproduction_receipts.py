@@ -32,15 +32,22 @@ def test_records_actual_staging_and_commands_without_changing_execution(tmp_path
 
     def command(argv, timeout, cwd=None):
         calls.append((argv, timeout, cwd))
-        return (payload if argv[:2] == ["docker", "run"] else "build done", "", 0, False)
+        if argv[:2] == ["docker", "info"]:
+            return "fixture-daemon", "", 0, False
+        if argv[:3] == ["docker", "system", "df"]:
+            return json.dumps({"Type": "Build Cache", "Size": "0B"}), "", 0, False
+        return (payload if argv[:2] == ["docker", "run"] else
+                "build done" if argv[:2] == ["docker", "build"] else "", "", 0, False)
 
     monkeypatch.setattr(executor, "_run_command", command)
     execution = executor.run_single_container(GENERATION, "F1", source_file=str(source))
     receipt = execution.reproduction
     assert execution.exit_code == 0 and execution.stdout == payload
-    assert [c[0][:2] for c in calls] == [["docker", "build"], ["docker", "run"],
-                                        ["docker", "rmi"], ["docker", "network"]]
-    assert [c["argv"] for c in receipt["commands"]] == [calls[0][0], calls[1][0]]
+    execution_calls = [c for c in calls if c[0][:2] in (["docker", "build"], ["docker", "run"])]
+    assert [c[0][:2] for c in execution_calls] == [["docker", "build"], ["docker", "run"]]
+    assert any(c[0][:3] == ["docker", "system", "df"] for c in calls)
+    assert receipt["cleanup"] == {"ok": True, "errors": []}
+    assert [c["argv"] for c in receipt["commands"]] == [c[0] for c in execution_calls]
     assert [c["exit_code"] for c in receipt["commands"]] == [0, 0]
     assert "--network" in receipt["commands"][1]["argv"]
     files = {f["filename"]: f["content"] for f in receipt["artifacts"]}
@@ -48,7 +55,7 @@ def test_records_actual_staging_and_commands_without_changing_execution(tmp_path
                      "requirements.txt": "fixture==1\n"}
     assert receipt["source"] == {"filename": source.name,
         "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
-    assert not Path(calls[0][2]).exists()  # existing cleanup still happens
+    assert not Path(execution_calls[0][2]).exists()  # existing cleanup still happens
     result = collect_result({"id": "F1", "identity_key": "stable"}, GENERATION, execution)
     assert result.status == "CONFIRMED"
     assert result.to_dict()["reproduction"] == receipt
@@ -65,14 +72,17 @@ services:
     privileged: true
     volumes: ['/host:/data']
 """}
-    monkeypatch.setattr(executor, "_run_command", lambda *a, **kw: ("", "", 0, False))
+    monkeypatch.setattr(executor, "_run_command", lambda argv, **kw:
+        (json.dumps({"Type": "Build Cache", "Size": "0B"})
+         if argv[:3] == ["docker", "system", "df"] else
+         "fixture-daemon" if argv[:2] == ["docker", "info"] else "", "", 0, False))
     result = executor.run_single_container(generation, "fixture")
     files = {f["filename"]: f["content"] for f in result.reproduction["artifacts"]}
     assert "privileged" not in files["docker-compose.yml"]
     assert "/host" not in files["docker-compose.yml"]
     assert "no-new-privileges" in files["docker-compose.yml"]
-    assert [c["stage"] for c in result.reproduction["commands"]] == ["build", "start", "observe"]
-    assert result.reproduction["commands"][-1]["argv"][-4:] == ["logs", "--no-log-prefix", "-f", "test"]
+    assert [c["stage"] for c in result.reproduction["commands"]] == ["build", "start", "observe", "cleanup"]
+    assert result.reproduction["commands"][-2]["argv"][-4:] == ["logs", "--no-log-prefix", "-f", "test"]
     rendered = render_reproduction(collect_result({"id": "F"}, generation, result).to_dict())
     assert "日志命令退出成功不代表容器或目标执行成功" in rendered
 

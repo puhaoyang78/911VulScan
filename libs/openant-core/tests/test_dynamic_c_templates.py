@@ -197,6 +197,10 @@ def test_mocked_docker_native_staging_and_isolation(tmp_path, monkeypatch):
     seen = []
     def mock_command(command, timeout, cwd=None):
         seen.append(command)
+        if command[:2] == ["docker", "info"]:
+            return "fixture-daemon", "", 0, False
+        if command[:3] == ["docker", "system", "df"]:
+            return json.dumps({"Type": "Build Cache", "Size": "0B"}), "", 0, False
         if command[:2] == ["docker", "build"]:
             context = Path(cwd)
             assert (context / "Dockerfile").read_text() == generator._native_dockerfile()
@@ -206,7 +210,8 @@ def test_mocked_docker_native_staging_and_isolation(tmp_path, monkeypatch):
             assert (context / "_openant_c_runner.py").is_file()
             assert (context / "test_exploit.cpp").read_text() == generated["test_script"]
             return "", "", 0, False
-        return '{"status":"NOT_REPRODUCED","details":"未复现","evidence":[]}', "", 0, False
+        return ('{"status":"NOT_REPRODUCED","details":"未复现","evidence":[]}'
+                if command[:2] == ["docker", "run"] else ""), "", 0, False
     monkeypatch.setattr(docker, "_run_command", mock_command)
     result = docker.run_single_container(generated, "test", source_file=str(source))
     assert result.success
@@ -221,7 +226,7 @@ def test_mocked_docker_native_staging_and_isolation(tmp_path, monkeypatch):
 def test_missing_docker_is_recorded_not_raised(monkeypatch):
     def missing(*a, **k):
         raise FileNotFoundError("docker")
-    monkeypatch.setattr(docker, "run_utf8", missing)
+    monkeypatch.setattr(docker.subprocess, "Popen", missing)
     execution = docker.run_single_container({"dockerfile": "FROM scratch", "test_script": "x"}, "test")
     assert execution.infrastructure_error
     assert collect_result({"id": "test"}, {}, execution).status == "ERROR"
@@ -230,7 +235,7 @@ def test_missing_docker_is_recorded_not_raised(monkeypatch):
 def test_native_staging_collision_is_visible(tmp_path, monkeypatch):
     source = tmp_path / "test_exploit.c"
     source.write_text("int main(void){return 0;}")
-    monkeypatch.setattr(docker, "_cleanup_docker", lambda *a: None)
+    monkeypatch.setattr(docker, "_run_command", lambda *a, **kw: ("", "", 0, False))
     execution = docker.run_single_container({"native_language": "c", "test_script": "x"}, "test", source_file=str(source))
     assert "冲突" in execution.execution_error
     assert collect_result({"id": "test"}, {}, execution).status == "ERROR"
@@ -270,7 +275,7 @@ def test_sanitizer_without_target_source_is_inconclusive():
 
 
 def test_native_requires_actual_source(monkeypatch):
-    monkeypatch.setattr(docker, "_cleanup_docker", lambda *a: None)
+    monkeypatch.setattr(docker, "_run_command", lambda *a, **kw: ("", "", 0, False))
     execution = docker.run_single_container({"native_language": "c", "test_script": "x"}, "test")
     assert "真实目标源文件" in execution.execution_error
     assert collect_result({"id": "test"}, {}, execution).status == "ERROR"

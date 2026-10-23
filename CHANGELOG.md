@@ -3,6 +3,21 @@
 
 All notable changes to OpenAnt are documented in this file.
 
+## [2026-10-23] — Stage-2 Docker lifecycle recovery (911-dev)
+
+### Fixed
+
+- Track scan and attempt ownership for dynamic-test containers, images, networks, temporary directories, and Docker CLI producers. Timeout and cancellation stop the command tree before reclaiming owned resources; Compose teardown also covers build and startup interruption.
+- Replace generated Compose build tags with attempt-specific tags. Preserve image-only services and unrelated aliases rather than force-deleting shared images. Cleanup failures remain visible and retain recovery records.
+- Add outer CLI/web cleanup independent of the cancelled scan context, and lease-protected recovery of abandoned task records on supported Unix platforms. Active tasks are not selected by PID guesses or broad resource pruning.
+- Bound Docker command output and container log retention. Serialize dynamic attempts per OS user and check staging free space and default-builder cache usage before admitting new work.
+
+### Operational limits
+
+- Shared BuildKit cache is **not automatically pruned**. The configurable admission threshold is not a hard storage quota and cannot stop an unrelated process or one in-flight build from exceeding it. Remote-daemon free space remains an operator responsibility.
+- Existing unlabeled resources from older versions are not adopted or deleted. No daemon settings, global prune operation, paid model call, or live-server cleanup is part of this change.
+- Docker/Compose must support explicitly selecting the default builder. The Python installation now includes `psutil` for supervised CLI process-tree cleanup.
+
 ## [2026-09-19] — The rescue schema asks the calling phase's vocabulary, and the legacy INSUFFICIENT_CONTEXT value is one answer everywhere (#623)
 
 ### Fixed

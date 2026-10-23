@@ -305,7 +305,15 @@ _PATH_TEXT_RE = re.compile(r"\.(?:read_text|write_text)\s*\(")
 # above, so here we look explicitly for ``.open(`` (Path or file-like object
 # method form) which has the same Windows cp1252 default behaviour as
 # ``open()`` and is not caught by the bare-open regex.
-_DOT_OPEN_RE = re.compile(r"\.open\s*\(")
+# os.open is a raw file-descriptor API: it takes O_* flags and has no encoding
+# parameter. Keep matching other receivers, including names ending in "os".
+_DOT_OPEN_RE = re.compile(r"(?<!\bos)\.open\s*\(")
+
+
+def test_dot_open_scan_distinguishes_raw_descriptors_from_text_streams():
+    source = "os.open(path, os.O_RDONLY)\npath.open()\nphotos.open()\n"
+    calls = list(_scan_calls(_strip_strings_and_comments(source), source, _DOT_OPEN_RE))
+    assert [line for line, _, _ in calls] == [2, 3]
 
 
 def test_no_bare_pathlib_text_io_in_non_test_code():

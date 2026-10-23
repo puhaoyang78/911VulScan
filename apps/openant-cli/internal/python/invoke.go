@@ -118,6 +118,7 @@ func Invoke(pythonPath string, args []string, workDir string, quiet bool, apiKey
 	ctx, cancel := context.WithTimeout(context.Background(), invokeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, pythonPath, cmdArgs...)
+	setProcGroupKill(cmd)
 
 	// Killing the process is not sufficient on its own: a descendant the
 	// parser spawned can keep the stdout/stderr pipe write-ends open, leaving
@@ -147,6 +148,20 @@ func Invoke(pythonPath string, args []string, workDir string, quiet bool, apiKey
 		overrides[k] = v
 	}
 	cmd.Env = mergeEnv(os.Environ(), overrides)
+	resources, err := newDockerInvocation()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = resources.environment(cmd.Env)
+	if err := resources.recordBackend(cmd.Env); err != nil {
+		resources.cleanup(pythonPath, workDir, cmd.Env, nil)
+		return nil, err
+	}
+	resources.attachLease(cmd)
+	resources.recoverStale(pythonPath, workDir, cmd.Env, func(line string) { fmt.Fprintln(os.Stderr, line) })
+	defer resources.cleanup(pythonPath, workDir, cmd.Env, func(line string) {
+		fmt.Fprintln(os.Stderr, line)
+	})
 
 	// #431: route stdout/stderr through MANAGED writers (invoke_ctx.go's
 	// pattern) instead of StdoutPipe/StderrPipe + this function's own copy
@@ -194,11 +209,9 @@ func Invoke(pythonPath string, args []string, workDir string, quiet bool, apiKey
 			_ = cmd.Process.Signal(sig)
 		}
 		// Give Python a few seconds to exit gracefully, then force kill
-		time.AfterFunc(5*time.Second, func() {
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-		})
+		// Cancel through os/exec's watcher, which stops before Wait reaps
+		// the child. A delayed raw process-group kill risks PID reuse.
+		time.AfterFunc(5*time.Second, cancel)
 	}()
 	defer func() {
 		signal.Stop(sigChan)

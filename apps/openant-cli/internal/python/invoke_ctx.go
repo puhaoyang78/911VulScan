@@ -185,6 +185,19 @@ func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workD
 		cmd.Dir = workDir
 	}
 	cmd.Env = mergeEnv(os.Environ(), extraEnv)
+	resources, err := newDockerInvocation()
+	if err != nil {
+		return "", 0, err
+	}
+	cmd.Env = resources.environment(cmd.Env)
+	if err := resources.recordBackend(cmd.Env); err != nil {
+		resources.cleanup(pythonPath, workDir, cmd.Env, nil)
+		return "", 0, err
+	}
+	resources.attachLease(cmd)
+	resources.recoverStale(pythonPath, workDir, cmd.Env, onLog)
+	defer resources.cleanup(pythonPath, workDir, cmd.Env, onLog)
+
 	// New process group so we can kill all descendants at once (unix; no-op
 	// elsewhere). os/exec drives cancellation: its watch goroutine calls Cancel
 	// once and stops before Wait reaps the child, so there is no window to SIGKILL

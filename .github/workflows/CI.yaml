@@ -91,6 +91,13 @@ jobs:
         working-directory: libs/openant-core
         run: python -m pytest tests/ -v
 
+      - name: Verify Docker lifecycle on isolated CI runner
+        if: runner.os == 'Linux'
+        working-directory: libs/openant-core
+        env:
+          OPENANT_DOCKER_LIFECYCLE_TESTS: "1"
+        run: python -m pytest tests/test_docker_lifecycle_integration.py -v
+
   go-tests:
     name: Go build + integration (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

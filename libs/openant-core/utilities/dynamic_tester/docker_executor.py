@@ -11,10 +11,13 @@ import os
 import re
 import shutil
 import subprocess
+import signal
+import threading
 import tempfile
 import time
 import uuid
-from utilities.file_io import open_utf8, run_utf8
+from utilities.file_io import open_utf8
+from utilities import docker_resources
 from utilities.dynamic_tester.diagnostics import bounded_diagnostic
 
 # Timeouts
@@ -82,8 +85,11 @@ def _safe_build(build):
     not absolute) is allowed; `build.dockerfile` is confined the same way.
     """
     def _confined(p) -> bool:
-        return (isinstance(p, str) and not p.startswith("/")
-                and ".." not in p.replace("\\", "/").split("/"))
+        return (isinstance(p, str) and bool(p) and not p.startswith("/")
+                and not p.startswith("~")
+                and not any(c in p for c in ("\\", ":", "$"))
+                and not any(ord(c) < 32 or ord(c) == 127 for c in p)
+                and ".." not in p.split("/"))
 
     if isinstance(build, str):
         if not _confined(build):
@@ -217,6 +223,9 @@ def _sanitize_compose(content: str) -> str:
     services_in = data.get("services")
     if not isinstance(services_in, dict) or not services_in:
         return _refuse_compose("docker-compose declares no services")
+
+    if len(services_in) > 8:
+        return _refuse_compose("docker-compose exceeds the eight-service resource budget")
 
     services_out = {}
     try:
@@ -373,8 +382,7 @@ _ENV_ALLOW_EXACT = frozenset({
     "DOCKER_HOST", "DOCKER_CONFIG", "DOCKER_CONTEXT", "DOCKER_CERT_PATH",
     "DOCKER_TLS_VERIFY", "DOCKER_API_VERSION", "DOCKER_BUILDKIT",
     "DOCKER_DEFAULT_PLATFORM", "DOCKER_CLI_EXPERIMENTAL", "DOCKER_CONTENT_TRUST",
-    "BUILDKIT_HOST", "BUILDKIT_PROGRESS", "COMPOSE_PROJECT_NAME", "COMPOSE_FILE",
-    "COMPOSE_PROFILES", "COMPOSE_DOCKER_CLI_BUILD",
+    "BUILDKIT_PROGRESS",
     # Windows essentials so docker.exe resolves on CI runners.
     "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA",
     "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
@@ -406,29 +414,120 @@ def _scrubbed_subprocess_env() -> dict:
                 or any(up.startswith(p) for p in _ENV_ALLOW_PREFIXES)
                 or any(name.endswith(s) for s in _ENV_ALLOW_SUFFIXES))
 
-    return {k: v for k, v in os.environ.items() if _allowed(k)}
+    env = {k: v for k, v in os.environ.items() if _allowed(k)}
+    # Legacy builders create unlabelled intermediate containers on interruption.
+    # Use the explicitly selected daemon BuildKit backend measured by admission.
+    env["DOCKER_BUILDKIT"] = "1"
+    return env
+
+
+def _kill_command_tree(process):
+    """Freeze/capture descendants before killing a supervised CLI, on all platforms."""
+    import psutil
+    stopped = []
+    def freeze(proc):
+        try:
+            proc.suspend()
+            stopped.append(proc)
+            for child in proc.children():
+                freeze(child)
+        except psutil.NoSuchProcess:
+            pass
+    try:
+        freeze(psutil.Process(process.pid))
+    finally:
+        for proc in reversed(stopped):
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                pass
+        _, alive = psutil.wait_procs(stopped, timeout=5)
+        if any(proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE for proc in alive):
+            raise RuntimeError("Docker CLI descendants did not terminate")
+
+
+class UnstoppedProducerError(RuntimeError):
+    """The supervisor must not race an unverified orphaned Docker producer."""
+
+
+MAX_COMMAND_OUTPUT = 256 * 1024  # retained bytes per stream; pipes are continuously drained
 
 
 def _run_command(cmd: list[str], timeout: int, cwd: str = None) -> tuple[str, str, int, bool]:
-    """Run a command with timeout. Returns (stdout, stderr, exit_code, timed_out)."""
+    """Drain both pipes with bounded memory; stop CLI process groups on cancellation.
+
+    Killing the CLI does not kill daemon containers: owned-resource cleanup below
+    is independently required. Keep the tail so compiler/runtime diagnostics survive.
+    """
+    buffers = [bytearray(), bytearray()]
+    truncated = [False, False]
+    def drain(pipe, index):
+        try:
+            while chunk := pipe.read(8192):
+                buffers[index].extend(chunk)
+                if len(buffers[index]) > MAX_COMMAND_OUTPUT:
+                    del buffers[index][:-MAX_COMMAND_OUTPUT]
+                    truncated[index] = True
+        finally:
+            pipe.close()
+    own_session = os.name == "posix" and not os.environ.get("OPENANT_DOCKER_OWNER")
     try:
-        result = run_utf8(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=cwd,
-            env=_scrubbed_subprocess_env(),
-        )
-        return result.stdout, result.stderr, result.returncode, False
-    except subprocess.TimeoutExpired as exc:
-        # TimeoutExpired can carry bytes even when text=True. Retain compiler /
-        # dependency diagnostics rather than spending a retry on an empty error.
-        def decoded(value):
-            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else (value or "")
-        return decoded(exc.stdout), decoded(exc.stderr) + "\n命令执行超时", -1, True
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   cwd=cwd, env=_scrubbed_subprocess_env(),
+                                   start_new_session=own_session)
     except OSError as exc:
         return "", f"无法启动命令 {cmd[0]}：{exc}", 127, False
+    registered_producer = False
+    if os.environ.get("OPENANT_DOCKER_OWNER"):
+        try:
+            docker_resources.register_producer(process.pid)
+            registered_producer = True
+        except BaseException:
+            _kill_command_tree(process)
+            process.wait()
+            raise
+    threads = [threading.Thread(target=drain, args=(pipe, i), daemon=True)
+               for i, pipe in enumerate((process.stdout, process.stderr))]
+    for thread in threads:
+        thread.start()
+    timed_out = False
+    def stop():
+        try:
+            if own_session:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                _kill_command_tree(process)
+        except ProcessLookupError:
+            pass
+        except Exception as exc:
+            if registered_producer:
+                docker_resources.mark_producer_uncertain(process.pid)
+            raise UnstoppedProducerError("Docker CLI termination could not be verified") from exc
+        process.wait()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        stop()
+    except BaseException:
+        stop()
+        raise
+    finally:
+        # Do not signal a process group after wait() has reaped its leader: its
+        # numeric ID may be recycled. Retain recovery evidence on orphaned pipes.
+        for thread in threads:
+            thread.join(timeout=2)
+        if registered_producer and not any(thread.is_alive() for thread in threads):
+            docker_resources.unregister_producer(process.pid)
+    output = [("[earlier output truncated]\n" if truncated[i] else "") +
+              bytes(value).decode("utf-8", errors="replace") for i, value in enumerate(buffers)]
+    if any(thread.is_alive() for thread in threads):
+        if registered_producer:
+            docker_resources.mark_producer_uncertain(process.pid)
+        raise UnstoppedProducerError("Docker CLI descendant retained output pipes; manual producer recovery required")
+    if timed_out:
+        output[1] += "\n命令执行超时"
+    return output[0], output[1], -1 if timed_out else process.returncode, timed_out
 
 
 def _staged_artifacts(work_dir: str, source_file: str | None) -> dict:
@@ -498,8 +597,8 @@ def run_single_container(
     # Docker tags must match [a-z0-9][a-z0-9._-]*, so strip anything else.
     # UUID prefix prevents collisions between parallel dynamic-test runs
     # (same finding IDs across scans).
-    run_id = uuid.uuid4().hex[:8]
-    safe_id = re.sub(r"[^a-z0-9-]", "-", finding_id.lower()).strip("-_.")
+    run_id = uuid.uuid4().hex
+    safe_id = re.sub(r"[^a-z0-9-]", "-", finding_id.lower()).strip("-_.")[:48] or "finding"
     image_tag = f"openant-test-{run_id}-{safe_id}"
     network_name = f"openant-net-{run_id}-{safe_id}"
 
@@ -513,30 +612,57 @@ def run_single_container(
     if work_dir != raw_work_dir:
         os.rename(raw_work_dir, work_dir)
 
+    registered = False
+    cleanup_blocked = False
+    infrastructure_phase = True
     try:
+        docker_resources.register_run(run_id, work_dir)
+        registered = True
+        infrastructure_phase = False  # Generated staging errors remain eligible for repair.
         _write_test_files(work_dir, generation, source_file=source_file)
+        _label_compose(work_dir, run_id)
         receipt = _staged_artifacts(work_dir, source_file)
-
-        if generation.get("docker_compose") and generation.get("needs_attacker_server"):
-            # Multi-service: use docker compose with explicit project name
-            # (#315: the run_id prefix — the parallel-run collision guard
-            # the :408 comment names — now on the project name too)
-            result = _run_compose(work_dir, compose_project_name(run_id, safe_id),
-                                  container_timeout, build_timeout)
-        else:
-            # Single container: docker build + run
-            result = _run_single(work_dir, image_tag, network_name,
-                                 container_timeout, build_timeout)
         result.reproduction.update(receipt)
-    except (OSError, ValueError, TypeError, KeyError) as exc:
-        result.execution_error = f"测试文件准备失败：{exc}"
+
+        infrastructure_phase = True
+        with docker_resources.build_admission(timeout=build_timeout, runner=_run_command):
+            docker_resources.bind_run_daemon(run_id, runner=_run_command)
+            result = _execute_staged(generation, work_dir, run_id, safe_id, image_tag,
+                                     network_name, container_timeout, build_timeout)
+        result.reproduction.update(receipt)
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError, TimeoutError) as exc:
+        cleanup_blocked = isinstance(exc, UnstoppedProducerError)
+        result.execution_error = f"测试执行准备失败：{exc}"
+        result.infrastructure_error = infrastructure_phase or cleanup_blocked
     finally:
         result.elapsed_seconds = time.time() - start_time
-        # Clean up work directory
-        shutil.rmtree(work_dir, ignore_errors=True)
-        # Clean up Docker resources (best effort)
-        _cleanup_docker(image_tag, network_name)
+        if registered:
+            try:
+                if cleanup_blocked:
+                    raise RuntimeError("Cleanup deferred: an unverified Docker producer may remain alive")
+                errors = docker_resources.cleanup_owner(docker_resources.owner_id(), run_id, runner=_run_command)
+            except Exception as exc:
+                errors = [f"Docker cleanup could not complete: {exc}"]
+            result.reproduction["cleanup"] = {"ok": not errors, "errors": errors}
+            if errors:
+                result.execution_error = (result.execution_error or "") + " Docker 资源清理失败：" + "; ".join(errors)
+                result.infrastructure_error = True
+        else:
+            shutil.rmtree(work_dir, ignore_errors=True)
+    return result
 
+
+def _execute_staged(generation, work_dir, run_id, safe_id, image_tag, network_name, container_timeout, build_timeout):
+    if generation.get("docker_compose") and generation.get("needs_attacker_server"):
+        # Multi-service: use docker compose with explicit project name
+        # (#315: the run_id prefix — the parallel-run collision guard
+        # the :408 comment names — now on the project name too)
+        result = _run_compose(work_dir, compose_project_name(run_id, safe_id),
+                              container_timeout, build_timeout)
+    else:
+        # Single container: docker build + run
+        result = _run_single(work_dir, image_tag, network_name,
+                             container_timeout, build_timeout)
     return result
 
 
@@ -552,7 +678,7 @@ def _run_single(
 
     # Build
     stdout, stderr, code, timed_out = _run_recorded_command(
-        result, "build", ["docker", "build", "-t", image_tag, "."],
+        result, "build", ["docker", "build", "--builder", "default", "-t", image_tag, *_resource_labels(image_tag), "."],
         timeout=build_timeout,
         cwd=work_dir,
     )
@@ -561,7 +687,7 @@ def _run_single(
         result.build_error = (("Docker 构建超时\n" + diagnostic) if timed_out
                               else diagnostic or f"Docker 构建退出码：{code}")
         result.stdout = stdout
-        result.infrastructure_error = code == 127
+        result.infrastructure_error = code == 127 or "unknown flag" in stderr.lower() or "unknown option" in stderr.lower()
         result.stderr = stderr
         result.timed_out = timed_out
         return result
@@ -577,6 +703,11 @@ def _run_single(
         result, "run", [
             "docker", "run",
             "--rm",
+            "--name", image_tag,
+            *_resource_labels(image_tag),
+            "--log-driver", "local",
+            "--log-opt", "max-size=10m",
+            "--log-opt", "max-file=2",
             "--network", "none",
             "--memory", "512m",
             "--cpus", "1",
@@ -629,74 +760,72 @@ def _run_compose(
     """
     result = DockerExecutionResult()
 
-    compose_base = ["docker", "compose", "-p", project_name]
-
-    # Build all services
-    stdout, stderr, code, timed_out = _run_recorded_command(
-        result, "build", compose_base + ["build"],
-        timeout=build_timeout,
-        cwd=work_dir,
-    )
-    if code != 0 or timed_out:
-        diagnostic = "\n".join(part for part in (stdout, stderr) if part)
-        result.build_error = (("Docker Compose 构建超时\n" + diagnostic) if timed_out
-                              else diagnostic or f"Docker Compose 构建退出码：{code}")
-        result.stdout = stdout
-        result.infrastructure_error = code == 127
-        result.stderr = stderr
-        result.timed_out = timed_out
-        # #536: a failed build still tears down. The finally below covers
-        # the success path only — an early return here used to leak the
-        # images the partial build had already created (per-run UUID names
-        # like openant-<run>-<id>-<service> accumulate forever: the receipt
-        # was a post-run image matching the compose naming shape exactly).
-        # --rmi local removes the images this project built; a build that
-        # failed before ANY service built is a no-op for it.
-        _run_command(
-            compose_base + ["down", "--volumes", "--remove-orphans",
-                            "--rmi", "local"],
-            timeout=30,
-            cwd=work_dir,
-        )
-        return result
-
-    # Start services
-    _run_recorded_command(
-        result, "start", compose_base + ["up", "-d"],
-        timeout=60,
-        cwd=work_dir,
-    )
+    compose_base = ["docker", "compose", "-f", os.path.join(work_dir, "docker-compose.yml"), "-p", project_name]
 
     try:
-        # Wait for the test container to exit (it should be the main service)
+        stdout, stderr, code, timed_out = _run_recorded_command(
+            result, "build", compose_base + ["build", "--builder", "default"], timeout=build_timeout, cwd=work_dir)
+        if code != 0 or timed_out:
+            diagnostic = "\n".join(part for part in (stdout, stderr) if part)
+            result.build_error = (("Docker Compose 构建超时\n" + diagnostic) if timed_out
+                                  else diagnostic or f"Docker Compose 构建退出码：{code}")
+            result.stdout, result.stderr = stdout, stderr
+            result.infrastructure_error = code == 127 or "unknown flag" in stderr.lower() or "unknown option" in stderr.lower()
+            result.timed_out = timed_out
+            return result
+        stdout, stderr, code, timed_out = _run_recorded_command(
+            result, "start", compose_base + ["up", "-d", "--no-build"], timeout=60, cwd=work_dir)
+        if code != 0 or timed_out:
+            result.execution_error = stderr or stdout or "Docker Compose 启动失败"
+            result.infrastructure_error = True
+            result.timed_out = timed_out
+            return result
         stdout, stderr, code, timed_out = _run_recorded_command(
             result, "observe", compose_base + ["logs", "--no-log-prefix", "-f", "test"],
-            timeout=container_timeout,
-            cwd=work_dir,
-        )
-        result.stdout = stdout
-        result.stderr = stderr
-        result.exit_code = code
-        result.timed_out = timed_out
+            timeout=container_timeout, cwd=work_dir)
+        result.stdout, result.stderr = stdout, stderr
+        result.exit_code, result.timed_out = code, timed_out
     finally:
-        # Always tear down
-        _run_command(
-            # --rmi local (review finding): down --volumes does NOT remove
-            # images; with the per-run UUID project name, every run leaves
-            # uniquely-named openant-<run_id>-<safe_id>-<service> images
-            # accumulating forever. --rmi local removes the images this
-            # compose project built.
-            compose_base + ["down", "--volumes", "--remove-orphans", "--rmi", "local"],
-            timeout=30,
-            cwd=work_dir,
-        )
-
+        # No --rmi: externally referenced images must not be deleted. Per-run
+        # built images have owned tags/labels and are removed by cleanup_owner.
+        _, error, code, timed_out = _run_recorded_command(
+            result, "cleanup", compose_base + ["down", "--volumes", "--remove-orphans"],
+            timeout=30, cwd=work_dir)
+        if code != 0 or timed_out:
+            result.execution_error = (result.execution_error or "") + " Docker Compose 清理失败: " + error
+            result.infrastructure_error = True
     return result
 
 
-def _cleanup_docker(image_tag: str, network_name: str) -> None:
-    """Best-effort cleanup of Docker resources."""
-    # Remove image
-    _run_command(["docker", "rmi", "-f", image_tag], timeout=10)
-    # Remove network
-    _run_command(["docker", "network", "rm", network_name], timeout=10)
+def _resource_labels(image_tag):
+    match = re.match(r"openant-test-([a-f0-9]{32})-", image_tag)
+    run_id = match.group(1) if match else uuid.uuid4().hex
+    return ["--label", f"{docker_resources.OWNER_LABEL}={docker_resources.owner_id()}",
+            "--label", f"{docker_resources.RUN_LABEL}={run_id}"]
+
+
+def _label_compose(work_dir, run_id):
+    """Own only generated builds, never retag or delete external shared images."""
+    path = os.path.join(work_dir, "docker-compose.yml")
+    if not os.path.isfile(path):
+        return
+    import yaml
+    with open_utf8(path) as handle:
+        data = yaml.safe_load(handle)
+    if not isinstance(data, dict) or not data.get("services"):
+        return
+    labels = {docker_resources.OWNER_LABEL: docker_resources.owner_id(), docker_resources.RUN_LABEL: run_id}
+    for index, service in enumerate(data["services"].values()):
+        service["labels"] = dict(labels)
+        service["logging"] = {"driver": "local", "options": {"max-size": "10m", "max-file": "2"}}
+        if "build" in service:
+            build = service["build"]
+            if isinstance(build, str):
+                build = {"context": build}
+            build["labels"] = dict(labels)
+            service["build"] = build
+            service["image"] = f"openant-{run_id}-{index}:latest"
+    for network in data.get("networks", {}).values():
+        network["labels"] = dict(labels)
+    with open_utf8(path, "w") as handle:
+        yaml.safe_dump(data, handle, sort_keys=False)

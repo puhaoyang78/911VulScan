@@ -1,17 +1,7 @@
-"""Tests for issue #536 — the compose build-failure teardown gap.
+"""Compose teardown runs after build failure, timeout, and success.
 
-`_run_compose` returns early on a build failure (``code != 0 or timed_out``)
-BEFORE the ``try/finally`` that runs ``compose down --volumes
---remove-orphans --rmi local`` — so a failed build leaks the images it
-partially built (per-run UUID names accumulate forever). The outer cleanup
-(``_cleanup_docker``) removes single-container names only
-(``openant-test-<run>-<id>`` + the network), not the compose project's
-``openant-<run>-<id>-<service>`` images.
-
-Receipt (the monitored run): a compose build failed for VULN-001; the
-post-run image ``openant-069b737a-vuln-001-attacker`` matched the compose
-naming shape exactly (project + the attacker service) — name-shape
-attribution (the docker event log carries no image names).
+Image cleanup is separately label-scoped; compose down must not delete shared
+external images via --rmi.
 """
 from __future__ import annotations
 
@@ -39,8 +29,7 @@ def _seq(*outcomes):
 
 
 def test_build_failure_still_tears_down():
-    """THE #536 regression: a failed build must still run compose down
-    --rmi local (the images the partial build created must not leak)."""
+    """The #536 regression: partial builds must still run compose teardown."""
     # build fails, then (post-fix) the teardown runs.
     rec = _Recorder([
         ("", "failed to solve: exit 1", 1, False),   # docker compose build
@@ -54,9 +43,10 @@ def test_build_failure_still_tears_down():
     assert result.build_error  # the build failure is reported
     assert len(rec.calls) == 2, rec.calls  # build + teardown, nothing else
     downs = [c for c in rec.calls
-             if "down" in c and "--rmi" in c and "local" in c]
+             if "down" in c and "--volumes" in c]
+    assert all("--rmi" not in c for c in rec.calls)
     assert len(downs) == 1, (
-        f"a failed build must tear down with --rmi local; calls: {rec.calls}")
+        f"a failed build must tear down; calls: {rec.calls}")
 
 
 def test_build_timeout_still_tears_down():
@@ -70,7 +60,8 @@ def test_build_timeout_still_tears_down():
         result = _run_compose("/tmp/wd", "p", 60, 120)
     assert result.timed_out
     assert len(rec.calls) == 2, rec.calls
-    downs = [c for c in rec.calls if "down" in c and "--rmi" in c]
+    downs = [c for c in rec.calls if "down" in c and "--volumes" in c]
+    assert all("--rmi" not in c for c in rec.calls)
     assert len(downs) == 1
 
 
@@ -88,5 +79,6 @@ def test_success_path_teardown_unchanged():
         result = _run_compose("/tmp/wd", "p", 60, 120)
     assert result.exit_code == 0
     assert not result.build_error
-    downs = [c for c in rec.calls if "down" in c and "--rmi" in c]
+    downs = [c for c in rec.calls if "down" in c and "--volumes" in c]
+    assert all("--rmi" not in c for c in rec.calls)
     assert len(downs) == 1  # exactly one teardown — no double-down

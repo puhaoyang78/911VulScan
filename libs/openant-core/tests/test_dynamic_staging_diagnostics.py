@@ -1,6 +1,5 @@
 """Controlled staging and mocked Docker boundaries; no actual container execution."""
 import json
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,13 +36,16 @@ def test_staging_rejects_collisions_before_overwriting(tmp_path, source_name, te
 
 @pytest.mark.parametrize("as_bytes", [False, True])
 def test_command_timeout_keeps_partial_diagnostics(monkeypatch, as_bytes):
-    stdout, stderr = "dependency resolve started", "compiler diagnostic at end"
-    if as_bytes:
-        stdout, stderr = stdout.encode(), stderr.encode()
-    def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired("docker", 1, output=stdout, stderr=stderr)
-    monkeypatch.setattr(executor, "run_utf8", timeout)
-    out, err, code, timed_out = executor._run_command(["docker", "build"], 1)
+    import sys
+    monkeypatch.delenv("OPENANT_DOCKER_OWNER", raising=False)
+    # Real pipes exercise decoding and partial-output retention, not an obsolete
+    # subprocess.run mock that bypasses bounded streaming.
+    script = ("import os,time; "
+              "os.write(1, b'dependency resolve started'); "
+              "os.write(2, b'compiler diagnostic at end'); time.sleep(10)") if as_bytes else (
+              "import sys,time; print('dependency resolve started', flush=True); "
+              "print('compiler diagnostic at end', file=sys.stderr, flush=True); time.sleep(10)")
+    out, err, code, timed_out = executor._run_command([sys.executable, "-c", script], 1)
     assert "dependency resolve started" in out
     assert "compiler diagnostic at end" in err and "超时" in err
     assert code == -1 and timed_out
@@ -96,6 +98,10 @@ def test_imported_finding_reaches_staging_and_repairs_build_failure(
             "docker_compose": None, "needs_attacker_server": False})
     builds = []
     def command(cmd, timeout, cwd=None):
+        if cmd[:2] == ["docker", "info"]:
+            return "fixture-daemon", "", 0, False
+        if cmd[:3] == ["docker", "system", "df"]:
+            return json.dumps({"Type": "Build Cache", "Size": "0B"}), "", 0, False
         if cmd[:2] == ["docker", "build"]:
             assert (Path(cwd) / filename).read_text(encoding="utf-8") == "controlled target bytes"
             assert (Path(cwd) / test_filename).read_text(encoding="utf-8") == "controlled harness"
