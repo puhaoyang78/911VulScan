@@ -44,6 +44,37 @@
             text-decoration-color: #e94560;
         }
     </style>
+
+    <style>
+      /* A shared analytical-report presentation that preserves all existing data bindings. */
+      :root{--report-bg:#f2f6f7;--report-ink:#142c3a;--report-line:#dce7e8;--report-accent:#087c76}
+      body{background:var(--report-bg)!important;color:var(--report-ink)!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif!important;-webkit-font-smoothing:antialiased}
+      body>nav{background:#142d3b!important;border-color:#294653!important;box-shadow:0 7px 28px rgba(17,37,49,.10)}
+      body>nav a{color:#c9e1df!important;padding:8px 12px;border-radius:8px;text-decoration:none;font-size:13px!important}
+      body>nav a:hover,body>nav a:focus-visible{background:#24505a!important;color:white!important}
+      body>main{max-width:1300px!important}
+      body>main>header{padding:28px 32px!important;background:linear-gradient(120deg,#15303d,#23515a)!important;border:0!important;border-radius:18px;box-shadow:0 16px 45px rgba(20,44,58,.13)}
+      body>main>header h1{color:white!important;font-size:clamp(26px,3vw,37px)!important;letter-spacing:-.03em}
+      body>main>header span,body>main>header strong,body>main>header a{color:#d2eeeb!important}
+      body>main>header code{background:rgba(255,255,255,.12)!important;color:white!important;border-color:rgba(255,255,255,.17)!important}
+      body>main>div.grid>div{background:white!important;border:1px solid var(--report-line)!important;border-radius:15px!important;box-shadow:0 10px 28px rgba(17,49,63,.045);padding:23px!important}
+      body>main>div.grid>div>div:first-child{font-variant-numeric:tabular-nums;font-weight:800}
+      body>main>section{border-left:0!important;padding-left:0!important;margin-bottom:46px!important;scroll-margin-top:85px}
+      body>main>section>h2{color:var(--report-ink)!important;font-size:23px!important;letter-spacing:-.02em;margin-bottom:18px!important}
+      body>main>section>div,body>main>section>details{border-radius:15px!important}
+      body>main>section .card-hover{transition:border-color .15s ease,box-shadow .15s ease}
+      body>main>section .card-hover:hover{border-color:#83b9b2!important;box-shadow:0 10px 29px rgba(21,63,69,.08)}
+      body>main #findings>div>details{background:white!important;border:1px solid var(--report-line)!important;margin-bottom:14px;overflow:hidden}
+      body>main #findings>div>details>summary{padding:16px 21px!important;background:#fff!important}
+      body>main #findings>div>details[open]>summary{border-bottom:1px solid var(--report-line)}
+      body>main #findings details details{border:1px solid #dbe7e7!important;border-radius:11px!important;margin-bottom:10px}
+      body>main #findings details details>summary{padding:13px 16px!important}
+      body>main #findings pre{white-space:pre-wrap;word-break:break-word;background:#172e3d;color:#e2eff0!important;padding:18px;border-radius:10px}
+      body>main #findings code{overflow-wrap:anywhere}
+      body>main #findings>div>details summary:focus-visible{outline:3px solid #c69a3b;outline-offset:-3px}
+      @media(max-width:700px){body>main>header{padding:22px 19px!important}body>nav>div{padding:10px 12px!important;gap:4px!important}body>main>section{margin-bottom:32px!important}}
+      @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+    </style>
 </head>
 <body class="bg-navy-900 text-gray-100 font-sans leading-relaxed">
 
