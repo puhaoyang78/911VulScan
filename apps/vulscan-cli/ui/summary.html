@@ -35,6 +35,44 @@
   header { background:#132c3c; flex-wrap:wrap; } header a { color:#c6e8e3; } .main { max-width:1000px; } .content { border:1px solid #dbe5e9; border-radius:12px; overflow-wrap:anywhere; } .content pre { white-space:pre; overflow-x:auto; } .content table { display:block; overflow-x:auto; } footer { color:#5b7081; font-size:11px; padding-top:22px; }
   @media(max-width:600px) { header { padding:16px; gap:10px; } .main { margin-top:20px; padding:0 16px 32px; } .content { padding:22px 18px; } .content h1 { font-size:1.3rem; } }
   :focus-visible { outline:3px solid #e8a848; outline-offset:3px; }
+
+  .main { max-width:1100px; }
+  .content { border-radius:17px; padding:44px clamp(20px,5vw,65px); box-shadow:var(--shadow); }
+  .content h1 { font-size:clamp(24px,3vw,34px); color:var(--ink); letter-spacing:-.03em; }
+  .content h2 { font-size:20px; padding-top:8px; padding-bottom:12px; border-color:#dce8e9; color:var(--ink); }
+  .content h3 { color:#087c76; }
+  .content pre { background:#142b39; color:#e8f2f4; padding:20px; border-radius:11px; }
+  .content pre code { color:inherit; }
+  .content table { border:1px solid var(--line); border-radius:9px; }
+  .content th { background:#edf5f4; }
+  .document-heading { display:flex; justify-content:space-between; gap:15px; align-items:end; margin:25px 0 18px; }
+  .document-heading h1 { font-size:27px; letter-spacing:-.02em; }
+  .document-heading p { color:var(--muted); font-size:13px; }
+  @media(max-width:700px){.document-heading{align-items:flex-start;flex-direction:column;}}
+
+  /* Shared visual language: indigo-free, calm graphite and teal workbench. */
+  :root { --ink:#192c3b; --muted:#607585; --line:#dbe6e9; --accent:#087c76; --paper:#ffffff; --bg:#f2f6f7; --shadow:0 12px 42px rgba(22,48,61,.06); }
+  body { background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; }
+  header { background:#142d3b; }
+  .main { max-width:1280px; }
+  .card,.overview,.status-bar,.stats .stat { box-shadow:var(--shadow); border-radius:16px; }
+  .card { border:1px solid var(--line); }
+  .btn-primary,.btn.ready { background:var(--accent); border-color:var(--accent); }
+  button,a,input,select { transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease; }
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline:3px solid #e3a947; outline-offset:3px; }
+  .dialog { width:min(460px,calc(100% - 32px)); max-width:none; max-height:calc(100% - 32px); overflow:auto; margin:auto; border:1px solid #d9e4e7; border-radius:18px; padding:0; background:#fff; color:var(--ink); box-shadow:0 30px 85px rgba(12,35,48,.25); }
+  .dialog::backdrop { background:rgba(10,31,42,.60); backdrop-filter:blur(3px); }
+  .dialog-inner { padding:26px; }
+  .dialog-symbol { display:grid; place-items:center; width:42px; height:42px; border-radius:12px; margin-bottom:14px; background:#fff0ed; color:#af443e; font-size:22px; }
+  .dialog h2 { font-size:20px; letter-spacing:-.02em; margin:0 0 8px; }
+  .dialog p { color:var(--muted); line-height:1.75; font-size:14px; overflow-wrap:anywhere; }
+  .dialog .target { background:#f1f5f6; padding:11px 13px; border-radius:9px; margin:15px 0; color:var(--ink); font-weight:600; }
+  .dialog-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:22px; }
+  .dialog-actions button { border:1px solid var(--line); border-radius:9px; padding:10px 17px; cursor:pointer; background:#fff; color:var(--ink); font:inherit; font-size:13px; font-weight:700; }
+  .dialog-actions .danger { color:#fff; background:#b23b40; border-color:#b23b40; }
+  .dialog-actions .danger:hover { background:#922c32; }
+  .dialog-actions button:disabled { opacity:.55; cursor:wait; }
+  @media(prefers-reduced-motion:reduce) { * { transition:none!important; animation:none!important; } }
 </style>
 </head>
 <body>
@@ -46,6 +84,7 @@
   <span class="title">中文摘要</span>
 </header>
 <div class="main">
+  <div class="document-heading"><div><h1>扫描摘要</h1><p>扫描结果与处置重点</p></div><a href="/scan/{{.ID}}" style="color:var(--accent);font-size:13px">返回扫描详情 →</a></div>
   <div class="content" id="content" data-render-state="loading">
     <span id="loading">正在加载扫描摘要…</span>
   </div>
