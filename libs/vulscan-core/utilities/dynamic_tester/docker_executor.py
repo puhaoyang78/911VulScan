@@ -721,7 +721,10 @@ def run_single_container(
                 # 基础镜像由守护进程拉取，构建代理管不到；缺失时在这里失败并说明，
                 # 而不是让模型重写三次仍然拉不下来。
                 environment_failure = IMAGE
-                _prepare_base_images(work_dir, policy)
+                _prepare_base_images(
+                    work_dir, policy,
+                    compose=bool(generation.get("docker_compose") and generation.get("needs_attacker_server")),
+                )
                 environment_failure = None
                 result = _execute_staged(generation, work_dir, run_id, safe_id, image_tag,
                                          network_name, container_timeout, build_timeout,
@@ -766,9 +769,10 @@ def _prepare_native_toolchain(generation: dict, proxy_args, policy: BuildPolicy)
                      proxy_arguments=proxy_args, timeout=policy.toolchain_timeout)
 
 
-def _prepare_base_images(work_dir: str, policy: BuildPolicy) -> None:
-    """构建前拉取 Dockerfile 声明的缺失基础镜像（只拉缺失的，命中缓存即跳过）。"""
-    bases = dockerfile_bases(work_dir)
+def _prepare_base_images(work_dir: str, policy: BuildPolicy, *,
+                         compose: bool = False) -> None:
+    """只为实际构建入口准备基础镜像，不扫描仓库副本内无关的 Dockerfile。"""
+    bases = dockerfile_bases(work_dir, compose=compose)
     if bases:
         ensure_base_images(bases, _run_command, timeout=policy.pull_timeout)
 
