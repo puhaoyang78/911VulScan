@@ -154,6 +154,7 @@ def simple_text(
     # See DEFAULT_MAX_TOKENS above for why this is 20000, not 8192.
     max_tokens: int = DEFAULT_MAX_TOKENS,
     tracker: Optional[TokenTracker] = None,
+    require_complete: bool = False,
 ) -> str:
     """Send one user-prompt completion, return the concatenated text reply.
 
@@ -199,6 +200,10 @@ def simple_text(
                     "on hidden reasoning",
                     file=sys.stderr,
                 )
+        if require_complete:
+            raise LLMResponseError(
+                f"模型输出达到 max_tokens={max_tokens} 上限，结构化结果不完整，未执行生成的测试"
+            )
     return "\n".join(
         block.text for block in result.content if isinstance(block, TextBlock)
     )

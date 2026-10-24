@@ -202,6 +202,9 @@ def test_mocked_docker_native_staging_and_isolation(tmp_path, monkeypatch):
             return "fixture-daemon", "", 0, False
         if command[:3] == ["docker", "system", "df"]:
             return json.dumps({"Type": "Build Cache", "Size": "0B"}), "", 0, False
+        if command[:3] == ["docker", "image", "inspect"]:
+            # 共享工具链已存在：本用例只检查单条发现的构建上下文。
+            return "sha256:fixture-toolchain", "", 0, False
         if command[:2] == ["docker", "build"]:
             context = Path(cwd)
             assert (context / "Dockerfile").read_text() == generator._native_dockerfile()

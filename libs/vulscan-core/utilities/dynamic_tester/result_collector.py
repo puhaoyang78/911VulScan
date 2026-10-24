@@ -76,13 +76,15 @@ def collect_result(
             elapsed_seconds=execution.elapsed_seconds, generation_cost_usd=generation_cost,
         )
 
-    # Build failure
+    # Build failure. The label comes from the executor's failure classification so
+    # a build timeout is never reported as an ordinary build failure.
     if execution.build_error:
+        label = getattr(execution, "failure_label", "") or "Docker 构建失败"
         return DynamicTestResult(
             finding_id=finding_id,
             identity_key=identity_key,
             status="ERROR",
-            details=f"Docker 构建失败： {bounded_diagnostic(execution.build_error, 2000)}",
+            details=f"{label}：{bounded_diagnostic(execution.build_error, 2000)}",
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),

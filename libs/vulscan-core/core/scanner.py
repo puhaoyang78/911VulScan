@@ -318,6 +318,7 @@ def scan_repository(
     enhance: bool = True,
     enhance_mode: str = "agentic",
     dynamic_test: bool = False,
+    docker_proxy: str | None = None,
     workers: int = 8,
     backoff_seconds: int = 30,
     repo_name: str | None = None,
@@ -1634,6 +1635,7 @@ def scan_repository(
                     # manifests (the dead-input fix; the scan entry
                     # previously omitted it).
                     repo_path=repo_path,
+                    docker_proxy=docker_proxy,
                 )
 
                 ctx.summary = dynamic_test_step_summary(dt_result)

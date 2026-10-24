@@ -53,6 +53,7 @@ const (
 // jobMeta is the on-disk metadata written immediately on job creation, and
 // (per #320) amended at terminal time with the job's final status.
 type jobMeta struct {
+	DockerProxy string    `json:"docker_proxy,omitempty"`
 	ScanTimeout string    `json:"scan_timeout,omitempty"`
 	LLMConfig   string    `json:"llm_config,omitempty"`
 	ID          string    `json:"id"`
@@ -84,6 +85,7 @@ type Job struct {
 	libraryMode bool
 	verify      bool
 	dynamicTest bool
+	dockerProxy string
 	ctx         context.Context
 	done        chan struct{} // closed by runJob after it stops touching the job dir
 	outDir      string        // #320: the job's scan dir (the meta.json persist target)
@@ -335,6 +337,7 @@ func (s *Server) recoverJobs() {
 				job.Repo = m.Repo
 				job.StartedAt = m.StartedAt
 				job.llmConfig = m.LLMConfig
+				job.dockerProxy = m.DockerProxy
 				if m.ScanTimeout != "" {
 					job.scanTimeout, _ = parseScanTimeout(m.ScanTimeout)
 				}
@@ -818,6 +821,19 @@ func scanTimeoutValue(timeout time.Duration) string {
 	return strconv.FormatInt(int64(timeout/time.Hour), 10) + "h"
 }
 
+func parseDockerProxy(host, port string) (string, error) {
+	host, port = strings.TrimSpace(host), strings.TrimSpace(port)
+	if host == "" && port == "" {
+		return "", nil
+	}
+	ip := net.ParseIP(host)
+	number, err := strconv.Atoi(port)
+	if ip == nil || ip.IsUnspecified() || ip.IsMulticast() || err != nil || number < 1 || number > 65535 {
+		return "", errors.New("Docker 代理需同时填写有效 IP 和 1–65535 的端口，或全部留空")
+	}
+	return "http://" + net.JoinHostPort(ip.String(), strconv.Itoa(number)), nil
+}
+
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
 		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
@@ -855,6 +871,11 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scanTimeout, err := parseScanTimeout(r.FormValue("scan_timeout"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	dockerProxy, err := parseDockerProxy(r.FormValue("docker_proxy_ip"), r.FormValue("docker_proxy_port"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -905,7 +926,7 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write meta.json immediately.
-	meta := jobMeta{ID: id, Repo: repo, StartedAt: time.Now().UTC(), LLMConfig: llmConfig, ScanTimeout: scanTimeoutValue(scanTimeout)}
+	meta := jobMeta{ID: id, Repo: repo, StartedAt: time.Now().UTC(), LLMConfig: llmConfig, ScanTimeout: scanTimeoutValue(scanTimeout), DockerProxy: dockerProxy}
 	if data, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(filepath.Join(jobDir, "meta.json"), data, 0640)
 	}
@@ -925,6 +946,7 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		libraryMode: libraryMode,
 		verify:      verify,
 		dynamicTest: dynamicTest,
+		dockerProxy: dockerProxy,
 		done:        make(chan struct{}),
 		outDir:      jobDir,
 	}
@@ -1558,6 +1580,9 @@ func (s *Server) runJob(job *Job) {
 	}
 	if job.dynamicTest {
 		args = append(args, "--dynamic-test")
+		if job.dockerProxy != "" {
+			args = append(args, "--docker-proxy="+job.dockerProxy)
+		}
 	}
 	if job.libraryMode {
 		args = append(args, "--library-mode")

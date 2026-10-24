@@ -47,6 +47,7 @@ var (
 	scanEnhanceMode                 string
 	scanNoReport                    bool
 	scanSkipDynamicTest             bool
+	scanDockerProxy                 string
 	scanLimit                       int
 	scanLLMConfig                   string
 	scanWorkers                     int
@@ -171,6 +172,7 @@ func registerScanFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&scanEnhanceMode, "enhance-mode", "agentic", "Enhancement mode: agentic (thorough) or single-shot (fast)")
 	cmd.Flags().BoolVar(&scanNoReport, "no-report", false, "Skip report generation")
 	cmd.Flags().BoolVar(&scanSkipDynamicTest, "skip-dynamic-test", false, "Skip Docker-isolated dynamic testing (default: run dynamic tests)")
+	cmd.Flags().StringVar(&scanDockerProxy, "docker-proxy", "", "Optional Docker build proxy: http://IP:port")
 	cmd.Flags().IntVar(&scanLimit, "limit", 0, "Max units to analyze and enhance, 0 = no limit (the LLM reachability pass still reviews the full codebase)")
 	cmd.Flags().StringVar(&scanLLMConfig, "llm-config", "", "Name of the llm-config in ~/.config/vulscan/config.json (defaults to the file's default_llm, or the built-in 'vulscan-default' if no config file exists).")
 	cmd.Flags().IntVar(&scanWorkers, "workers", 8, "Number of parallel workers for LLM steps (default: 8)")
@@ -374,6 +376,9 @@ func runScan(cmd *cobra.Command, args []string) {
 	}
 	if !scanSkipDynamicTest {
 		pyArgs = append(pyArgs, "--dynamic-test")
+		if scanDockerProxy != "" {
+			pyArgs = append(pyArgs, "--docker-proxy="+scanDockerProxy)
+		}
 	}
 	if scanLimit > 0 {
 		pyArgs = append(pyArgs, "--limit", fmt.Sprintf("%d", scanLimit))

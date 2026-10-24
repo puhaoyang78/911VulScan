@@ -78,7 +78,7 @@ def test_generate_test_raising_records_error_and_continues(monkeypatch, tmp_path
     # the second finding generates successfully but Docker execution is
     # stubbed to an ERROR so no container is actually needed
     monkeypatch.setattr(dt, "run_single_container",
-                       lambda gen, fid, source_file=None: type("E", (), {
+                       lambda gen, fid, source_file=None, **kwargs: type("E", (), {
                            "stdout": '{"status": "NOT_REPRODUCED", "details": "ok", "evidence": []}',
                            "stderr": "", "exit_code": 0,
                            "timed_out": False, "build_error": None,

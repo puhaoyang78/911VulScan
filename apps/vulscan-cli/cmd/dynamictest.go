@@ -24,10 +24,11 @@ C/C++ 使用真实 GCC/G++ 与 ASan/UBSan 模板，需提供 --repo-path 或活�
 }
 
 var (
-	dynamicTestOutput     string
-	dynamicTestMaxRetries int
-	dynamicTestLLMConfig  string
-	dynamicTestRepoPath   string
+	dynamicTestOutput      string
+	dynamicTestMaxRetries  int
+	dynamicTestLLMConfig   string
+	dynamicTestRepoPath    string
+	dynamicTestDockerProxy string
 )
 
 func init() {
@@ -35,6 +36,7 @@ func init() {
 	dynamicTestCmd.Flags().IntVar(&dynamicTestMaxRetries, "max-retries", 3, "每项发现出错后的最大重试次数")
 	dynamicTestCmd.Flags().StringVar(&dynamicTestLLMConfig, "llm-config", "", "模型配置名称（默认使用配置文件的 default_llm 或内置 vulscan-default）")
 	dynamicTestCmd.Flags().StringVar(&dynamicTestRepoPath, "repo-path", "", "真实目标仓库路径（C/C++ 验证必需；默认使用活动项目）")
+	dynamicTestCmd.Flags().StringVar(&dynamicTestDockerProxy, "docker-proxy", "", "可选 Docker 构建代理：http://IP:端口")
 }
 
 func runDynamicTest(cmd *cobra.Command, args []string) {
@@ -75,6 +77,9 @@ func runDynamicTest(cmd *cobra.Command, args []string) {
 	}
 
 	pyArgs := []string{"dynamic-test", pipelineOutputPath}
+	if dynamicTestDockerProxy != "" {
+		pyArgs = append(pyArgs, "--docker-proxy="+dynamicTestDockerProxy)
+	}
 	if dynamicTestOutput != "" {
 		pyArgs = append(pyArgs, "--output", dynamicTestOutput)
 	}

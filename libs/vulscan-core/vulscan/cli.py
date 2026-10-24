@@ -271,6 +271,7 @@ def cmd_scan(args):
             enhance=not args.no_enhance,
             enhance_mode=args.enhance_mode,
             dynamic_test=args.dynamic_test,
+            docker_proxy=getattr(args, "docker_proxy", None),
             workers=args.workers,
             backoff_seconds=args.backoff,
             repo_name=getattr(args, "repo_name", None),
@@ -897,6 +898,7 @@ def cmd_dynamic_test(args):
                 output_dir=output_dir,
                 max_retries=args.max_retries,
                 repo_path=getattr(args, "repo_path", None),
+                docker_proxy=getattr(args, "docker_proxy", None),
                 llm_config_name=args.llm_config,
             )
 
@@ -1841,6 +1843,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan_p.add_argument("--no-report", action="store_true", help="Skip report generation")
     scan_p.add_argument("--dynamic-test", action="store_true",
                         help="Enable Docker-isolated dynamic testing (off by default)")
+    from utilities.docker_build import parse_docker_proxy
+    scan_p.add_argument("--docker-proxy", type=parse_docker_proxy,
+                        help="Optional HTTP proxy for Docker build dependencies: http://IP:port")
     scan_p.add_argument("--no-skip-tests", action="store_true", help="Include test files in parsing (default: tests are skipped)")
     scan_p.add_argument("--library-mode", action="store_true",
                         help="Seed the exported public API as entry points (for libraries with no main/route/CLI entry point)")
@@ -2089,6 +2094,8 @@ def build_parser() -> argparse.ArgumentParser:
     dt_p.add_argument("--repo-path", help="Path to the repository root (for pre-staging source files into Docker build context)")
     dt_p.add_argument("--max-retries", type=int, default=3,
                       help="Max retries per finding on error (default: 3)")
+    dt_p.add_argument("--docker-proxy", type=parse_docker_proxy,
+                      help="Optional HTTP proxy for Docker build dependencies: http://IP:port")
     dt_p.add_argument(
         "--llm-config",
         default=None,

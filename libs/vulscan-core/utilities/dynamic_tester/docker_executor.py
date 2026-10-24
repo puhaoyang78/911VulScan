@@ -19,11 +19,31 @@ import time
 import uuid
 from utilities.file_io import open_utf8
 from utilities import docker_resources
+from utilities.docker_build import (
+    BUILD,
+    BUILD_TIMEOUT,
+    CLEANUP,
+    ENVIRONMENT,
+    FAILURE_LABELS,
+    IMAGE,
+    NOT_MODEL_FIXABLE,
+    RUN,
+    RUN_TIMEOUT,
+    STAGING,
+    TOOLCHAIN,
+    BuildPolicy,
+    DockerBuildEnvironmentError,
+    build_proxy_arguments,
+    dockerfile_bases,
+    ensure_base_images,
+    ensure_toolchain,
+    is_registry_failure,
+    native_toolchain,
+    render_native_dockerfile,
+)
 from utilities.dynamic_tester.diagnostics import bounded_diagnostic
+from utilities.dynamic_tester.source_context import stage_repository
 
-# Timeouts
-DEFAULT_CONTAINER_TIMEOUT = 120   # seconds per container
-DEFAULT_BUILD_TIMEOUT = 300       # seconds for docker build
 
 # Path to the bundled attacker server
 _TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docker_templates")
@@ -31,7 +51,13 @@ ATTACKER_SERVER_PATH = os.path.join(_TEMPLATES_DIR, "attacker_server.py")
 
 
 class DockerExecutionResult:
-    """Result from running a Docker container."""
+    """Result from running a Docker container.
+
+    ``failure_kind`` is the single source of truth for what went wrong; the
+    diagnostic fields only carry evidence. Retryability and the reported label
+    are derived from it, so a build timeout can no longer be reported (or
+    retried) as a container timeout.
+    """
 
     def __init__(self):
         self.stdout: str = ""
@@ -41,6 +67,8 @@ class DockerExecutionResult:
         self.build_error: str | None = None
         self.execution_error: str | None = None
         self.infrastructure_error: bool = False
+        self.retryable: bool = True
+        self.failure_kind: str | None = None
         self.elapsed_seconds: float = 0.0
         # Reporting receipt only; never participates in verdict or execution.
         self.reproduction: dict = {}
@@ -49,6 +77,39 @@ class DockerExecutionResult:
     def success(self) -> bool:
         return (self.build_error is None and self.execution_error is None
                 and not self.timed_out and self.exit_code == 0)
+
+    @property
+    def failure_label(self) -> str:
+        return FAILURE_LABELS.get(self.failure_kind or "", "")
+
+    def fail(self, kind: str, detail: str, *, stdout=None, stderr=None,
+             timed_out: bool = False, exit_code=None,
+             infrastructure: bool | None = None) -> "DockerExecutionResult":
+        """Classify a failure and derive every downstream flag from it.
+
+        ``infrastructure`` overrides the derived flag only for the cases where a
+        host capability is missing while the failure itself is a build failure
+        (e.g. an unsupported ``--builder`` flag).
+        """
+        self.failure_kind = kind
+        self.retryable = kind not in NOT_MODEL_FIXABLE
+        self.infrastructure_error = (kind in {TOOLCHAIN, IMAGE, ENVIRONMENT, CLEANUP}
+                                     if infrastructure is None else infrastructure)
+        self.timed_out = timed_out
+        if stdout is not None:
+            self.stdout = stdout
+        if stderr is not None:
+            self.stderr = stderr
+        if exit_code is not None:
+            self.exit_code = exit_code
+        if kind in {BUILD, BUILD_TIMEOUT}:
+            self.build_error = detail or FAILURE_LABELS[kind]
+        elif kind != RUN_TIMEOUT:
+            # A run timeout is reported through the dedicated timed_out branch in
+            # result_collector (INCONCLUSIVE, not ERROR); every other kind is an
+            # execution error.
+            self.execution_error = detail or FAILURE_LABELS[kind]
+        return self
 
 
 # Per-service compose keys we KEEP when reconstructing an untrusted compose. This is an
@@ -143,7 +204,7 @@ def _safe_leaf(name, default: str) -> str:
     if any(ord(c) < 0x20 or ord(c) == 0x7f for c in name):
         return default
     leaf = os.path.basename(name)
-    _RESERVED = {"", ".", "..", "Dockerfile", "docker-compose.yml", "attacker-server"}
+    _RESERVED = {"", ".", "..", "Dockerfile", "docker-compose.yml", "attacker-server", "repository"}
     return default if leaf in _RESERVED else leaf
 
 
@@ -184,7 +245,7 @@ def _harden_service(name: str, svc: dict) -> dict:
     out["mem_limit"] = "512m"
     out["cpus"] = 1.0
     # Writable scratch + a writable HOME (=/root, image default user) on the RO rootfs.
-    out["tmpfs"] = ["/tmp", "/root"]
+    out["tmpfs"] = ["/tmp:rw,exec,nosuid,nodev,size=256m", "/root:size=128m"]
     return out
 
 
@@ -257,7 +318,8 @@ def _sanitize_compose(content: str) -> str:
     return yaml.safe_dump(out, default_flow_style=False, sort_keys=False)
 
 
-def _write_test_files(work_dir: str, generation: dict, source_file: str | None = None) -> None:
+def _write_test_files(work_dir: str, generation: dict, source_file: str | None = None,
+                      repo_path: str | None = None) -> None:
     """Write generated test files into the working directory.
 
     Args:
@@ -267,8 +329,11 @@ def _write_test_files(work_dir: str, generation: dict, source_file: str | None =
             the file is copied into *work_dir* so the Dockerfile can COPY it
             without the LLM having to guess the path.
     """
+    staged_target = None
+    if repo_path and source_file:
+        staged_target = stage_repository(work_dir, repo_path, source_file)
     if generation.get("native_language"):
-        _write_native_test_files(work_dir, generation, source_file)
+        _write_native_test_files(work_dir, generation, source_file, staged_target)
         return
 
     # Validate all flat staging names before writing anything. A harness or
@@ -277,14 +342,14 @@ def _write_test_files(work_dir: str, generation: dict, source_file: str | None =
     req_filename = (_safe_leaf(generation.get("requirements_filename"), "requirements.txt")
                     if generation.get("requirements") else None)
     source_name = os.path.basename(source_file) if source_file else None
-    reserved = {"Dockerfile", "docker-compose.yml", "attacker-server"}
-    if source_name and (source_name in reserved or source_name in {test_filename, req_filename}):
+    reserved = {"Dockerfile", "docker-compose.yml", "attacker-server", "repository"}
+    if not staged_target and source_name and (source_name in reserved or source_name in {test_filename, req_filename}):
         raise ValueError("目标源文件名与测试或依赖文件冲突；请为测试/依赖选择不同文件名")
     if req_filename == test_filename:
         raise ValueError("测试文件与依赖文件同名；请使用不同文件名")
 
     # Pre-stage the vulnerable source file so `COPY <basename> .` just works.
-    if source_file and os.path.isfile(source_file):
+    if source_file and not staged_target and os.path.isfile(source_file):
         shutil.copy2(source_file, os.path.join(work_dir, os.path.basename(source_file)))
 
     # str() the content fields as a defense-in-depth belt: generate_test already
@@ -327,7 +392,8 @@ def _write_test_files(work_dir: str, generation: dict, source_file: str | None =
             f.write(compose_content)
 
 
-def _write_native_test_files(work_dir: str, generation: dict, source_file: str | None) -> None:
+def _write_native_test_files(work_dir: str, generation: dict, source_file: str | None,
+                             staged_target: str | None = None) -> None:
     """固定 C/C++ scaffold；模型不能改写执行器、Dockerfile 或编译命令。"""
     language = generation.get("native_language")
     if language not in {"c", "cpp"}:
@@ -336,18 +402,21 @@ def _write_native_test_files(work_dir: str, generation: dict, source_file: str |
         raise ValueError("C/C++ 动态验证缺少真实目标源文件；请提供 --repo-path，未执行测试")
     test_name = "test_exploit.cpp" if language == "cpp" else "test_exploit.c"
     reserved = {test_name, "Dockerfile", "_vulscan_c_runner.py", "_vulscan_c_spec.json"}
-    if source_file:
+    if not staged_target:
         source_name = os.path.basename(source_file)
         if source_name in reserved:
             raise ValueError("目标源文件名与 C/C++ 测试模板冲突，未执行测试")
         shutil.copy2(source_file, os.path.join(work_dir, source_name))
-    shutil.copy2(os.path.join(_TEMPLATES_DIR, "c.Dockerfile"), os.path.join(work_dir, "Dockerfile"))
+    # 基础镜像是共享工具链（由 ensure_toolchain 在构建前准备好），因此每条发现
+    # 的构建只需 COPY，不再重复安装 gcc/g++。
+    with open_utf8(os.path.join(work_dir, "Dockerfile"), "w") as handle:
+        handle.write(render_native_dockerfile(language))
     shutil.copy2(os.path.join(_TEMPLATES_DIR, "c_runner.py"), os.path.join(work_dir, "_vulscan_c_runner.py"))
     with open_utf8(os.path.join(work_dir, test_name), "w") as handle:
         handle.write(generation["test_script"])
     with open_utf8(os.path.join(work_dir, "_vulscan_c_spec.json"), "w") as handle:
         json.dump({"language": language, "test_filename": test_name,
-                   "target_filename": os.path.basename(source_file)}, handle)
+                   "target_filename": staged_target or os.path.basename(source_file)}, handle)
 
 
 # The env the docker build/run subprocess is ALLOWED to see. `docker compose`
@@ -541,6 +610,8 @@ def _staged_artifacts(work_dir: str, source_file: str | None) -> dict:
     source_name = os.path.basename(source_file) if source_file else None
     try:
         for root, directories, files in os.walk(work_dir):
+            if root == work_dir:
+                directories[:] = [name for name in directories if name != "repository"]
             directories.sort()
             for filename in sorted(files):
                 path = os.path.join(root, filename)
@@ -554,6 +625,10 @@ def _staged_artifacts(work_dir: str, source_file: str | None) -> dict:
                     continue
                 with open_utf8(path) as handle:
                     receipt["artifacts"].append({"filename": relative, "content": handle.read()})
+        if source_file and os.path.isdir(os.path.join(work_dir, "repository")):
+            with open(source_file, "rb") as handle:
+                receipt["source"] = {"filename": os.path.basename(source_file),
+                                     "sha256": hashlib.file_digest(handle, "sha256").hexdigest()}
     except (OSError, UnicodeError) as exc:
         receipt["capture_error"] = f"暂存产物记录不完整：{type(exc).__name__}"
     return receipt
@@ -576,21 +651,31 @@ def _run_recorded_command(result: DockerExecutionResult, stage: str,
 def run_single_container(
     generation: dict,
     finding_id: str,
-    container_timeout: int = DEFAULT_CONTAINER_TIMEOUT,
-    build_timeout: int = DEFAULT_BUILD_TIMEOUT,
+    container_timeout: int | None = None,
+    build_timeout: int | None = None,
     source_file: str | None = None,
+    repo_path: str | None = None,
+    docker_proxy: str | None = None,
+    policy: BuildPolicy | None = None,
 ) -> DockerExecutionResult:
     """Build and run a single Docker container for a test.
 
     Args:
         generation: Test generation output (dockerfile, test_script, etc.)
         finding_id: Finding ID for image naming
-        container_timeout: Max seconds for container execution
-        build_timeout: Max seconds for docker build
+        container_timeout: Max seconds for container execution (default: policy)
+        build_timeout: Max seconds for docker build (default: policy)
+        source_file: Vulnerable source file to stage into the build context
+        repo_path: Repository root staged under ``repository/``
+        docker_proxy: Optional ``http://IP:port`` proxy for build dependencies
+        policy: Time budgets; resolved from the environment when omitted
 
     Returns:
-        DockerExecutionResult with stdout/stderr/exit_code
+        DockerExecutionResult with stdout/stderr/exit_code and failure_kind
     """
+    policy = policy or BuildPolicy.from_environment()
+    container_timeout = container_timeout or policy.run_timeout
+    build_timeout = build_timeout or policy.build_timeout
     result = DockerExecutionResult()
     start_time = time.time()
 
@@ -616,11 +701,12 @@ def run_single_container(
     registered = False
     cleanup_blocked = False
     infrastructure_phase = True
+    environment_failure = None
     try:
         docker_resources.register_run(run_id, work_dir)
         registered = True
         infrastructure_phase = False  # Generated staging errors remain eligible for repair.
-        _write_test_files(work_dir, generation, source_file=source_file)
+        _write_test_files(work_dir, generation, source_file=source_file, repo_path=repo_path)
         _label_compose(work_dir, run_id)
         receipt = _staged_artifacts(work_dir, source_file)
         result.reproduction.update(receipt)
@@ -628,13 +714,27 @@ def run_single_container(
         infrastructure_phase = True
         with docker_resources.build_admission(timeout=build_timeout, runner=_run_command):
             docker_resources.bind_run_daemon(run_id, runner=_run_command)
-            result = _execute_staged(generation, work_dir, run_id, safe_id, image_tag,
-                                     network_name, container_timeout, build_timeout)
+            with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
+                # 共享工具链在每条发现的构建之前准备好：一次下载，后续只复用。
+                environment_failure = TOOLCHAIN
+                _prepare_native_toolchain(generation, proxy_args, policy)
+                # 基础镜像由守护进程拉取，构建代理管不到；缺失时在这里失败并说明，
+                # 而不是让模型重写三次仍然拉不下来。
+                environment_failure = IMAGE
+                _prepare_base_images(work_dir, policy)
+                environment_failure = None
+                result = _execute_staged(generation, work_dir, run_id, safe_id, image_tag,
+                                         network_name, container_timeout, build_timeout,
+                                         proxy_args)
         result.reproduction.update(receipt)
+    except DockerBuildEnvironmentError as exc:
+        result.fail(environment_failure or ENVIRONMENT, str(exc))
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, TimeoutError) as exc:
         cleanup_blocked = isinstance(exc, UnstoppedProducerError)
-        result.execution_error = f"测试执行准备失败：{exc}"
-        result.infrastructure_error = infrastructure_phase or cleanup_blocked
+        kind = ENVIRONMENT if (infrastructure_phase or cleanup_blocked) else STAGING
+        result.fail(kind, f"测试执行准备失败：{exc}")
+        if cleanup_blocked:
+            result.retryable = False
     finally:
         result.elapsed_seconds = time.time() - start_time
         if registered:
@@ -646,24 +746,45 @@ def run_single_container(
                 errors = [f"Docker cleanup could not complete: {exc}"]
             result.reproduction["cleanup"] = {"ok": not errors, "errors": errors}
             if errors:
-                result.execution_error = (result.execution_error or "") + " Docker 资源清理失败：" + "; ".join(errors)
+                detail = "Docker 资源清理失败：" + "; ".join(errors)
+                result.execution_error = (result.execution_error + " " + detail
+                                          if result.execution_error else detail)
                 result.infrastructure_error = True
+                result.retryable = False
+                result.failure_kind = result.failure_kind or CLEANUP
         else:
             shutil.rmtree(work_dir, ignore_errors=True)
     return result
 
 
-def _execute_staged(generation, work_dir, run_id, safe_id, image_tag, network_name, container_timeout, build_timeout):
+def _prepare_native_toolchain(generation: dict, proxy_args, policy: BuildPolicy) -> None:
+    """确保原生编译工具链镜像可用；非原生语言无需准备。"""
+    language = generation.get("native_language")
+    if not language:
+        return
+    ensure_toolchain(native_toolchain(language), _run_command,
+                     proxy_arguments=proxy_args, timeout=policy.toolchain_timeout)
+
+
+def _prepare_base_images(work_dir: str, policy: BuildPolicy) -> None:
+    """构建前拉取 Dockerfile 声明的缺失基础镜像（只拉缺失的，命中缓存即跳过）。"""
+    bases = dockerfile_bases(work_dir)
+    if bases:
+        ensure_base_images(bases, _run_command, timeout=policy.pull_timeout)
+
+
+def _execute_staged(generation, work_dir, run_id, safe_id, image_tag, network_name,
+                    container_timeout, build_timeout, proxy_args=()):
     if generation.get("docker_compose") and generation.get("needs_attacker_server"):
         # Multi-service: use docker compose with explicit project name
         # (#315: the run_id prefix — the parallel-run collision guard
         # the :408 comment names — now on the project name too)
         result = _run_compose(work_dir, compose_project_name(run_id, safe_id),
-                              container_timeout, build_timeout)
+                              container_timeout, build_timeout, proxy_args)
     else:
         # Single container: docker build + run
         result = _run_single(work_dir, image_tag, network_name,
-                             container_timeout, build_timeout)
+                             container_timeout, build_timeout, proxy_args)
     return result
 
 
@@ -673,25 +794,30 @@ def _run_single(
     network_name: str,
     container_timeout: int,
     build_timeout: int,
+    proxy_args=(),
 ) -> DockerExecutionResult:
     """Build and run a single Docker container."""
     result = DockerExecutionResult()
 
     # Build
     stdout, stderr, code, timed_out = _run_recorded_command(
-        result, "build", ["docker", "build", "--builder", "default", "-t", image_tag, *_resource_labels(image_tag), "."],
+        result, "build", ["docker", "build", "--builder", "default", "-t", image_tag,
+                           *_resource_labels(image_tag), *proxy_args, "."],
         timeout=build_timeout,
         cwd=work_dir,
     )
     if code != 0 or timed_out:
-        diagnostic = "\n".join(part for part in (stdout, stderr) if part)
-        result.build_error = (("Docker 构建超时\n" + diagnostic) if timed_out
-                              else diagnostic or f"Docker 构建退出码：{code}")
-        result.stdout = stdout
-        result.infrastructure_error = code == 127 or "unknown flag" in stderr.lower() or "unknown option" in stderr.lower()
-        result.stderr = stderr
-        result.timed_out = timed_out
-        return result
+        diagnostic = ("\n".join(part for part in (stdout, stderr) if part)
+                      or f"Docker 构建退出码：{code}")
+        unsupported = "unknown flag" in stderr.lower() or "unknown option" in stderr.lower()
+        # 注册表/网络不可用不是 Dockerfile 的问题：重写测试无济于事。
+        registry = not timed_out and is_registry_failure(diagnostic)
+        return result.fail(
+            IMAGE if registry else (BUILD_TIMEOUT if timed_out else BUILD), diagnostic,
+            stdout=stdout, stderr=stderr, timed_out=timed_out,
+            # A missing/unsupported builder is a host capability gap, not a
+            # defect in the generated test.
+            infrastructure=code == 127 or unsupported or registry)
 
     # F4 hardening: a single-container test has NO sibling service, so it needs no
     # network at all. `--network none` (loopback only, no gateway/DNS) is strictly
@@ -715,7 +841,7 @@ def _run_single(
             "--pids-limit", "256",
             "--cap-drop", "ALL",
             "--read-only",
-            "--tmpfs", "/tmp:size=256m",
+            "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m",
             "--tmpfs", "/root:size=128m",
             "--security-opt", "no-new-privileges",
             # No --user: the container runs as its image default (root) with a writable
@@ -728,10 +854,25 @@ def _run_single(
         cwd=work_dir,
     )
 
+    if timed_out:
+        # A container timeout is reported as INCONCLUSIVE by the collector, not
+        # as an execution error; only the classification lives here.
+        return result.fail(RUN_TIMEOUT, "", stdout=stdout, stderr=stderr,
+                           timed_out=True, exit_code=code)
+
     result.stdout = stdout
     result.stderr = stderr
     result.exit_code = code
-    result.timed_out = timed_out
+    if code != 0:
+        result.failure_kind = RUN
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        payload = None
+    if isinstance(payload, dict) and payload.get("retryable") is False:
+        # The generated driver knows its own build dependency is missing;
+        # rewriting the test cannot supply it.
+        result.retryable = False
 
     return result
 
@@ -753,6 +894,7 @@ def _run_compose(
     project_name: str,
     container_timeout: int,
     build_timeout: int,
+    proxy_args=(),
 ) -> DockerExecutionResult:
     """Build and run multi-service test via docker compose.
 
@@ -765,27 +907,29 @@ def _run_compose(
 
     try:
         stdout, stderr, code, timed_out = _run_recorded_command(
-            result, "build", compose_base + ["build", "--builder", "default"], timeout=build_timeout, cwd=work_dir)
+            result, "build", compose_base + ["build", "--builder", "default", *proxy_args], timeout=build_timeout, cwd=work_dir)
         if code != 0 or timed_out:
-            diagnostic = "\n".join(part for part in (stdout, stderr) if part)
-            result.build_error = (("Docker Compose 构建超时\n" + diagnostic) if timed_out
-                                  else diagnostic or f"Docker Compose 构建退出码：{code}")
-            result.stdout, result.stderr = stdout, stderr
-            result.infrastructure_error = code == 127 or "unknown flag" in stderr.lower() or "unknown option" in stderr.lower()
-            result.timed_out = timed_out
-            return result
+            diagnostic = ("\n".join(part for part in (stdout, stderr) if part)
+                          or f"Docker Compose 构建退出码：{code}")
+            unsupported = "unknown flag" in stderr.lower() or "unknown option" in stderr.lower()
+            registry = not timed_out and is_registry_failure(diagnostic)
+            return result.fail(
+                IMAGE if registry else (BUILD_TIMEOUT if timed_out else BUILD), diagnostic,
+                stdout=stdout, stderr=stderr, timed_out=timed_out,
+                infrastructure=code == 127 or unsupported or registry)
         stdout, stderr, code, timed_out = _run_recorded_command(
             result, "start", compose_base + ["up", "-d", "--no-build"], timeout=60, cwd=work_dir)
         if code != 0 or timed_out:
-            result.execution_error = stderr or stdout or "Docker Compose 启动失败"
-            result.infrastructure_error = True
-            result.timed_out = timed_out
-            return result
+            return result.fail(ENVIRONMENT, stderr or stdout or "Docker Compose 启动失败",
+                               stdout=stdout, stderr=stderr, timed_out=timed_out)
         stdout, stderr, code, timed_out = _run_recorded_command(
             result, "observe", compose_base + ["logs", "--no-log-prefix", "-f", "test"],
             timeout=container_timeout, cwd=work_dir)
         result.stdout, result.stderr = stdout, stderr
-        result.exit_code, result.timed_out = code, timed_out
+        if timed_out:
+            return result.fail(RUN_TIMEOUT, "", stdout=stdout, stderr=stderr,
+                               timed_out=True, exit_code=code)
+        result.exit_code = code
     finally:
         # No --rmi: externally referenced images must not be deleted. Per-run
         # built images have owned tags/labels and are removed by cleanup_owner.
@@ -793,8 +937,12 @@ def _run_compose(
             result, "cleanup", compose_base + ["down", "--volumes", "--remove-orphans"],
             timeout=30, cwd=work_dir)
         if code != 0 or timed_out:
-            result.execution_error = (result.execution_error or "") + " Docker Compose 清理失败: " + error
+            detail = "Docker Compose 清理失败: " + error
+            result.execution_error = ((result.execution_error + " " + detail)
+                                      if result.execution_error else detail)
             result.infrastructure_error = True
+            result.retryable = False
+            result.failure_kind = result.failure_kind or CLEANUP
     return result
 
 

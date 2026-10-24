@@ -27,6 +27,29 @@ def _clean_declared(raw: object) -> str:
     return _clean_version(raw) or ""
 from utilities.llm import DEFAULT_MAX_TOKENS, PhaseBinding, simple_text
 
+
+def _generation_max_tokens(binding) -> int:
+    """Budget reasoning and complete build/test JSON within model limits.
+
+    思考模式的推理 token 与最终 JSON 共用同一个输出上限。实测中 2 倍默认值
+    （40000）会被推理吃光，模型还没来得及输出 Dockerfile 和测试源码就触顶，
+    整次调用作废并记成 ERROR；这里对已登记上限的模型放宽到 4 倍默认值。
+    上限只是 cap：模型仍会自然结束，费用按实际输出计。
+    """
+    adapter = getattr(binding, "adapter", None)
+    provider = getattr(adapter, "name", None)
+    model = getattr(binding, "model", None)
+    if not provider or not model or provider in {"anthropic", "bedrock"}:
+        # These adapters use the synchronous Anthropic API; retain its existing
+        # non-streaming request envelope rather than triggering SDK rejection.
+        return DEFAULT_MAX_TOKENS
+    from core.model_registry import max_output_tokens
+    ceiling = max_output_tokens(provider, model)
+    if not ceiling:
+        # 未登记上限的模型不猜测：保持既有默认值，避免请求被供应商直接拒绝。
+        return DEFAULT_MAX_TOKENS
+    return max(DEFAULT_MAX_TOKENS, min(DEFAULT_MAX_TOKENS * 4, int(ceiling)))
+
 # Map language strings to Dockerfile template names
 def resolve_docker_template(file_path: str, scan_language: str | None = None) -> str | None:
     """Docker template for a finding, chosen by the FINDING's own file.
@@ -175,7 +198,8 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
     source_basename = ""
     loc = finding.get("location")
     if isinstance(loc, dict) and isinstance(loc.get("file"), str) and loc["file"]:
-        source_basename = os.path.basename(loc["file"])
+        source_basename = ("repository/" + loc["file"] if repo_info.get("source_context")
+                           else os.path.basename(loc["file"]))
 
     # Inline label fields are model-produced free text (name, cwe_name, the two
     # verdicts) or repo-derived (name/type). Interpolated raw on their own line, a
@@ -205,8 +229,23 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
         parts.extend([
             "",
             f"  Source file (pre-staged in Docker build context): {source_basename}",
-            f"  Your Dockerfile MUST use `COPY {source_basename} .` — the file is already there.",
+            "  Use this exact staged path to load/include the real target; COPY . . preserves its dependencies.",
         ])
+
+    # 本机已缓存的镜像：镜像拉取由 Docker 守护进程完成，构建代理只覆盖构建步骤
+    # 内的下载。未缓存的 FROM 可能直接失败，而重写测试无法解决——所以把可选项
+    # 明确交给模型。镜像名来自 `docker image ls`，只含镜像引用字符。
+    base_images = repo_info.get("base_images")
+    if isinstance(base_images, (list, tuple)) and base_images:
+        safe_images = [collapse_inline(str(item)) for item in base_images[:12] if str(item).strip()]
+        if safe_images:
+            parts.extend([
+                "",
+                "  Base images already cached on this host (prefer one of these for FROM):",
+                *[f"  - {item}" for item in safe_images],
+                "  Pulling an uncached base image depends on the Docker daemon's own network",
+                "  and may fail; that failure is a host problem the test cannot repair.",
+            ])
 
     # #521: the declared-runtime lines — mechanically derived from the target's
     # root manifests by declared_runtime.derive_declared_runtimes and
@@ -245,6 +284,21 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
     if finding.get("steps_to_reproduce"):
         parts.extend(_fenced("Steps to Reproduce", finding["steps_to_reproduce"]))
 
+    context = repo_info.get("source_context")
+    if context:
+        parts.extend([
+            "", "REPOSITORY BUILD CONTEXT:",
+            "The real repository is staged under repository/ with its original directory layout.",
+            "Local headers, sibling modules, resources and dependency manifests are included.",
+            "VCS metadata, local environments, installed dependencies and credential files are excluded.",
+            "Keep original repository files unchanged. Put generated files outside repository/, unless package-local testing requires a uniquely named additional test file.",
+            "Use the original manifests and package/module paths to install dependencies and import the target.",
+            "Do not replace the application with copied functions or dependency stubs.",
+        ])
+        parts.extend(_fenced("Repository files (at most 160 paths)", json.dumps(context["files"], ensure_ascii=False)))
+        for name, content in context["manifests"].items():
+            parts.extend(_fenced("Original manifest repository/" + name, content))
+
     # Add CWE-specific guidance
     cwe_id = finding.get("cwe_id", 0)
     guidance = _get_cwe_guidance(cwe_id)
@@ -255,13 +309,14 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
     if native_language:
         parts.extend(["", _native_guidance(native_language)])
     else:
-        managed = _managed_guidance(resolve_docker_template(finding_file, repo_info.get("language")))
+        managed = _managed_guidance(resolve_docker_template(finding_file, repo_info.get("language")),
+                                    repository=bool(context))
         if managed:
             parts.extend(["", managed])
     return "\n".join(parts)
 
 
-def _managed_guidance(template: str | None) -> str:
+def _managed_guidance(template: str | None, *, repository: bool = False) -> str:
     """仅附加当前发现的语言规则；模板是可按目标调整的构建参考。"""
     common = """托管语言复现边界：
 - 仅目标单个源文件按原始 basename 预置到构建上下文根目录，不包含整个仓库。
@@ -269,6 +324,16 @@ def _managed_guidance(template: str | None) -> str:
 - harness 文件名必须与目标源文件、依赖清单和 Dockerfile 不同，避免覆盖真实目标。
 - 缺少必要项目上下文时保留真实失败并说明限制，不得改写目标、伪造依赖或声称已验证完整项目。
 - 以下模板可按声明运行时、源文件名和依赖调整；运行时只执行已构建产物，所有可写文件放在 /tmp。
+"""
+    if repository:
+        common = """托管语言复现边界：
+- 真实仓库完整预置于 repository/，保留目录结构、项目清单和资源。COPY . . 后路径不变。
+- harness 文件名必须与目标源文件、依赖清单和 Dockerfile 不同；不得覆盖或改写 repository/ 中的原始文件。
+- 优先安装 repository/ 中的原始依赖清单，保留项目的包名、模块路径和版本约束。
+- Python 通过 sys.path 加入 repository/ 或正确的包根目录，避免导入时启动服务器；Go 库通过原 go.mod
+  模块路径导入，必要时在独立 harness 模块用 replace 指向本地 repository/；Node 保留原 package.json
+  的 type 和 exports，按目标包的真实相对路径加载。不要将兄弟模块当作外部依赖下载。
+- 构建步骤均在 Docker 内进行；运行时只执行已构建产物，可写文件放在 /tmp。
 """
     guidance = {
         "node": """JavaScript / TypeScript 构建规则：
@@ -286,7 +351,7 @@ def _managed_guidance(template: str | None) -> str:
 """,
         "python": """Python 导入与依赖规则：
 - test_filename 使用与目标不同的 test_exploit.py；用真实目标模块调用入口，不能重新实现目标函数。
-  源码仅以原 basename 预置，包路径和兄弟文件不会自动存在。不得把缺失的应用模块当 PyPI 包安装。
+  按输入提供的目录结构加载真实源码。不得把应用的兄弟模块当 PyPI 包安装。
 - 对可独立导入的单文件，直接 import 或用 importlib.util.spec_from_file_location 从明确路径加载；
   文件名含连字符或与标准库/依赖重名时使用显式路径，核对 __file__，避免误测同名安装包。
   原源码需要相对导入、包初始化或额外资源而未提供时，保留可诊断错误，不创建伪造模块掩盖缺失。
@@ -303,14 +368,16 @@ def _managed_guidance(template: str | None) -> str:
   每个文件只能有一个 package 声明；只导入实际使用的包，遗漏或未使用 import 都会编译失败。
 - 不得改写目标 package 或函数。目标是 package main 且没有冲突入口时，将目标和 harness
   一起 go build；只编译 test_exploit.go 会漏掉真实目标。目标已有 main 时不要再加第二个 main。
-- 目标是库包时，COPY . . 后必须 RUN mkdir -p target && mv <目标文件.go> target/，
+- 未提供 repository/ 时，库包在 COPY . . 后 RUN mkdir -p target && mv <目标文件.go> target/，
   原样移动目标且不在根目录留下副本，再用 vulscan-test/target 导入，按目标 package 名或别名调用导出函数。
   同包未导出函数改用同 package 的唯一 *_test.go harness，并一起移到 target/；构建阶段
   go test -c -o /test/test_exploit ./target。目标是 package main 且已有 main 时同样用同包 *_test.go。
   使用 TestMain 把 m.Run 的框架输出定向到 stderr，随后输出单个结果 JSON；运行已编译测试二进制。
   不要把不同 package 的 .go 文件放在同一编译目录，也不能 import package main。
-- 所需源码先 COPY，再 RUN go mod init vulscan-test && go mod tidy，随后 go build -mod=readonly。
-  requirements 和 requirements_filename 留空；go.mod/go.sum 由构建工具生成。
+- 已提供 repository/ 时保留原 package 目录；同包测试可新增唯一 *_test.go 文件并 go test -c，
+  不移动已有源文件。项目没有 go.mod 时可在构建期间按原 import 路径初始化模块，不能改写目标函数。
+- 所需源码先 COPY；存在原 go.mod 时保留原模块；独立 harness 模块才 go mod init vulscan-test。
+  go mod tidy 后 go build -mod=readonly。requirements 和 requirements_filename 留空。
   若需要漏洞特定依赖版本，在 tidy 前 go mod edit -require=<模块>@<版本>。
 - GOTOOLCHAIN=local 防止自动换编译器；依赖最低版本高于目标时保留明确错误并在重试中说明运行时偏离。
   保留构建期模块缓存于 /go/pkg/mod，编译缓存于 /opt/vulscan-go-build-cache；不能放在会被覆盖的 /tmp。
@@ -338,9 +405,14 @@ def resolve_native_language(file_path: str, scan_language: str | None = None) ->
     return "cpp" if alias in {"c++", "cpp", "c/c++", "cxx"} else "c"
 
 
-def _native_dockerfile() -> str:
-    from pathlib import Path
-    return (Path(__file__).parent / "docker_templates" / "c.Dockerfile").read_text(encoding="utf-8")
+def _native_dockerfile(language: str = "c") -> str:
+    """渲染后的固定模板：与执行器写入构建上下文的 Dockerfile 完全一致。
+
+    模板只声明“使用共享工具链镜像”，因此提示词不会建议模型在 Dockerfile 里
+    重新 apt-get 安装编译器。
+    """
+    from utilities.docker_build import render_native_dockerfile
+    return render_native_dockerfile(language)
 
 
 def _native_guidance(language: str) -> str:
@@ -350,7 +422,8 @@ def _native_guidance(language: str) -> str:
 - test_script 必须是可编译的 {language} 源码，test_filename 使用 {filename}。
 - 测试必须调用真实目标函数。若已提供目标源文件，用 #include 引入该文件；
   如目标包含 main，可用临时宏重命名 main。不得复制并改写目标逻辑来伪造复现。
-- 仅支持单编译单元和标准库。缺失项目头文件、链接库或构建参数时，说明覆盖限制，
+- 支持单编译单元及已预置的仓库内头文件；按提供的真实路径 #include 目标文件。
+  缺失外部头文件、链接库或项目专用构建参数时，说明覆盖限制，
   不得编造替代依赖、声称已验证完整项目或自动关闭 sanitizer。
 - 执行器使用 {compiler} -O1 -g -fno-omit-frame-pointer
   -fsanitize=address,undefined -fno-sanitize-recover=all 编译，并捕获崩溃诊断。
@@ -361,7 +434,7 @@ def _native_guidance(language: str) -> str:
   未触发特定攻击仅可声明 NOT_REPRODUCED，不代表证明安全。崩溃由执行器收集。
 - requirements、requirements_filename、docker_compose 均置空，needs_attacker_server=false。
 - dockerfile 直接使用下方固定模板；执行器会强制应用它。只在 /tmp 写入运行时文件。
-{_native_dockerfile()}"""
+{_native_dockerfile(language)}"""
 
 
 def _finalize_native_generation(parsed: dict, finding: dict, repo_info: dict) -> dict | None:
@@ -453,7 +526,8 @@ def generate_test(
 
     prompt = _build_finding_prompt(finding, repo_info)
     raw = simple_text(
-        binding, prompt, max_tokens=DEFAULT_MAX_TOKENS, system=SYSTEM_PROMPT, tracker=tracker,
+        binding, prompt, max_tokens=_generation_max_tokens(binding), system=SYSTEM_PROMPT,
+        tracker=tracker, require_complete=True,
     )
 
     parsed = _parse_generation_response(raw)
@@ -558,7 +632,8 @@ def regenerate_test(
     )
 
     raw = simple_text(
-        binding, retry_prompt, max_tokens=DEFAULT_MAX_TOKENS, system=SYSTEM_PROMPT, tracker=tracker,
+        binding, retry_prompt, max_tokens=_generation_max_tokens(binding), system=SYSTEM_PROMPT,
+        tracker=tracker, require_complete=True,
     )
 
     parsed = _parse_generation_response(raw)

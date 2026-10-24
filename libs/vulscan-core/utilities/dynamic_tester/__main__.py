@@ -26,13 +26,21 @@ def main():
     )
 
     parser.add_argument("--repo-path", default=None, help="真实目标仓库路径（C/C++ 验证必需）")
+    from utilities.docker_build import parse_docker_proxy
+    parser.add_argument("--docker-proxy", type=parse_docker_proxy, help="可选构建代理：http://IP:端口")
 
     args = parser.parse_args()
 
-    results = run_dynamic_tests(
-        args.pipeline_output, args.output_dir,
-        max_retries=args.max_retries, repo_path=args.repo_path,
-    )
+    from utilities.docker_build import DockerBuildEnvironmentError
+    try:
+        results = run_dynamic_tests(
+            args.pipeline_output, args.output_dir,
+            max_retries=args.max_retries, repo_path=args.repo_path,
+            docker_proxy=args.docker_proxy,
+        )
+    except DockerBuildEnvironmentError as exc:
+        # 宿主环境问题与被测代码无关：一行说明即可，不需要堆栈。
+        raise SystemExit(f"动态测试环境不可用：{exc}") from None
 
     counts = {}
     for r in results:

@@ -1,8 +1,7 @@
-FROM python:3.12-slim-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ libc6-dev \
-    && rm -rf /var/lib/apt/lists/*
+# VulScan 固定 C/C++ 复现模板。
+# 编译器工具链由 VulScan 预置的共享镜像提供（见 docker_templates/toolchain-c/），
+# 每条发现的构建只复制文件，不再重复下载 gcc/g++。
+FROM {{VULSCAN_TOOLCHAIN}}
 WORKDIR /test
-ENV PYTHONDONTWRITEBYTECODE=1
 COPY . /test/
-# 编译输出和运行时临时文件只写入容器的 /tmp。
 CMD ["python3", "_vulscan_c_runner.py", "_vulscan_c_spec.json"]

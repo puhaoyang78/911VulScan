@@ -1178,6 +1178,7 @@
       "id": "deepseek-flash",
       "provider": "deepseek",
       "status": "current",
+      "max_output_tokens": 393216,
       "price": {
         "input": 0.3,
         "output": 1.2
@@ -1193,6 +1194,7 @@
       "id": "deepseek-v4-pro",
       "provider": "deepseek",
       "status": "current",
+      "max_output_tokens": 393216,
       "price": {
         "input": 1.32,
         "output": 3.96

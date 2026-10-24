@@ -158,6 +158,7 @@ Two properties worth knowing before you touch this:
 | change the threat-model schema | `context/threat_model.py` (`REQUIRED_TOP_LEVEL`, the `_validate_*` helpers) | `context/VULSCAN_THREATMODEL_TEMPLATE.md`, and `tests/test_threat_model_rejection.py` |
 | touch repository traversal | `core/repo_walk.py` — **one** walker for all Python parsers | never per-parser; that is why traversal bugs used to land in 1 of 5 |
 | open a file from a scanned repo | `utilities/file_io.py` — `read_repo_file` / `write_repo_file` / `repo_path_state` | never bare `open()`; these guard symlinks, FIFOs and size |
+| change how a stage-2 build reaches the network, or how long it may take | `utilities/docker_build/` — `proxy.py` (proxy/relay), `images.py` (base-image supply), `policy.py` (time budgets + failure kinds), `toolchain.py` (shared compiler image), `preflight.py` | the executor only sequences them; never re-add a timeout or a proxy flag at a call site |
 | add a provider | `utilities/llm/providers/` | the adapter Protocol in `utilities/llm/adapter.py` |
 | change the Go↔Python contract | `core/schemas.py` **and** `apps/vulscan-cli/internal/` together | §6 — they are not bound by anything mechanical |
 

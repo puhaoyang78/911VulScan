@@ -7,7 +7,7 @@
 - 已安装并启动 Docker Engine；生产路径不会改为在宿主机直接运行目标代码。
 - 已配置模型服务凭据。生成及重试可能产生模型费用。
 - 已有静态分析结果；仅对 `DYNAMIC_TESTABLE` 范围内的发现进行验证。
-- C/C++ 必须提供真实仓库路径；单文件对应的源文件会先复制到隔离构建目录。
+- C/C++ 必须提供真实仓库路径。仓库按原目录结构预置于构建上下文的 `repository/`，包括头文件、兄弟模块、资源和依赖清单；排除版本控制目录、本机环境、已安装依赖和凭据文件。
 
 ```bash
 # 常规命令（活动项目自动提供仓库路径）
@@ -17,6 +17,21 @@ vulscan dynamic-test /path/to/pipeline_output.json --repo-path /path/to/reposito
 python -m utilities.dynamic_tester /path/to/pipeline_output.json \
   --repo-path /path/to/repository --output-dir /tmp/dynamic-results
 ```
+
+网页的“Docker 构建代理 IP / 代理端口”均为可选项：全部留空时使用 Docker 现有网络配置；本机 mihomo 可填 `127.0.0.1` 和 HTTP/mixed 端口（例如 `7890`）。命令行 `scan` 和 `dynamic-test` 对应 `--docker-proxy http://127.0.0.1:7890`。代理只供构建期间下载依赖，不传入运行漏洞测试的容器。环回代理通过仅在构建期间存在的 Docker bridge 转发访问，无需修改 mihomo 配置或重启 Docker。基础镜像拉取仍使用 Docker daemon 自身的网络配置。
+
+## 构建环境
+
+二阶段把“宿主环境”从单条发现的构建里拆出来（`utilities/docker_build/`），执行器只负责编排：
+
+| 关注点 | 位置 | 说明 |
+| --- | --- | --- |
+| 代理 | `docker_build/proxy.py` | 校验 `http://IP:端口`；留空即直连；回环代理经 bridge 中继，端口固定复用，避免代理地址变化让 BuildKit 缓存层失效 |
+| 工具链 | `docker_build/toolchain.py` | C/C++ 编译器预置为共享镜像 `vulscan/toolchain-c:gcc12-<内容摘要>`，一次构建、全部发现复用；镜像不带 owner/run 标签，按发现回收时不会被删除 |
+| 时间预算 | `docker_build/policy.py` | 构建/执行/工具链三档预算与失败分类的唯一来源，可用 `VULSCAN_DOCKER_BUILD_TIMEOUT`、`VULSCAN_DOCKER_RUN_TIMEOUT`、`VULSCAN_DOCKER_TOOLCHAIN_TIMEOUT` 覆盖（秒，正整数） |
+| 预检 | `docker_build/preflight.py` | 在花费模型调用之前检查守护进程、buildx 与代理可达性，宿主问题只报一次 |
+
+失败分类决定是否让模型重写测试：构建失败、运行时异常按可修复处理；构建超时、容器执行超时、环境/工具链不可用、资源回收失败都停止重试，并在日志中写明原因（旧版本把构建超时一并说成“执行超时”）。构建超时的诊断会明确标注“Docker 构建超时”，与容器执行超时（`INCONCLUSIVE`）分开。
 
 ```python
 from utilities.dynamic_tester import run_dynamic_tests
@@ -35,7 +50,7 @@ results = run_dynamic_tests(
 
 C/C++ 生成结果只能提供复现源码，执行器强制使用项目自带的 Dockerfile、Python 包装器和编译命令。模型不能替换运行器或关闭 sanitizer。复现程序应引入并调用已预置的真实目标文件，构造攻击输入，并在正常结束时打印结构化结果。
 
-容器基于 `python:3.12-slim-bookworm`，安装 GCC、G++ 和 libc 开发头文件。包装器执行真实编译：
+工具链镜像基于 `python:3.12-slim-bookworm`，安装 GCC、G++ 和 libc 开发头文件（配方见 `docker_templates/toolchain-c/Dockerfile`）。`c.Dockerfile` 只声明 `FROM <该镜像>`，因此每条发现的构建只复制文件，不会重复下载编译器。包装器执行真实编译：
 
 ```text
 gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined \
@@ -47,7 +62,7 @@ C++ 使用 `g++ -std=c++17 -x c++`。编译最多 60 秒，程序执行最多 30
 ### 支持边界
 
 - 当前是单编译单元、标准库复现；不会自动运行整个项目的 CMake、Make 或自定义脚本。
-- 仅预置发现所在的一个目标文件；缺失本地头文件、额外链接库或特定编译参数会明确返回 `ERROR`，不能当作“未复现”。
+- 预置仓库内头文件并保留相对路径。缺失外部头文件、额外链接库或特定编译参数会明确返回 `ERROR`，不能当作“未复现”；确定的目标依赖缺失会停止模型重试。
 - 缺少真实目标文件、文件名与固定 scaffold 冲突、无法启动编译器、sanitizer 初始化失败，也都返回 `ERROR`。
 - C/C++ 多容器依赖和自定义依赖安装目前不受支持；生成器会拒绝这类结果。
 - 当前 C11/C++17 是可复现测试环境的固定基线，不代表已复现目标项目原有的编译器、平台或 ABI。
@@ -62,7 +77,7 @@ C++ 使用 `g++ -std=c++17 -x c++`。编译最多 60 秒，程序执行最多 30
 - Go：采用声明工具链；无声明时参考模板使用 Go 1.26。源码布局准备完成后再初始化模块、解析依赖和编译；同包目标与 harness 一起构建，库包放入独立目录。固定 GOTOOLCHAIN=local，构建产物和依赖缓存不放在运行时会被 tmpfs 覆盖的位置；运行阶段只启动已编译二进制。
 - 运行时声明从仓库根目录已有清单读取，只接受受限版本语法；无法可靠解析的约束不猜测。不会执行项目脚本来推断版本。
 
-这些参考模板不是任意项目构建系统：仅预置发现对应的一个源文件，兄弟模块、资源、私有依赖和完整项目构建文件不会自动复制。生成的 Dockerfile 仍需按目标调整；文件名冲突会返回可修复的 ERROR，不能覆盖真实目标。通用构建失败保留 stdout 与 stderr；超时保留已捕获的输出，运行超时仍是 INCONCLUSIVE。
+原仓库位于 `repository/`，生成的测试和依赖清单位于其外部，不能覆盖真实目标。生成器获得文件列表及原始根目录依赖清单，Dockerfile 需据此按实际包布局调整；私有依赖和项目专用构建参数仍需显式提供。上下文超过 10000 个文件或 100 MiB、不可读或包含越界链接时明确失败，不静默丢弃依赖。通用构建失败保留 stdout 与 stderr；超时保留已捕获的输出，运行超时仍是 INCONCLUSIVE。
 
 ## 结果含义
 

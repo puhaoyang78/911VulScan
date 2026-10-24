@@ -104,7 +104,7 @@ def test_imported_finding_reaches_staging_and_repairs_build_failure(
         if cmd[:3] == ["docker", "system", "df"]:
             return json.dumps({"Type": "Build Cache", "Size": "0B"}), "", 0, False
         if cmd[:2] == ["docker", "build"]:
-            assert (Path(cwd) / filename).read_text(encoding="utf-8") == "controlled target bytes"
+            assert (Path(cwd) / "repository" / filename).read_text(encoding="utf-8") == "controlled target bytes"
             assert (Path(cwd) / test_filename).read_text(encoding="utf-8") == "controlled harness"
             builds.append(cwd)
             if len(builds) == 1:

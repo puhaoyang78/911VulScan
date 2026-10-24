@@ -29,7 +29,7 @@
 2. `resolve_native_language` 区分 `c` 与 `cpp`，生成提示要求真实源码及中文结果。
 3. `_finalize_native_generation` 固定 Dockerfile、文件名和 `native_language`，拒绝未支持的依赖或 compose。
 4. 调度器把发现源路径限制在仓库根目录内，阻止 `..`、绝对路径和符号链接逃逸。
-5. `_write_native_test_files` 预置真实源文件、复现源码、自带运行器和固定 JSON 配置；冲突或缺失明确失败。
+5. `source_context.py` 统一描述并预置 `repository/`，保留本地头文件、模块和依赖清单；`_write_native_test_files` 写入复现源码、自带运行器和固定 JSON 配置，目标路径指向原仓库文件；冲突或缺失明确失败。
 6. Docker 运行器在容器内编译到 `/tmp` 并执行，stdout 只输出结构化结果。
 7. 结果收集器校验对象类型，保留身份键、证据、生成代码和用量数据；非零容器退出不能伪装成功。
 

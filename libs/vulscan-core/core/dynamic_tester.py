@@ -22,6 +22,7 @@ def run_tests(
     repo_path: str | None = None,
     registry=None,
     llm_config_name: str | None = None,
+    docker_proxy: str | None = None,
 ) -> DynamicTestStepResult:
     """Run dynamic exploit tests on confirmed vulnerabilities.
 
@@ -116,6 +117,7 @@ def run_tests(
         registry=registry,
         llm_config_name=llm_config_name,
         usage_baseline=_baseline_holder,
+        docker_proxy=docker_proxy,
     )
     # #333 (wave r1): rebuild the baseline from the refreshed holder — the
     # phase line now EXCLUDES the restored checkpoints' spend (it was

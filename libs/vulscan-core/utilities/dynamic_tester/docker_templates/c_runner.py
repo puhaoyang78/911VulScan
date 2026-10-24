@@ -154,10 +154,12 @@ def run_test(source: Path, language: str, *, timeout: int = 30,
         return _result("ERROR", "不支持的 C/C++ 编译语言。")
     target_path = None
     if target_filename is not None:
-        if (not isinstance(target_filename, str) or Path(target_filename).name != target_filename
-                or target_filename in {"", ".", ".."}):
+        if (not isinstance(target_filename, str) or not target_filename
+                or Path(target_filename).is_absolute() or ".." in Path(target_filename).parts):
             return _result("ERROR", "C/C++ 目标源文件名配置无效。")
         target = source.parent / target_filename
+        if not target.resolve().is_relative_to(source.parent):
+            return _result("ERROR", "C/C++ 目标源文件超出测试目录。")
         if not target.is_file() or target.resolve() == source:
             return _result("ERROR", "C/C++ 真实目标源文件缺失，或与测试驱动重复。")
         target_path = str(target.resolve())
@@ -173,8 +175,13 @@ def run_test(source: Path, language: str, *, timeout: int = 30,
         except OSError as exc:
             return _result("ERROR", f"C/C++ 编译器无法启动：{exc}")
         if built.returncode:
-            return _result("ERROR", "C/C++ 编译失败，未执行测试；请检查源文件、依赖和语言标准。",
-                           built.stderr, built.stdout)
+            result = _result("ERROR", "C/C++ 编译失败，未执行测试；请检查源文件、依赖和语言标准。",
+                             built.stderr, built.stdout)
+            if (target_path and re.search(re.escape(target_path) + r":\d+:\d+: fatal error: .+: No such file or directory", built.stderr)
+                    or "cannot find -l" in built.stderr):
+                result["retryable"] = False
+                result["details"] += " 目标构建依赖缺失，改写测试无法补齐，停止模型重试。"
+            return result
         env = dict(os.environ)
         # Never inherit overrides disabling detection, leaking reports to a file,
         # or adding a preload. The production container has no host env/secrets.
@@ -189,7 +196,7 @@ def run_test(source: Path, language: str, *, timeout: int = 30,
             return _result("INCONCLUSIVE", "C/C++ 测试执行超时，无法判定漏洞是否复现。",
                            _timeout_output(exc.stderr), _timeout_output(exc.stdout))
         except OSError as exc:
-            return _result("ERROR", f"C/C++ 测试程序无法启动：{exc}")
+            return {**_result("ERROR", f"C/C++ 测试程序无法启动：{exc}"), "retryable": False}
         return classify_run(executed.stdout, executed.stderr, executed.returncode,
                             target_path=target_path, driver_path=str(source))
 

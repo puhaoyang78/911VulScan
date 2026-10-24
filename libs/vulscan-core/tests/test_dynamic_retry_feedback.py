@@ -37,6 +37,35 @@ def execution(status="ERROR", details="application failed", evidence=None, **fie
     return value
 
 
+def test_generation_budget_covers_reasoning_and_complete_json():
+    """思考模式的推理与完整 JSON 共用输出上限：已登记上限按 4 倍默认值放宽，
+    未登记或使用同步 Anthropic 接口时保持默认值（避免供应商直接拒绝请求）。"""
+    binding = SimpleNamespace(model="deepseek-flash", adapter=SimpleNamespace(name="deepseek"))
+    # models.json 登记 deepseek-flash 上限 393216 -> min(4 * 20000, 393216)
+    assert generator._generation_max_tokens(binding) == 80000
+    binding.adapter.name = "anthropic"
+    assert generator._generation_max_tokens(binding) == 20000
+    binding.adapter.name = "unknown-provider"
+    assert generator._generation_max_tokens(binding) == 20000
+    binding.adapter.name = "deepseek"
+    binding.model = "not-in-registry"
+    assert generator._generation_max_tokens(binding) == 20000
+
+
+def test_truncated_structured_output_is_rejected_and_usage_retained():
+    from utilities.llm import helpers
+    from utilities.llm.adapter import CompletionResult, LLMResponseError, TextBlock
+    response = CompletionResult(content=(TextBlock('{"dockerfile":"partial'),),
+                                stop_reason="max_tokens", input_tokens=10, output_tokens=20000)
+    adapter = SimpleNamespace(complete=lambda **kwargs: response,
+                              pricing={"fixture": {"input": 1, "output": 2}})
+    binding = SimpleNamespace(adapter=adapter, model="fixture", provider_name="fixture", phase="dynamic_test")
+    tracker = TokenTracker()
+    with pytest.raises(LLMResponseError, match="结构化结果不完整"):
+        helpers.simple_text(binding, "fixture", tracker=tracker, require_complete=True)
+    assert tracker.get_summary()["total_output_tokens"] == 20000
+
+
 @pytest.fixture
 def harness(monkeypatch, tmp_path):
     tracker = TokenTracker()
@@ -58,7 +87,8 @@ def harness(monkeypatch, tmp_path):
                 raise response
             return json.dumps(response)
 
-        def execute(generation, finding_id, source_file=None):
+        def execute(generation, finding_id, source_file=None, repo_path=None,
+                    docker_proxy=None, policy=None):
             executed.append(dict(generation))
             if callable(executions):
                 return executions(generation, finding_id, source_file)

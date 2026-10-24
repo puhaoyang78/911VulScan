@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestDynamicCRepoPathFlag(t *testing.T) {
@@ -15,5 +17,14 @@ func TestDynamicCRepoPathFlag(t *testing.T) {
 	}
 	if !strings.Contains(dynamicTestCmd.Long, "ASan/UBSan") {
 		t.Fatal("动态测试帮助必须说明真实 sanitizer 模板")
+	}
+}
+
+func TestDockerProxyFlagsAreOptional(t *testing.T) {
+	for _, command := range []*cobra.Command{scanCmd, dynamicTestCmd} {
+		flag := command.Flags().Lookup("docker-proxy")
+		if flag == nil || flag.DefValue != "" {
+			t.Fatalf("%s must accept an optional --docker-proxy", command.Name())
+		}
 	}
 }

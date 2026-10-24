@@ -113,7 +113,8 @@ def _error_category(details) -> str:
     d = details.strip()
     if d.startswith(("Test generation", "测试生成")):
         return "generation"
-    if d.startswith(("Docker build failed", "Docker 构建失败", "C/C++ 编译")):
+    if d.startswith(("Docker build failed", "Docker 构建失败", "Docker 构建超时",
+                     "Docker 基础镜像不可用", "C/C++ 编译")):
         return "build"
     if d.startswith(("Container execution timed out", "容器执行超时", "C/C++ 测试执行超时")):
         # famD panel (opus, documented-not-deleted): today the collector
@@ -126,9 +127,34 @@ def _error_category(details) -> str:
         return "timeout"
     if (d.startswith("Docker execution was not attempted")
             or d.startswith(("Container did not produce valid JSON output", "容器未输出", "容器异常退出",
-                              "未执行 Docker 测试", "测试文件准备失败", "C/C++ sanitizer", "C/C++ 测试配置"))):
+                              "未执行 Docker 测试", "测试文件准备失败", "测试执行准备失败",
+                              "Docker 工具链不可用", "Docker 环境不可用",
+                              "C/C++ sanitizer", "C/C++ 测试配置"))):
         return "execution"
     return "other"
+
+
+def _retry_stop_reason(execution) -> str:
+    """把执行器的失败分类翻译成一句可操作的停止原因。
+
+    旧代码在这里只说“执行超时”：构建超时（容器根本没跑）与容器执行超时共用
+    同一句话，运维无法判断该改网络还是改测试。
+    """
+    from utilities.docker_build import (
+        BUILD_TIMEOUT, CLEANUP, ENVIRONMENT, FAILURE_LABELS, IMAGE, RUN_TIMEOUT,
+        TOOLCHAIN,
+    )
+    kind = getattr(execution, "failure_kind", None)
+    label = FAILURE_LABELS.get(kind or "", "执行失败")
+    hint = {
+        BUILD_TIMEOUT: "容器尚未执行，请为 Docker 构建配置代理或检查网络",
+        TOOLCHAIN: "共享工具链镜像无法准备，属于宿主环境问题",
+        IMAGE: "基础镜像无法拉取，请为 Docker 守护进程配置代理或预先拉取",
+        ENVIRONMENT: "Docker 环境不可用，属于宿主环境问题",
+        RUN_TIMEOUT: "容器执行超时",
+        CLEANUP: "Docker 资源回收失败，需要人工核对",
+    }.get(kind, "重写测试无法修复")
+    return f"{label}（{hint}）"
 
 
 def run_dynamic_tests(
@@ -140,6 +166,7 @@ def run_dynamic_tests(
     registry: PhaseRegistry | None = None,
     llm_config_name: str | None = None,
     usage_baseline: dict | None = None,
+    docker_proxy: str | None = None,
 ) -> list[DynamicTestResult]:
     """Run dynamic tests for all findings in a pipeline output file.
 
@@ -149,13 +176,17 @@ def run_dynamic_tests(
                     as pipeline_output_path.
         max_retries: Max retries per finding on error (default 3).
         checkpoint_path: Path to checkpoint directory for resume support.
-        repo_path: Path to the repository root. When given, the vulnerable
-            source file is pre-staged into the Docker build context so
-            ``COPY <filename> .`` works on the first try.
+        repo_path: Repository root, staged under repository/ with its headers,
+            modules, resources and manifests, excluding credentials and caches.
+        docker_proxy: Optional http://IP:port proxy for build dependencies.
 
     Returns:
         List of DynamicTestResult objects
     """
+    from utilities.docker_build import BuildPolicy, parse_docker_proxy
+    docker_proxy = parse_docker_proxy(docker_proxy)
+    # 预算在阶段入口解析一次：非法环境变量在这里失败，而不是每条发现各失败一次。
+    policy = BuildPolicy.from_environment()
     # Resolve the dynamic_test phase binding from the registry once and
     # reuse it across every finding. Standalone-invocation path
     # validates upfront; scanner-driven calls trust the scanner's probe.
@@ -197,10 +228,23 @@ def run_dynamic_tests(
     # finding is tested); absent repo_path (the None default) derives {}.
     from utilities.dynamic_tester.declared_runtime import derive_declared_runtimes
     repo_info["declared_runtimes"] = derive_declared_runtimes(repo_path)
+    from utilities.dynamic_tester.source_context import describe_repository
+    repo_info["source_context"] = describe_repository(repo_path)
 
     if not findings:
         print("没有需要动态测试的发现。", file=sys.stderr)
         return []
+
+    # 预检：守护进程、buildx 与代理可达性。放在任何模型调用之前，宿主问题只报
+    # 一次并给出可操作的说明，而不是让每条发现各自耗尽构建预算。
+    from utilities.docker_build.preflight import verify_build_environment
+    from utilities.dynamic_tester.docker_executor import _run_command
+    environment = verify_build_environment(docker_proxy, _run_command)
+    print(f"  Docker 构建环境：server {environment['server_version']}，"
+          f"{environment['proxy_description']}", file=sys.stderr)
+    print(f"  Docker 时间预算：构建 {policy.build_timeout}s / "
+          f"容器 {policy.run_timeout}s / 工具链 {policy.toolchain_timeout}s",
+          file=sys.stderr)
 
     if output_dir is None:
         output_dir = os.path.dirname(os.path.abspath(pipeline_output_path))
@@ -518,17 +562,28 @@ def run_dynamic_tests(
 
         # Step 2: Execute in Docker and retry on errors
         execution = run_single_container(generation, finding_id,
-                                         source_file=source_file)
+                                         source_file=source_file, repo_path=repo_path,
+                                         docker_proxy=docker_proxy, policy=policy)
         result = collect_result(finding, generation, execution, generation_cost)
         retry_count = 0
         failed_attempts: set[str] = set()
 
         while result.status == "ERROR" and retry_count < max_retries:
-            if getattr(execution, "infrastructure_error", False) or getattr(execution, "execution_error", None):
+            failure_kind = getattr(execution, "failure_kind", None)
+            if failure_kind is None and getattr(execution, "execution_error", None):
+                # 未分类的执行错误（旧调用方或自定义执行器）：保守停止，
+                # 保持既有契约；已分类的 STAGING 仍可重试。
+                print("  Docker 环境或测试配置不可用，不再请求模型重试。", file=sys.stderr)
+                break
+            if not getattr(execution, "retryable", True):
+                print(f"  {_retry_stop_reason(execution)}，不再请求模型重试。",
+                      file=sys.stderr)
+                break
+            if getattr(execution, "infrastructure_error", False):
                 print("  Docker 环境或测试配置不可用，不再请求模型重试。", file=sys.stderr)
                 break
             if execution.timed_out:
-                print("  执行超时，不再重试。", file=sys.stderr)
+                print("  容器执行超时，不再重试。", file=sys.stderr)
                 break
 
             attempt_key = failed_attempt_key(generation, execution)
@@ -576,7 +631,8 @@ def run_dynamic_tests(
 
             generation = retry_gen
             execution = run_single_container(generation, finding_id,
-                                             source_file=source_file)
+                                             source_file=source_file, repo_path=repo_path,
+                                             docker_proxy=docker_proxy, policy=policy)
             result = collect_result(finding, generation, execution, generation_cost)
             print(f"  第 {retry_count} 次重试结果：{result.status} "
                   f"(${generation_cost:.4f})", file=sys.stderr)
