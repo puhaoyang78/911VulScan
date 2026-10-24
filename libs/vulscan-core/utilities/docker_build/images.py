@@ -63,31 +63,64 @@ def available_images(runner, limit: int = 40) -> tuple[str, ...]:
     return tuple(names)
 
 
-def dockerfile_bases(root: str, max_files: int = 8) -> tuple[str, ...]:
-    """收集构建上下文内所有 Dockerfile 的 FROM 镜像，顺序稳定、去重。"""
-    bases: list[str] = []
-    seen_files = 0
-    for directory, subdirs, files in os.walk(root):
-        subdirs.sort()
-        for name in sorted(files):
-            if not name.startswith("Dockerfile"):
+def dockerfile_bases(root: str, max_files: int = 8, *, compose: bool = False) -> tuple[str, ...]:
+    """只解析本次构建实际使用的 Dockerfile，并排除已命名的构建阶段。
+
+    扫描仓库的副本可能包含任意数量的 Dockerfile；它们不是本次验证的构建入口。
+    对 Compose，只检查声明 build 的服务；image-only 服务直接准备镜像。
+    """
+    root = os.path.realpath(root)
+    dockerfiles: list[str] = []
+    images: list[str] = []
+
+    def inside(path: str) -> str | None:
+        resolved = os.path.realpath(path)
+        if os.path.commonpath((root, resolved)) != root:
+            return None
+        return resolved
+
+    if compose:
+        import yaml
+        path = os.path.join(root, "docker-compose.yml")
+        with open(path, encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+        for svc in config.get("services", {}).values():
+            if not isinstance(svc, dict):
                 continue
-            seen_files += 1
-            if seen_files > max_files:
-                return tuple(bases)
-            path = os.path.join(directory, name)
-            try:
-                with open(path, encoding="utf-8", errors="replace") as handle:
-                    text = handle.read()
-            except OSError:
+            build = svc.get("build")
+            if build:
+                context = build if isinstance(build, str) else build.get("context", ".")
+                dockerfile = "Dockerfile" if isinstance(build, str) else build.get("dockerfile", "Dockerfile")
+                if not isinstance(context, str) or not isinstance(dockerfile, str):
+                    continue
+                candidate = inside(os.path.join(root, context, dockerfile))
+                if candidate and candidate not in dockerfiles:
+                    dockerfiles.append(candidate)
+            elif isinstance(svc.get("image"), str):
+                images.append(svc["image"])
+    else:
+        dockerfiles.append(os.path.join(root, "Dockerfile"))
+
+    for path in dockerfiles[:max_files]:
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            dockerfile = handle.read()
+        stages: set[str] = set()
+        for line in dockerfile.splitlines():
+            match = re.match(
+                r"^\\s*FROM\\s+(?:--platform=\\S+\\s+)?(\\S+)(?:\\s+AS\\s+(\\S+))?",
+                line, re.IGNORECASE,
+            )
+            if not match:
                 continue
-            for match in _FROM.finditer(text):
-                image = match.group(1)
-                if image.startswith("$") or image in _SKIP_BASES:
-                    continue  # 变量插值交给 Docker；scratch 无需拉取
-                if image not in bases:
-                    bases.append(image)
-    return tuple(bases)
+            image, alias = match.group(1), match.group(2)
+            if (image.lower() not in stages and image.lower() not in _SKIP_BASES
+                    and not image.startswith("$") and image not in images):
+                images.append(image)
+            if alias:
+                stages.add(alias.lower())
+    return tuple(images)
 
 
 def _present(ref: str, runner) -> bool:
