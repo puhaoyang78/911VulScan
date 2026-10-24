@@ -38,6 +38,50 @@
   @media(max-width:920px) { .grid { grid-template-columns:minmax(0,1fr) 250px; gap:16px; } .card { padding:20px; } .scan-row { grid-template-columns:minmax(0,1fr) auto; } .scan-actions { grid-column:1/-1; } }
   @media(max-width:700px) { header { padding:16px; gap:10px; } header h1 { font-size:18px; } header p { display:none; } .brand-mark { font-size:14px; } .main { padding:22px 16px; } .intro h2 { font-size:24px; } .grid { grid-template-columns:1fr; } .stats { grid-template-columns:repeat(2,1fr); gap:10px; } .stat { padding:12px 16px; } .stat strong { font-size:24px; } .two-col { grid-template-columns:1fr; gap:0; } .language-grid { grid-template-columns:repeat(2,1fr); } .section-heading { align-items:flex-start; flex-direction:column; gap:2px; } footer { flex-direction:column; } }
   @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; transition:none!important; } }
+
+  .main { padding-top:38px; }
+  .intro { padding:8px 2px 14px; }
+  .intro h2 { font-size:clamp(26px,3.4vw,36px); }
+  .stats { gap:16px; }
+  .stat { min-height:104px; position:relative; overflow:hidden; }
+  .stat::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:#c4d6dc; }
+  .stat-running::before { background:#d59e40; } .stat-done::before { background:var(--accent); }
+  .grid { grid-template-columns:minmax(0,1fr) 295px; }
+  .language-grid label:hover { border-color:#72b8ae; background:#f2faf8; }
+  .language-grid label:has(input:checked) { background:#e8f7f3; border-color:#19968a; color:#075f5a; }
+  .scans-table { box-shadow:var(--shadow); border-radius:16px; }
+  .scan-row { min-height:83px; }
+  .scan-row:hover { background:#f8fbfb; }
+  .link-btn:hover,.delete-btn:hover { border-color:#9bbab8; }
+  .delete-btn:hover { background:#fff0ed; border-color:#deb5b5; }
+  .workflow li::after { content:""; position:absolute; left:11px; top:29px; bottom:5px; border-left:1px solid #d4e8e2; }
+  .workflow li:last-child::after { display:none; }
+  @media(max-width:920px){ .grid{grid-template-columns:1fr;} .workflow{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;} .workflow li::after{display:none;} }
+  @media(max-width:600px){ .stats{grid-template-columns:repeat(2,minmax(0,1fr));}.workflow{grid-template-columns:1fr;}.scan-row{gap:9px;} }
+
+  /* Shared visual language: indigo-free, calm graphite and teal workbench. */
+  :root { --ink:#192c3b; --muted:#607585; --line:#dbe6e9; --accent:#087c76; --paper:#ffffff; --bg:#f2f6f7; --shadow:0 12px 42px rgba(22,48,61,.06); }
+  body { background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; }
+  header { background:#142d3b; }
+  .main { max-width:1280px; }
+  .card,.overview,.status-bar,.stats .stat { box-shadow:var(--shadow); border-radius:16px; }
+  .card { border:1px solid var(--line); }
+  .btn-primary,.btn.ready { background:var(--accent); border-color:var(--accent); }
+  button,a,input,select { transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease; }
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline:3px solid #e3a947; outline-offset:3px; }
+  .dialog { width:min(460px,calc(100% - 32px)); max-width:none; max-height:calc(100% - 32px); overflow:auto; margin:auto; border:1px solid #d9e4e7; border-radius:18px; padding:0; background:#fff; color:var(--ink); box-shadow:0 30px 85px rgba(12,35,48,.25); }
+  .dialog::backdrop { background:rgba(10,31,42,.60); backdrop-filter:blur(3px); }
+  .dialog-inner { padding:26px; }
+  .dialog-symbol { display:grid; place-items:center; width:42px; height:42px; border-radius:12px; margin-bottom:14px; background:#fff0ed; color:#af443e; font-size:22px; }
+  .dialog h2 { font-size:20px; letter-spacing:-.02em; margin:0 0 8px; }
+  .dialog p { color:var(--muted); line-height:1.75; font-size:14px; overflow-wrap:anywhere; }
+  .dialog .target { background:#f1f5f6; padding:11px 13px; border-radius:9px; margin:15px 0; color:var(--ink); font-weight:600; }
+  .dialog-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:22px; }
+  .dialog-actions button { border:1px solid var(--line); border-radius:9px; padding:10px 17px; cursor:pointer; background:#fff; color:var(--ink); font:inherit; font-size:13px; font-weight:700; }
+  .dialog-actions .danger { color:#fff; background:#b23b40; border-color:#b23b40; }
+  .dialog-actions .danger:hover { background:#922c32; }
+  .dialog-actions button:disabled { opacity:.55; cursor:wait; }
+  @media(prefers-reduced-motion:reduce) { * { transition:none!important; animation:none!important; } }
 </style>
 </head>
 <body>
@@ -84,6 +128,18 @@
   </section>
   <footer><span>911VulScan · 中文安全扫描工作台</span></footer>
 </main>
+<dialog class="dialog" id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-message">
+  <div class="dialog-inner">
+    <div class="dialog-symbol" aria-hidden="true">!</div>
+    <h2 id="delete-title">删除扫描任务</h2>
+    <p id="delete-message">任务日志、摘要、报告和相关文件将被永久删除。正在运行的任务会先停止。</p>
+    <p class="target" id="delete-target"></p>
+    <div class="dialog-actions">
+      <button type="button" id="delete-dismiss">保留任务</button>
+      <button type="button" class="danger" id="delete-confirm">确认删除</button>
+    </div>
+  </div>
+</dialog>
 <script nonce="{{.Nonce}}">
 const provider = document.getElementById('provider');
 function updateProvider() {
@@ -129,7 +185,7 @@ document.getElementById('scans-list').addEventListener('click', function(e) {
   const btn = e.target.closest('button');
   if (!btn) return;
   if (btn.classList.contains('copy-btn')) copyRepo(btn);
-  if (btn.classList.contains('delete-btn')) deleteScan(btn.dataset.id, btn);
+  if (btn.classList.contains('delete-btn')) requestDelete(btn.dataset.id, btn);
 });
 async function copyRepo(btn) {
   try {
@@ -145,8 +201,23 @@ function updateStats() {
   document.getElementById('stat-done').textContent = rows.filter(r => r.dataset.status === 'done').length;
   document.getElementById('stat-attention').textContent = rows.filter(r => !['running','cancelling','done'].includes(r.dataset.status)).length;
 }
+const deleteDialog = document.getElementById('delete-dialog');
+let pendingDelete = null;
+function requestDelete(id, button) {
+  const row = document.getElementById('row-' + id);
+  if (!row || !deleteDialog || deleteDialog.open) return;
+  pendingDelete = {id, button};
+  document.getElementById('delete-target').textContent = row.querySelector('.scan-repo')?.textContent || id;
+  deleteDialog.showModal();
+}
+document.getElementById('delete-dismiss').addEventListener('click', () => deleteDialog.close());
+deleteDialog.addEventListener('close', () => { pendingDelete = null; });
+document.getElementById('delete-confirm').addEventListener('click', () => {
+  if (pendingDelete) deleteScan(pendingDelete.id, pendingDelete.button);
+});
 async function deleteScan(id, button) {
-  if (!confirm('确定删除此扫描及其全部结果文件？正在运行的任务将被取消，此操作无法撤销。')) return;
+  const confirmButton = document.getElementById('delete-confirm');
+  confirmButton.disabled = true; confirmButton.textContent = '正在删除…';
   const feedback = document.getElementById('list-feedback');
   if (button) button.disabled = true;
   feedback.textContent = '';
@@ -156,8 +227,9 @@ async function deleteScan(id, button) {
     if (!response.ok && response.status !== 404) throw new Error();
     const row = document.getElementById('row-' + id); if (row) row.remove();
     if (!document.querySelector('#scans-list .scan-row')) document.getElementById('scans-list').innerHTML = '<div class="empty-state"><strong>还没有扫描任务</strong>填写上方项目地址，开始第一次安全分析。</div>';
-    updateStats(); feedback.textContent = '扫描及其结果已删除。';
+    updateStats(); feedback.textContent = '扫描及其结果已删除。'; deleteDialog.close();
   } catch (_) { feedback.textContent = '未能确认删除结果，请刷新任务列表检查。'; if (button) button.disabled = false; }
+  finally { confirmButton.disabled = false; confirmButton.textContent = '确认删除'; }
 }
 </script>
 </body>
