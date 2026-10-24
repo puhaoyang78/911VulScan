@@ -244,6 +244,14 @@
 <footer>911VulScan</footer>
 </main>
 
+<dialog class="dialog" id="cancel-dialog" aria-labelledby="cancel-title" aria-describedby="cancel-message">
+ <div class="dialog-inner">
+  <div class="dialog-symbol" aria-hidden="true">!</div>
+  <h2 id="cancel-title">停止当前扫描？</h2>
+  <p id="cancel-message">扫描将停止，已保存的日志和分析结果会保留。容器清理可能需要额外时间。</p>
+  <div class="dialog-actions"><button type="button" id="cancel-dismiss">继续扫描</button><button type="button" class="danger" id="cancel-confirm">停止扫描</button></div>
+ </div>
+</dialog>
 <script nonce="{{.Nonce}}">
 function confirmCancellation() {
   const dialog = document.getElementById('cancel-dialog');
