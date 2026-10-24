@@ -24,7 +24,10 @@ func TestScanOverviewProgressAndCancellation(t *testing.T) {
 	if err := tmpl.Execute(&page, scanPageData{ID: "fixture", Nonce: "nonce", CSRF: "tok"}); err != nil {
 		t.Fatal(err)
 	}
-	scripts := regexp.MustCompile(`(?s)<script nonce="[^"]*">(.*?)</script>`).FindStringSubmatch(page.String())
+	if !strings.Contains(page.String(), `id="cancel-dialog"`) || !strings.Contains(page.String(), `id="cancel-confirm"`) {
+        t.Fatal("accessible cancellation dialog is not rendered")
+    }
+    scripts := regexp.MustCompile(`(?s)<script nonce="[^"]*">(.*?)</script>`).FindStringSubmatch(page.String())
 	prelude := `
 const assert=require('node:assert/strict');
 class Element {
@@ -39,6 +42,9 @@ global.EventSource=class {static CONNECTING=0;static CLOSED=2;constructor(){Even
 let calls=0;global.fetch=async()=>{calls++;return {ok:true,json:async()=>({status:'cancelling'})};};
 `
 	checks := `
+// The click-flow regression isolates the cancellation API from the native dialog.
+// The dialog itself is checked against the rendered production HTML below.
+confirmCancellation = async () => window.confirm();
 (async()=>{
 showView('terminal');assert.equal(elements['terminal-panel'].hidden,false);assert.equal(elements['tab-overview'].attrs['aria-selected'],'false');
 showView('overview');assert.equal(elements['terminal-panel'].hidden,true);
