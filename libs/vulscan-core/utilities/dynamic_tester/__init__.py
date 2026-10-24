@@ -255,7 +255,8 @@ def run_dynamic_tests(
     # 这样拉取/工具链构建失败会在阶段入口明确报错，不会逐项消耗
     # 模型费用或重复等待 1800 秒。
     if any(resolve_native_language(
-            (f.get("location") or {}).get("file", "") if isinstance(f.get("location"), dict) else "",
+            f["location"]["file"] if isinstance(f.get("location"), dict)
+            and isinstance(f["location"].get("file"), str) else "",
             repo_info["language"],
         ) for f in findings):
         toolchain = native_toolchain("c")

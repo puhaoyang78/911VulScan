@@ -109,7 +109,7 @@ def dockerfile_bases(root: str, max_files: int = 8, *, compose: bool = False) ->
         stages: set[str] = set()
         for line in dockerfile.splitlines():
             match = re.match(
-                r"^\\s*FROM\\s+(?:--platform=\\S+\\s+)?(\\S+)(?:\\s+AS\\s+(\\S+))?",
+                r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?",
                 line, re.IGNORECASE,
             )
             if not match:

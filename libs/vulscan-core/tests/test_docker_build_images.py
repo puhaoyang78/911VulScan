@@ -23,10 +23,10 @@ def _write(root: Path, name: str, text: str) -> Path:
 
 
 def test_dockerfile_bases_reads_only_active_build_contexts(tmp_path):
-    _write(tmp_path, "Dockerfile", "FROM python:3.12-slim AS builder\\nFROM builder AS final\\n")
-    _write(tmp_path, "repository/dependency/Dockerfile", "FROM unused-image:huge\\n")
+    _write(tmp_path, "Dockerfile", "FROM python:3.12-slim AS builder\nFROM builder AS final\n")
+    _write(tmp_path, "repository/dependency/Dockerfile", "FROM unused-image:huge\n")
     _write(tmp_path, "attacker-server/Dockerfile",
-           "FROM golang:1.26-alpine AS compile\\nFROM compile AS final\\nFROM scratch\\n")
+           "FROM golang:1.26-alpine AS compile\nFROM compile AS final\nFROM scratch\n")
     assert dockerfile_bases(str(tmp_path)) == ("python:3.12-slim",)
 
     _write(tmp_path, "docker-compose.yml", """

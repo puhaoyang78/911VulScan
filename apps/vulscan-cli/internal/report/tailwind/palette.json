@@ -2,9 +2,9 @@
   "comment": "#540: the single source of truth for the report palette — consumed by BOTH tailwind.config.js (the build) and the Go coverage test (the config->CSS drift check). Changed here = regenerate + update the report.css sha.",
   "colors": {
     "navy": {
-      "900": "#1a1a2e",
+      "700": "#0f3460",
       "800": "#16213e",
-      "700": "#0f3460"
+      "900": "#1a1a2e"
     },
     "accent": "#e94560",
     "knostic": {
@@ -19,10 +19,41 @@
       "border": "#B3BEFB",
       "border-light": "#E8ECF4",
       "card-bg": "#F5F7FB"
+    },
+    "vulscan": {
+      "page": "#f2f6f7",
+      "ink": "#142c3a",
+      "line": "#dce7e8",
+      "accent": "#087c76",
+      "nav": "#142d3b",
+      "nav-line": "#294653",
+      "nav-text": "#c9e1df",
+      "nav-hover": "#24505a",
+      "hero-start": "#15303d",
+      "hero-end": "#23515a",
+      "hero-text": "#d2eeeb",
+      "hover-line": "#83b9b2",
+      "panel-ink": "#213746",
+      "panel-title": "#203746",
+      "panel-muted": "#647987",
+      "code-ink": "#e2eff0",
+      "chip": "#eaf3f2",
+      "panel-detail": "#34525f",
+      "panel-line": "#dbe6e8",
+      "finding-line": "#dbe7e7",
+      "code-bg": "#172e3d",
+      "focus": "#c69a3b",
+      "shadow-base": "#112531",
+      "shadow-deep": "#11313f",
+      "shadow-teal": "#153f45",
+      "shadow-navy": "#122c3c"
     }
   },
   "fontFamily": {
-    "knostic-sans": ["system-ui", "sans-serif"]
+    "knostic-sans": [
+      "system-ui",
+      "sans-serif"
+    ]
   },
   "borderRadius": {
     "card": "20px"
