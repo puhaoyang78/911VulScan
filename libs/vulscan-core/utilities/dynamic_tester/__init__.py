@@ -114,7 +114,8 @@ def _error_category(details) -> str:
     if d.startswith(("Test generation", "测试生成")):
         return "generation"
     if d.startswith(("Docker build failed", "Docker 构建失败", "Docker 构建超时",
-                     "Docker 基础镜像不可用", "C/C++ 编译")):
+                     "Docker 基础镜像不可用", "基础镜像 ", "共享工具链镜像 ",
+                     "Docker 工具链不可用", "C/C++ 编译")):
         return "build"
     if d.startswith(("Container execution timed out", "容器执行超时", "C/C++ 测试执行超时")):
         # famD panel (opus, documented-not-deleted): today the collector
@@ -128,7 +129,7 @@ def _error_category(details) -> str:
     if (d.startswith("Docker execution was not attempted")
             or d.startswith(("Container did not produce valid JSON output", "容器未输出", "容器异常退出",
                               "未执行 Docker 测试", "测试文件准备失败", "测试执行准备失败",
-                              "Docker 工具链不可用", "Docker 环境不可用",
+                              "Docker 环境不可用", "Docker 资源清理失败",
                               "C/C++ sanitizer", "C/C++ 测试配置"))):
         return "execution"
     return "other"
@@ -240,6 +241,31 @@ def run_dynamic_tests(
     from utilities.docker_build.preflight import verify_build_environment
     from utilities.dynamic_tester.docker_executor import _run_command
     environment = verify_build_environment(docker_proxy, _run_command)
+    from utilities.docker_build import (
+        available_images, build_proxy_arguments, dockerfile_bases,
+        ensure_base_images, ensure_toolchain, native_toolchain,
+    )
+    from utilities import docker_resources
+    from utilities.dynamic_tester.test_generator import resolve_native_language
+
+    # 已缓存镜像确实进入生成提示词；此前只有消费者，没有赋值入口。
+    repo_info["base_images"] = available_images(_run_command)
+
+    # C/C++ 共用工具链，必须在任何模型生成调用之前只准备一次。
+    # 这样拉取/工具链构建失败会在阶段入口明确报错，不会逐项消耗
+    # 模型费用或重复等待 1800 秒。
+    if any(resolve_native_language(
+            (f.get("location") or {}).get("file", "") if isinstance(f.get("location"), dict) else "",
+            repo_info["language"],
+        ) for f in findings):
+        toolchain = native_toolchain("c")
+        with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
+            with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
+                ensure_base_images(dockerfile_bases(toolchain.context), _run_command,
+                                   timeout=policy.pull_timeout)
+                ensure_toolchain(toolchain, _run_command, proxy_arguments=proxy_args,
+                                 timeout=policy.toolchain_timeout)
+
     print(f"  Docker 构建环境：server {environment['server_version']}，"
           f"{environment['proxy_description']}", file=sys.stderr)
     print(f"  Docker 时间预算：构建 {policy.build_timeout}s / "
