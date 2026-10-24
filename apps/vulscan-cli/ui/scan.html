@@ -117,6 +117,48 @@
   .status-bar { background:#fff; border:1px solid #dbe5e9; border-radius:9px; padding:12px 16px; } .btn.ready { background:#087d78; border-color:#087d78; } .btn.ready:hover { background:#056661; } .artifact-note { font-size:12px; color:#5b7081; margin-top:12px; } footer { color:#5b7081; font-size:11px; padding-top:28px; } :focus-visible { outline:3px solid #e8a848; outline-offset:3px; }
   @media(max-width:700px) { header { padding:16px; } .main { padding:22px 16px; } .steps { grid-template-columns:repeat(3,minmax(0,1fr)); } .page-heading { align-items:flex-start; } .page-heading h1 { font-size:22px; } .log-body { height:50vh; min-height:260px; } .actions .btn { flex:1; text-align:center; padding:10px; } }
   @media(prefers-reduced-motion:reduce) { * { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+
+  .page-heading { align-items:flex-start; margin:8px 0 27px; }
+  .page-heading h1 { font-size:clamp(26px,3vw,34px); }
+  .steps { box-shadow:var(--shadow); padding:22px 16px; }
+  .step { min-height:50px; display:flex; align-items:center; justify-content:center; }
+  .step-item:has(.step.active) .step-count { color:var(--accent); font-weight:700; }
+  .status-bar { padding:16px 20px; border-radius:14px; }
+  .view-tabs { padding:5px; background:#e4edef; width:max-content; border-radius:12px; }
+  .view-tabs button { border:0; background:transparent; border-radius:8px; }
+  .view-tabs [aria-selected="true"] { background:#fff; box-shadow:0 2px 8px rgba(20,49,56,.12); color:var(--accent); }
+  .overview { padding:30px; }
+  .metric { background:#f3f8f8; border:1px solid #e2eeef; border-radius:12px; }
+  .metric dd { font-variant-numeric:tabular-nums; }
+  .current-task { padding:13px 15px; border-left:3px solid var(--accent); background:#f5faf9; border-radius:0 9px 9px 0; }
+  .log-panel { box-shadow:0 16px 40px rgba(9,25,37,.15); }
+  .actions { margin-top:16px; }
+  .actions .btn { border-radius:9px; padding:12px 19px; }
+  @media(max-width:700px){ .steps{grid-template-columns:repeat(3,minmax(0,1fr));}.overview{padding:20px;} }
+
+  /* Shared visual language: indigo-free, calm graphite and teal workbench. */
+  :root { --ink:#192c3b; --muted:#607585; --line:#dbe6e9; --accent:#087c76; --paper:#ffffff; --bg:#f2f6f7; --shadow:0 12px 42px rgba(22,48,61,.06); }
+  body { background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; }
+  header { background:#142d3b; }
+  .main { max-width:1280px; }
+  .card,.overview,.status-bar,.stats .stat { box-shadow:var(--shadow); border-radius:16px; }
+  .card { border:1px solid var(--line); }
+  .btn-primary,.btn.ready { background:var(--accent); border-color:var(--accent); }
+  button,a,input,select { transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease; }
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline:3px solid #e3a947; outline-offset:3px; }
+  .dialog { width:min(460px,calc(100% - 32px)); max-width:none; max-height:calc(100% - 32px); overflow:auto; margin:auto; border:1px solid #d9e4e7; border-radius:18px; padding:0; background:#fff; color:var(--ink); box-shadow:0 30px 85px rgba(12,35,48,.25); }
+  .dialog::backdrop { background:rgba(10,31,42,.60); backdrop-filter:blur(3px); }
+  .dialog-inner { padding:26px; }
+  .dialog-symbol { display:grid; place-items:center; width:42px; height:42px; border-radius:12px; margin-bottom:14px; background:#fff0ed; color:#af443e; font-size:22px; }
+  .dialog h2 { font-size:20px; letter-spacing:-.02em; margin:0 0 8px; }
+  .dialog p { color:var(--muted); line-height:1.75; font-size:14px; overflow-wrap:anywhere; }
+  .dialog .target { background:#f1f5f6; padding:11px 13px; border-radius:9px; margin:15px 0; color:var(--ink); font-weight:600; }
+  .dialog-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:22px; }
+  .dialog-actions button { border:1px solid var(--line); border-radius:9px; padding:10px 17px; cursor:pointer; background:#fff; color:var(--ink); font:inherit; font-size:13px; font-weight:700; }
+  .dialog-actions .danger { color:#fff; background:#b23b40; border-color:#b23b40; }
+  .dialog-actions .danger:hover { background:#922c32; }
+  .dialog-actions button:disabled { opacity:.55; cursor:wait; }
+  @media(prefers-reduced-motion:reduce) { * { transition:none!important; animation:none!important; } }
 </style>
 </head>
 <body>
@@ -203,6 +245,26 @@
 </main>
 
 <script nonce="{{.Nonce}}">
+function confirmCancellation() {
+  const dialog = document.getElementById('cancel-dialog');
+  if (!dialog || typeof dialog.showModal !== 'function') return Promise.resolve(false);
+  return new Promise(resolve => {
+    const accept = document.getElementById('cancel-confirm');
+    const dismiss = document.getElementById('cancel-dismiss');
+    const cleanup = () => {
+      accept.removeEventListener('click', yes);
+      dismiss.removeEventListener('click', no);
+      dialog.removeEventListener('close', closed);
+    };
+    const yes = () => { cleanup(); dialog.close(); resolve(true); };
+    const no = () => { cleanup(); dialog.close(); resolve(false); };
+    const closed = () => { cleanup(); resolve(false); };
+    accept.addEventListener('click', yes);
+    dismiss.addEventListener('click', no);
+    dialog.addEventListener('close', closed);
+    dialog.showModal();
+  });
+}
 const jobID = '{{.ID}}';
 
 const steps = ['parse','enhance','analyze','verify','dynamic','report'];
@@ -278,7 +340,7 @@ function showCancelling() {
 }
 document.getElementById('btn-cancel').addEventListener('click', async () => {
   if (cancelPending || terminalStatus) return;
-  if (!window.confirm('确认取消本次扫描？扫描将停止，已有日志和已生成结果会保留。')) return;
+  if (!await confirmCancellation()) return;
   showCancelling();
   const feedback = document.getElementById('cancel-feedback'); feedback.textContent = '';
   try {
