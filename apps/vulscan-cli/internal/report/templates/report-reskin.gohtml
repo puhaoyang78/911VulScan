@@ -95,6 +95,17 @@
       @media(max-width:700px){body>main>header{padding:22px 19px!important}body>nav>div{padding:10px 12px!important;gap:4px!important}body>main>section{margin-bottom:32px!important}}
       @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
     </style>
+
+    <style>
+      .finding-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:16px 18px;margin:0 0 18px;background:white;border:1px solid #dce7e8;border-radius:14px}
+      .finding-controls label{font-size:13px;font-weight:700;color:#142c3a}
+      .finding-controls input{background:#f2f6f7;border:1px solid #dce7e8;border-radius:9px;color:#142c3a;padding:10px 12px;min-width:220px;flex:1}
+      .finding-controls button{padding:10px 13px;border:1px solid #dce7e8;border-radius:9px;background:white;color:#142c3a;font-size:13px;font-weight:700;cursor:pointer}
+      .finding-controls button:hover,.finding-controls button:focus-visible{border-color:#087c76;color:#087c76}
+      .finding-count{font-size:12px;color:#647987;min-width:8em}
+      #findings details[hidden]{display:none!important}
+      @media(max-width:650px){.finding-controls input{min-width:100%;flex-basis:100%}.finding-controls{gap:10px}}
+    </style>
 </head>
 <body class="bg-white text-knostic-body font-knostic leading-relaxed">
 
@@ -320,6 +331,14 @@
         {{if .HasFindingGroups}}
         <section id="findings" class="mb-10 border-l-4 border-knostic-purple pl-4 sm:pl-6">
             <h2 class="text-xl sm:text-2xl font-semibold text-knostic-navy mb-6">全部发现项</h2>
+            <div class="finding-controls" role="search" aria-label="筛选漏洞发现">
+                <label for="finding-query">快速查找发现</label>
+                <input id="finding-query" type="search" placeholder="搜索文件、函数、漏洞类型或编号" autocomplete="off">
+                <button id="finding-expand" type="button">展开全部</button>
+                <button id="finding-collapse" type="button">收起全部</button>
+                <span class="finding-count" id="finding-count" role="status" aria-live="polite"></span>
+            </div>
+
             <div class="space-y-4">
                 {{range $g := .FindingsByVerdict}}
                 <details{{if $g.OpenByDefault}} open{{end}} class="bg-white border border-knostic-border rounded-card">
@@ -435,6 +454,46 @@
             },
             options: chartOptions
         });
+    </script>
+
+    <script>
+      (() => {
+        const section = document.getElementById('findings');
+        if (!section) return;
+        const query = document.getElementById('finding-query');
+        const status = document.getElementById('finding-count');
+        const groups = Array.from(section.querySelectorAll(':scope > div > details'));
+        const rows = Array.from(section.querySelectorAll('details[id^="finding-"]'));
+        const groupFor = row => groups.find(group => group.contains(row));
+        function filter() {
+          const term = query.value.trim().toLocaleLowerCase();
+          let count = 0;
+          rows.forEach(row => {
+            const summary = row.querySelector(':scope > summary');
+            const matched = !term || (summary && summary.textContent.toLocaleLowerCase().includes(term));
+            row.hidden = !matched;
+            if (matched) {
+              count++;
+              if (term) {
+                const group = groupFor(row);
+                if (group) group.open = true;
+              }
+            }
+          });
+          groups.forEach(group => {
+            group.hidden = !group.querySelector('details[id^="finding-"]:not([hidden])');
+          });
+          status.textContent = term ? '匹配 ' + count + ' / ' + rows.length + ' 项' : '共 ' + rows.length + ' 项';
+        }
+        query.addEventListener('input', filter);
+        document.getElementById('finding-expand').addEventListener('click', () => {
+          section.querySelectorAll('details:not([hidden])').forEach(item => { item.open = true; });
+        });
+        document.getElementById('finding-collapse').addEventListener('click', () => {
+          section.querySelectorAll('details').forEach(item => { item.open = false; });
+        });
+        filter();
+      })();
     </script>
 </body>
 </html>
