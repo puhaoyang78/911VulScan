@@ -213,6 +213,12 @@ jobs:
           npm ci --ignore-scripts
           ./node_modules/.bin/tailwindcss -c tailwind.config.js -i input.css -o regen.css --minify
 
+      - name: Save regenerated CSS for palette synchronization
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulscan-report-css-regen
+          path: apps/vulscan-cli/internal/report/tailwind/regen.css
+
       - name: Compare with the committed bytes
         run: cmp apps/vulscan-cli/internal/report/tailwind/regen.css apps/vulscan-cli/internal/report/vendor/report.css
 
