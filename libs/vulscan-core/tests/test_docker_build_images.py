@@ -22,11 +22,29 @@ def _write(root: Path, name: str, text: str) -> Path:
     return path
 
 
-def test_dockerfile_bases_reads_every_stage_and_skips_scratch(tmp_path):
-    _write(tmp_path, "Dockerfile", "FROM --platform=linux/amd64 python:3.12-slim AS build\n")
+def test_dockerfile_bases_reads_only_active_build_contexts(tmp_path):
+    _write(tmp_path, "Dockerfile", "FROM python:3.12-slim AS builder\\nFROM builder AS final\\n")
+    _write(tmp_path, "repository/dependency/Dockerfile", "FROM unused-image:huge\\n")
     _write(tmp_path, "attacker-server/Dockerfile",
-           "FROM golang:1.26-alpine\nFROM scratch\nFROM python:3.12-slim\n")
-    assert dockerfile_bases(str(tmp_path)) == ("python:3.12-slim", "golang:1.26-alpine")
+           "FROM golang:1.26-alpine AS compile\\nFROM compile AS final\\nFROM scratch\\n")
+    assert dockerfile_bases(str(tmp_path)) == ("python:3.12-slim",)
+
+    _write(tmp_path, "docker-compose.yml", """
+services:
+  attacker:
+    build: ./attacker-server
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+  redis:
+    image: redis:7-alpine
+""")
+    assert dockerfile_bases(str(tmp_path), compose=True) == (
+        "redis:7-alpine", "golang:1.26-alpine", "python:3.12-slim",
+    )
+    # The repository's unrelated Dockerfiles and named stages are never pulled.
+    assert "unused-image:huge" not in dockerfile_bases(str(tmp_path), compose=True)
 
 
 def test_dockerfile_bases_ignores_variable_interpolation(tmp_path):
