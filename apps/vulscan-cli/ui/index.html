@@ -6,99 +6,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="csrf" content="{{.CSRF}}">
 <title>安全扫描工作台 · 911VulScan</title>
-<style nonce="{{.Nonce}}">
-  :root { --ink:#152b3b; --muted:#5b7081; --line:#dbe5e9; --accent:#087d78; --paper:#fff; --bg:#f0f5f6; }
-  *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--ink); line-height:1.6; }
-  a { color:var(--accent); } button,input,select { font:inherit; } button,a,input,select,summary { -webkit-tap-highlight-color:transparent; }
-  :focus-visible { outline:3px solid #e8a848; outline-offset:3px; }
-  header { background:#132c3c; color:white; padding:20px max(24px,calc((100vw - 1200px)/2)); display:flex; align-items:center; gap:16px; }
-  .brand-mark { background:#34d0b3; color:#103c3a; font-size:18px; font-weight:900; border-radius:10px; padding:8px 10px; }
-  header h1 { font-size:21px; letter-spacing:.02em; } header p { color:#b4c8d2; font-size:12px; }
-  .local-chip { margin-left:auto; border:1px solid #486473; border-radius:30px; padding:5px 12px; font-size:12px; white-space:nowrap; color:#cee6e1; }
-  .main { max-width:1248px; margin:auto; padding:30px 24px 20px; }
-  .intro { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:22px; } .intro h2 { font-size:28px; letter-spacing:-.03em; } .intro p { color:var(--muted); font-size:14px; margin-top:6px; }
-  .eyebrow { color:var(--accent); font-size:12px; font-weight:700; letter-spacing:.12em; }
-  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:24px; } .stat { background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:16px 20px; } .stat strong { display:block; font-size:28px; font-variant-numeric:tabular-nums; line-height:1.2; } .stat span { font-size:12px; color:var(--muted); } .stat-running strong { color:#9c650c; } .stat-done strong { color:var(--accent); }
-  .grid { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:22px; align-items:start; }
-  .card { background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:24px; box-shadow:0 3px 14px #193a4b04; min-width:0; }
-  .card h2,.scans-section h2 { font-size:18px; } .subtle { color:var(--muted); font-size:13px; margin-top:5px; }
-  fieldset { border:0; padding:20px 0; border-bottom:1px solid #e8eef0; min-width:0; } legend { float:left; width:100%; font-weight:700; font-size:14px; margin-bottom:12px; } legend+* { clear:both; } .section-no { color:var(--accent); margin-right:8px; font-variant-numeric:tabular-nums; }
-  label { display:block; font-size:13px; font-weight:600; margin:12px 0 6px; } input[type="text"], input[type="password"],select { width:100%; padding:10px 12px; background:#fff; border:1px solid #bdcdd5; border-radius:7px; color:var(--ink); font-size:14px; min-width:0; } input:focus,select:focus { border-color:var(--accent); } input[readonly] { background:#f4f7f8; color:var(--muted); }
-  .hint { color:var(--muted); font-size:12px; margin-top:7px; line-height:1.7; overflow-wrap:anywhere; } code { background:#eef3f5; padding:1px 4px; border-radius:3px; font-size:.93em; }
-  .language-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:8px; } .language-grid label { display:flex; align-items:center; gap:8px; font-weight:400; border:1px solid var(--line); border-radius:7px; padding:8px 10px; margin:0; } input[type="checkbox"] { width:16px; height:16px; accent-color:var(--accent); flex-shrink:0; }
-  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:16px; } .checkrow { display:flex; gap:10px; margin-top:14px; align-items:flex-start; } .checkrow input { margin-top:4px; } .checkrow label { margin:0; font-size:14px; } .checkrow .hint { display:block; font-weight:400; margin-top:2px; }
-  .privacy { background:#eff8f6; border:1px solid #cfe8e1; border-radius:8px; padding:12px 14px; color:#305e59; font-size:12px; margin-top:18px; } .btn-primary { width:100%; padding:13px 18px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; margin-top:18px; } .btn-primary:hover { background:#056661; } button:disabled { opacity:.6; cursor:wait; }
-  .workflow { list-style:none; counter-reset:stages; } .workflow li { position:relative; padding:0 0 20px 36px; counter-increment:stages; } .workflow li::before { content:counter(stages); position:absolute; left:0; top:0; width:24px; height:24px; border-radius:7px; background:#e8f5f1; color:var(--accent); text-align:center; font-size:12px; font-weight:700; line-height:24px; } .workflow strong { font-size:13px; } .workflow p { font-size:12px; color:var(--muted); margin-top:3px; } .aside-title { margin-bottom:18px; } .side-note { border-top:1px solid var(--line); padding-top:16px; font-size:12px; color:var(--muted); } .side-note strong { color:var(--ink); display:block; margin-bottom:4px; }
-  .scans-section { margin-top:28px; } .section-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:16px; } .section-heading p { color:var(--muted); font-size:12px; }
-  .scans-table { background:white; border:1px solid var(--line); border-radius:12px; overflow:hidden; } .scan-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:16px; padding:17px 20px; border-bottom:1px solid #e8eef0; } .scan-row:last-child { border-bottom:0; } .scan-repo-wrap { display:flex; gap:6px; align-items:center; min-width:0; } .scan-repo { overflow-wrap:anywhere; font-size:14px; font-weight:600; } .scan-meta { font-size:12px; color:var(--muted); margin-top:4px; }
-  .badge { border-radius:20px; padding:4px 10px; font-size:12px; white-space:nowrap; background:#eef3f5; } .badge-running,.badge-cancelling,.badge-timeout { background:#fff3d6; color:#865600; } .badge-done { background:#dff4eb; color:#116747; } .badge-error { background:#ffebea; color:#b52b35; } .scan-actions { display:flex; flex-wrap:wrap; gap:7px; } .link-btn,.delete-btn { border:1px solid var(--line); background:white; padding:5px 9px; border-radius:6px; font-size:12px; text-decoration:none; white-space:nowrap; cursor:pointer; } .delete-btn { color:#ad3440; } .link-btn:hover { background:#eef8f5; } .copy-btn { border:0; background:none; color:var(--muted); cursor:pointer; padding:4px; font-size:12px; flex-shrink:0; } .copied { color:var(--accent); }
-  .empty-state { padding:36px 20px; text-align:center; color:var(--muted); font-size:14px; } .empty-state strong { display:block; color:var(--ink); margin-bottom:5px; } .feedback { margin-top:12px; color:#b52b35; font-size:13px; } .feedback:empty { display:none; } [hidden] { display:none!important; }
-  footer { font-size:11px; color:var(--muted); display:flex; justify-content:space-between; gap:12px; padding:24px 0 6px; } footer a { color:inherit; }
-  @media(max-width:920px) { .grid { grid-template-columns:minmax(0,1fr) 250px; gap:16px; } .card { padding:20px; } .scan-row { grid-template-columns:minmax(0,1fr) auto; } .scan-actions { grid-column:1/-1; } }
-  @media(max-width:700px) { header { padding:16px; gap:10px; } header h1 { font-size:18px; } header p { display:none; } .brand-mark { font-size:14px; } .main { padding:22px 16px; } .intro h2 { font-size:24px; } .grid { grid-template-columns:1fr; } .stats { grid-template-columns:repeat(2,1fr); gap:10px; } .stat { padding:12px 16px; } .stat strong { font-size:24px; } .two-col { grid-template-columns:1fr; gap:0; } .language-grid { grid-template-columns:repeat(2,1fr); } .section-heading { align-items:flex-start; flex-direction:column; gap:2px; } footer { flex-direction:column; } }
-  @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; transition:none!important; } }
-
-  .main { padding-top:38px; }
-  .intro { padding:8px 2px 14px; }
-  .intro h2 { font-size:clamp(26px,3.4vw,36px); }
-  .stats { gap:16px; }
-  .stat { min-height:104px; position:relative; overflow:hidden; }
-  .stat::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:#c4d6dc; }
-  .stat-running::before { background:#d59e40; } .stat-done::before { background:var(--accent); }
-  .grid { grid-template-columns:minmax(0,1fr) 295px; }
-  .language-grid label:hover { border-color:#72b8ae; background:#f2faf8; }
-  .language-grid label:has(input:checked) { background:#e8f7f3; border-color:#19968a; color:#075f5a; }
-  .scans-table { box-shadow:var(--shadow); border-radius:16px; }
-  .scan-row { min-height:83px; }
-  .scan-row:hover { background:#f8fbfb; }
-  .link-btn:hover,.delete-btn:hover { border-color:#9bbab8; }
-  .delete-btn:hover { background:#fff0ed; border-color:#deb5b5; }
-  .workflow li::after { content:""; position:absolute; left:11px; top:29px; bottom:5px; border-left:1px solid #d4e8e2; }
-  .workflow li:last-child::after { display:none; }
-  @media(max-width:920px){ .grid{grid-template-columns:1fr;} .workflow{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;} .workflow li::after{display:none;} }
-  @media(max-width:600px){ .stats{grid-template-columns:repeat(2,minmax(0,1fr));}.workflow{grid-template-columns:1fr;}.scan-row{gap:9px;} }
-
-  /* Shared visual language: indigo-free, calm graphite and teal workbench. */
-  :root { --ink:#192c3b; --muted:#607585; --line:#dbe6e9; --accent:#087c76; --paper:#ffffff; --bg:#f2f6f7; --shadow:0 12px 42px rgba(22,48,61,.06); }
-  body { background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; }
-  header { background:#142d3b; }
-  .main { max-width:1280px; }
-  .card,.overview,.status-bar,.stats .stat { box-shadow:var(--shadow); border-radius:16px; }
-  .card { border:1px solid var(--line); }
-  .btn-primary,.btn.ready { background:var(--accent); border-color:var(--accent); }
-  button,a,input,select { transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease; }
-  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline:3px solid #e3a947; outline-offset:3px; }
-  .dialog { width:min(460px,calc(100% - 32px)); max-width:none; max-height:calc(100% - 32px); overflow:auto; margin:auto; border:1px solid #d9e4e7; border-radius:18px; padding:0; background:#fff; color:var(--ink); box-shadow:0 30px 85px rgba(12,35,48,.25); }
-  .dialog::backdrop { background:rgba(10,31,42,.60); backdrop-filter:blur(3px); }
-  .dialog-inner { padding:26px; }
-  .dialog-symbol { display:grid; place-items:center; width:42px; height:42px; border-radius:12px; margin-bottom:14px; background:#fff0ed; color:#af443e; font-size:22px; }
-  .dialog h2 { font-size:20px; letter-spacing:-.02em; margin:0 0 8px; }
-  .dialog p { color:var(--muted); line-height:1.75; font-size:14px; overflow-wrap:anywhere; }
-  .dialog .target { background:#f1f5f6; padding:11px 13px; border-radius:9px; margin:15px 0; color:var(--ink); font-weight:600; }
-  .dialog-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:22px; }
-  .dialog-actions button { border:1px solid var(--line); border-radius:9px; padding:10px 17px; cursor:pointer; background:#fff; color:var(--ink); font:inherit; font-size:13px; font-weight:700; }
-  .dialog-actions .danger { color:#fff; background:#b23b40; border-color:#b23b40; }
-  .dialog-actions .danger:hover { background:#922c32; }
-  .dialog-actions button:disabled { opacity:.55; cursor:wait; }
-  @media(prefers-reduced-motion:reduce) { * { transition:none!important; animation:none!important; } }
-</style>
+<script src="/assets/shell.js"></script><link rel="stylesheet" href="/assets/tabler-1.4.0.min.css">
+<link rel="stylesheet" href="/assets/workbench.css">
+<link rel="stylesheet" href="/assets/index.css">
 </head>
 <body>
-<header><div class="brand-mark" aria-hidden="true">911</div><div><h1>911VulScan</h1><p>代码安全分析 · 验证 · 中文报告</p></div><span class="local-chip" title="服务仅监听本机回环地址，不向局域网开放">仅限本机访问</span></header>
-<main class="main">
-  <div class="intro"><div><span class="eyebrow">安全扫描工作台</span><h2>从代码到可验证的安全发现</h2><p>选择代码仓库和分析模型，跟踪扫描进度并查看中文报告。</p></div></div>
+<a class="skip-link" href="#main">跳到主要内容</a>
+<header class="app-header"><div class="brand-mark" aria-hidden="true">911</div><div class="brand">911VulScan</div><span class="header-subtitle">安全扫描工作台</span><div class="header-actions"><span class="local-chip" title="服务仅监听本机回环地址，不向局域网开放">仅限本机访问</span><button class="btn theme-toggle" type="button" data-theme-toggle aria-label="深色主题" aria-pressed="false" title="切换为深色主题"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="theme-moon" d="M20.8 13A9 9 0 0 1 11 3.2 9 9 0 1 0 20.8 13Z"/><g class="theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></svg><span data-theme-label>主题</span></button></div></header>
+<main class="main" id="main">
+  <div class="intro"><div><span class="eyebrow">911VulScan</span><h1>安全扫描工作台</h1><p>扫描代码仓库，追踪发现与验证。</p></div></div>
   <section class="stats" aria-label="扫描任务概览"><div class="stat"><strong id="stat-total">{{len .Jobs}}</strong><span>全部任务</span></div><div class="stat stat-running"><strong id="stat-running">{{.RunningCount}}</strong><span>进行中 / 排队中</span></div><div class="stat stat-done"><strong id="stat-done">{{.DoneCount}}</strong><span>已完成</span></div><div class="stat"><strong id="stat-attention">{{.AttentionCount}}</strong><span>需处理</span></div></section>
   <div class="grid">
-    <section class="card"><h2>新建扫描</h2><p class="subtle">默认使用 DeepSeek；所有选项仅对本次任务生效。</p>
+    <section class="card"><h2>新建扫描</h2>
       <form method="POST" action="/scan" id="scan-form">
         <input type="hidden" name="csrf" value="{{.CSRF}}">
         <fieldset><legend><span class="section-no">01</span>扫描目标</legend>
           <label for="repo">仓库地址或本机项目路径</label><input type="text" id="repo" name="repo" required placeholder="https://github.com/org/repo 或 /path/to/project" autocomplete="off" aria-describedby="repo-hint">
+          <div class="two-col"><div><label for="ref">版本 / 标签（可选）</label><input type="text" id="ref" name="ref" list="ref-options" placeholder="留空扫描默认分支，如 v1.0.3" autocomplete="off" aria-describedby="ref-hint"></div><div style="display:flex;align-items:flex-end"><button type="button" class="btn" id="load-refs" aria-describedby="ref-hint">获取版本列表</button></div></div>
+          <datalist id="ref-options"></datalist>
+          <p class="hint" id="ref-hint">用于扫描历史版本：填写远端标签（如 <code>v1.2.0</code>）、分支或提交号，程序会在克隆后检出该版本再分析，报告会记录实际提交。留空则使用默认分支。</p>
+          <p class="feedback" id="ref-feedback" role="status"></p>
           <p class="hint" id="repo-hint">仅扫描你有权测试的项目。私有仓库请使用本机 Git 凭据，不要把密码或令牌放进地址。</p>
           <label id="language-label">扫描语言</label><div class="language-grid" role="group" aria-labelledby="language-label">
             <label><input type="checkbox" name="languages" value="c"> C / C++</label><label><input type="checkbox" name="languages" value="python"> Python</label><label><input type="checkbox" name="languages" value="javascript"> JavaScript</label><label><input type="checkbox" name="languages" value="go"> Go</label>
-          </div><p class="hint">不勾选时自动分析达到规模阈值的全部已检测语言。指定语言可缩小范围，减少时间与模型费用。</p>
+
+  </div><p class="hint">不勾选时自动分析达到规模阈值的全部已检测语言。指定语言可缩小范围，减少时间与模型费用。</p>
         </fieldset>
         <fieldset><legend><span class="section-no">02</span>模型配置</legend>
           <div class="two-col"><div><label for="provider">模型来源</label><select name="provider" id="provider"><option value="deepseek" selected>DeepSeek（默认）</option><option value="configured">使用已有模型配置</option></select></div><div id="deepseek-model"><label for="model">分析模型</label><select name="model" id="model" aria-describedby="model-hint"><option value="deepseek-flash" selected>deepseek-flash（默认）</option><option value="deepseek-v4-pro">deepseek-v4-pro</option></select></div></div>
@@ -106,36 +38,37 @@
           <div id="configured-settings" hidden><label for="llm_config">已有配置</label><select name="llm_config" id="llm_config" disabled><option value="">沿用配置文件中的默认值</option>{{range .LLMConfigs}}<option value="{{.}}">{{.}}</option>{{end}}</select><p class="hint">按已有配置选择各阶段的服务商、模型和凭据；此模式不使用上方 DeepSeek 密钥。未显式设置默认值时兼容已有配置；全新配置默认 deepseek-default。</p></div>
         </fieldset>
         <fieldset><legend><span class="section-no">03</span>验证与扫描范围</legend>
-          <div class="checkrow"><input type="checkbox" id="verify" name="verify" checked><label for="verify">攻击者模拟验证<span class="hint">对初步发现进行第二阶段验证，降低误报。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="verify" name="verify" checked><label for="verify">模型复核（攻击者模拟）<span class="hint">对候选问题进行第二阶段模型复核；结果与动态复现分别展示。</span></label></div>
           <div class="checkrow"><input type="checkbox" id="dynamic_test" name="dynamic_test"><label for="dynamic_test">Docker 隔离动态测试<span class="hint">执行候选验证用例，包括 C / C++ 测试模板；需要本机 Docker 可用，耗时与资源开销更高。</span></label></div>
           <div class="two-col"><div><label for="docker-proxy-ip">Docker 构建代理 IP（可选）</label><input type="text" id="docker-proxy-ip" name="docker_proxy_ip" placeholder="127.0.0.1" autocomplete="off" aria-describedby="docker-proxy-hint"></div><div><label for="docker-proxy-port">代理端口（可选）</label><input type="text" id="docker-proxy-port" name="docker_proxy_port" inputmode="numeric" placeholder="7890" autocomplete="off" aria-describedby="docker-proxy-hint"></div></div>
           <p class="hint" id="docker-proxy-hint">用于 Docker 构建时下载依赖，支持 HTTP / mixed 代理端口。IP 和端口全部留空时使用 Docker 现有网络配置；本机 mihomo 可填写 127.0.0.1 和对应端口。</p>
-          <div class="checkrow"><input type="checkbox" id="library_mode" name="library_mode"><label for="library_mode">库项目模式<span class="hint">将公开 API 作为入口，适合没有主程序或路由的库；大型库会明显增加分析时间和模型费用。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="library_mode" name="library_mode"><label for="library_mode">库项目模式<span class="hint">以公开 API 作为分析入口。</span></label></div>
         </fieldset>
         <fieldset><legend><span class="section-no">04</span>扫描时间上限</legend>
           <label for="scan-timeout">本次扫描最长运行时间</label>
           <select id="scan-timeout" name="scan_timeout" aria-describedby="scan-timeout-hint"><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="2h" selected>2 小时（默认）</option><option value="4h">4 小时</option><option value="8h">8 小时</option><option value="24h">24 小时</option></select>
-          <p class="hint" id="scan-timeout-hint">这是主 Python 扫描调用的总时间预算，不是每个阶段的预计耗时（ETA）。从开始扫描时计时，不含排队、仓库克隆、后续补充报告、摘要生成和清理；辅助调用使用独立时间上限。达到上限将停止扫描并保留已生成结果。</p>
+          <p class="hint" id="scan-timeout-hint">主扫描总预算；超时后保留已有结果。</p><details class="task-settings"><summary>时间范围</summary><p class="hint">总时间预算不是每个阶段的预计耗时。不含排队、克隆、补充报告和清理；辅助调用使用独立时间上限。</p></details>
         </fieldset>
         <p class="privacy">数据提示：界面仅在本机提供服务。扫描会将相关源代码发送给所选模型服务商，并产生相应 API 费用；启用动态测试还会在本机 Docker 中运行测试代码。</p>
         <button type="submit" class="btn-primary" id="start-button">开始安全扫描 →</button><p class="feedback" id="form-feedback" role="alert"></p>
       </form>
     </section>
-    <aside class="card"><h2 class="aside-title">扫描流程</h2><ol class="workflow"><li><strong>代码解析</strong><p>提取函数、调用关系与可达入口。</p></li><li><strong>上下文增强</strong><p>补充项目背景与代码安全语义。</p></li><li><strong>漏洞分析</strong><p>由模型识别风险与潜在攻击路径。</p></li><li><strong>复核与动态测试</strong><p>按选项模拟攻击、运行隔离测试。</p></li><li><strong>结果报告</strong><p>查看中文摘要、风险详情和披露材料。</p></li></ol><div class="side-note"><strong>结果需要人工复核</strong>模型发现不等于已确认漏洞。请结合证据、适用前提和动态测试结果判断，避免直接用于生产环境。</div></aside>
-  </div>
-  <section class="scans-section"><div class="section-heading"><h2>最近扫描</h2><p>任务时间为 UTC · 打开任务查看实时进度</p></div>
-    <div class="scans-table" id="scans-list">{{if .Jobs}}{{range .Jobs}}<div class="scan-row" id="row-{{.ID}}" data-status="{{.Status}}"><div><div class="scan-repo-wrap"><span class="scan-repo" title="{{.Repo}}">{{.Repo}}</span><button class="copy-btn" type="button" title="复制仓库地址或路径" aria-label="复制仓库地址或路径" data-repo="{{.Repo}}">复制</button></div><div class="scan-meta">{{.StartedAt}} · {{.ID}}</div></div><span class="badge badge-{{.Status}}">{{if eq .Status "running"}}进行中{{else if eq .Status "cancelling"}}正在取消{{else if eq .Status "cancelled"}}已取消{{else if eq .Status "done"}}已完成{{else if eq .Status "timeout"}}已超时{{else}}失败{{end}}</span><div class="scan-actions"><a class="link-btn" href="/scan/{{.ID}}">{{if eq .Status "running"}}查看进度{{else}}查看日志{{end}}</a>{{if .HasSummary}}<a class="link-btn" href="/summary/{{.ID}}" target="_blank" rel="noopener">摘要</a>{{end}}{{if .HasReport}}<a class="link-btn" href="/report/{{.ID}}" target="_blank" rel="noopener">报告</a>{{end}}<button class="delete-btn" type="button" title="删除扫描与产物" data-id="{{.ID}}">删除</button></div></div>{{end}}{{else}}<div class="empty-state" id="empty-state"><strong>还没有扫描任务</strong>填写上方项目地址，开始第一次安全分析。</div>{{end}}</div><p class="feedback" id="list-feedback" role="status" aria-live="polite"></p>
+
+  <section class="scans-section"><div class="section-heading"><h2>最近扫描</h2><p>UTC+8</p></div>
+    <div class="table-tools"><label for="job-query">查找任务</label><input id="job-query" type="search" placeholder="搜索项目路径、任务编号"><label for="job-status">任务状态</label><select id="job-status"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">运行中</option><option value="cancelling">取消中</option><option value="cancelled">已取消</option><option value="done">完成</option><option value="timeout">超时</option><option value="error">失败</option></select><span id="job-count" class="table-count"></span></div><div class="scans-table" id="scans-list">{{if .Jobs}}{{range .Jobs}}<div class="scan-row" id="row-{{.ID}}" data-status="{{.Status}}"><div><div class="scan-repo-wrap"><span class="scan-repo" title="{{.Repo}}">{{.Repo}}</span><button class="copy-btn" type="button" title="复制仓库地址或路径" aria-label="复制仓库地址或路径" data-repo="{{.Repo}}">复制</button></div><div class="scan-meta">{{.StartedAt}} · {{.ID}}</div></div><span class="badge badge-{{.Status}}">{{if eq .Status "queued"}}排队中{{else if eq .Status "running"}}运行中{{else if eq .Status "cancelling"}}正在取消{{else if eq .Status "cancelled"}}已取消{{else if eq .Status "done"}}已完成{{else if eq .Status "timeout"}}已超时{{else}}失败{{end}}</span><div class="scan-actions"><a class="link-btn" href="/scan/{{.ID}}">查看详情</a>{{if .HasSummary}}<a class="link-btn" href="/summary/{{.ID}}" target="_blank" rel="noopener">摘要</a>{{end}}{{if .HasReport}}<a class="link-btn" href="/report/{{.ID}}" target="_blank" rel="noopener">报告</a>{{end}}<button class="delete-btn" type="button" title="删除扫描与产物" data-id="{{.ID}}">删除</button></div></div>{{end}}{{else}}<div class="empty-state" id="empty-state"><strong>还没有扫描任务</strong>填写上方项目地址，开始第一次安全分析。</div>{{end}}</div><p class="feedback" id="list-feedback" role="status" aria-live="polite"></p>
   </section>
+  </div>
+
   <footer><span>911VulScan · 中文安全扫描工作台</span></footer>
 </main>
 <dialog class="dialog" id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-message">
   <div class="dialog-inner">
-    <div class="dialog-symbol" aria-hidden="true">!</div>
-    <h2 id="delete-title">删除扫描任务</h2>
-    <p id="delete-message">任务日志、摘要、报告和相关文件将被永久删除。正在运行的任务会先停止。</p>
-    <p class="target" id="delete-target"></p>
+    <div class="dialog-heading"><div class="dialog-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6m4-6v6"/></svg></div><h2 id="delete-title">删除扫描任务？</h2></div>
+    <p id="delete-message">将删除本次任务的日志、报告与材料。此操作无法撤销。</p>
+    <div class="dialog-target"><strong id="delete-target"></strong><code id="delete-job-id"></code></div>
+    <p class="dialog-feedback" id="delete-feedback" role="alert"></p>
     <div class="dialog-actions">
-      <button type="button" id="delete-dismiss">保留任务</button>
+      <button type="button" id="delete-dismiss" autofocus>保留任务</button>
       <button type="button" class="danger" id="delete-confirm">确认删除</button>
     </div>
   </div>
@@ -152,6 +85,34 @@ function updateProvider() {
   document.getElementById('model').disabled = configured;
 }
 provider.addEventListener('change', updateProvider);
+const refFeedback = document.getElementById('ref-feedback');
+document.getElementById('load-refs').addEventListener('click', async function() {
+  const repo = document.getElementById('repo').value.trim();
+  const options = document.getElementById('ref-options');
+  refFeedback.textContent = '';
+  if (!repo) { refFeedback.textContent = '请先填写仓库地址。'; return; }
+  if (!/^(https?:\/\/|git@)/.test(repo)) { refFeedback.textContent = '本机路径没有远端标签，请直接填写分支名或提交号。'; return; }
+  this.disabled = true; this.setAttribute('aria-busy','true');
+  try {
+    const response = await fetch('/refs?repo=' + encodeURIComponent(repo));
+    if (!response.ok) throw new Error((await response.text()).trim() || '无法读取版本列表。');
+    const refs = (await response.json()).refs || [];
+    options.innerHTML = '';
+    for (const item of refs) {
+      const option = document.createElement('option');
+      option.value = item.name;
+      option.label = item.kind === 'tag' ? '标签' : '分支';
+      options.appendChild(option);
+    }
+    refFeedback.textContent = refs.length
+      ? '已获取 ' + refs.length + ' 个版本，可在输入框中输入筛选。'
+      : '远端没有可列出的标签或分支，请确认地址与访问权限。';
+  } catch (error) {
+    refFeedback.textContent = error instanceof TypeError ? '连接中断，请稍后重试。' : error.message;
+  } finally {
+    this.disabled = false; this.setAttribute('aria-busy','false');
+  }
+});
 updateProvider();
 // Do not cache the key in localStorage, cookies, or task metadata.
 let submitting = false;
@@ -161,7 +122,7 @@ document.getElementById('scan-form').addEventListener('submit', async function(e
   submitting = true;
   const button = document.getElementById('start-button');
   const feedback = document.getElementById('form-feedback');
-  button.disabled = true; button.textContent = '正在创建扫描任务…'; feedback.textContent = '';
+  button.disabled = true; button.setAttribute('aria-busy','true'); button.textContent = '正在创建扫描任务…'; feedback.textContent = '';
   try {
     const response = await fetch('/scan', { method:'POST', body:new URLSearchParams(new FormData(this)) });
     if (!response.ok) throw new Error((await response.text()).trim() || '无法创建扫描，请稍后重试。');
@@ -171,12 +132,13 @@ document.getElementById('scan-form').addEventListener('submit', async function(e
     location.assign(destination.href);
   } catch (error) {
     feedback.textContent = error instanceof TypeError ? '连接中断，任务可能已创建。请先刷新查看最近扫描，再决定是否重试。' : error.message;
-    button.disabled = false; button.textContent = '开始安全扫描 →'; submitting = false;
+    button.disabled = false; button.setAttribute('aria-busy','false'); button.textContent = '开始安全扫描 →'; submitting = false;
   }
 });
 window.addEventListener('pageshow', function() {
   submitting = false;
   document.getElementById('start-button').disabled = false;
+  document.getElementById('start-button').setAttribute('aria-busy','false');
   document.getElementById('start-button').textContent = '开始安全扫描 →';
   document.getElementById('api_key').value = '';
   updateProvider();
@@ -191,46 +153,87 @@ async function copyRepo(btn) {
   try {
     await navigator.clipboard.writeText(btn.dataset.repo);
     btn.classList.add('copied'); btn.textContent = '已复制';
+    VulscanUI.notify('仓库地址已复制。',{button:btn});
     setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '复制'; }, 1500);
-  } catch (_) { document.getElementById('list-feedback').textContent = '复制失败，请选中仓库地址后手动复制。'; }
+  } catch (_) { VulscanUI.notify('复制失败，请选中仓库地址后手动复制。',{tone:'error',button:btn}); }
 }
 function updateStats() {
   const rows = [...document.querySelectorAll('.scan-row')];
   document.getElementById('stat-total').textContent = rows.length;
-  document.getElementById('stat-running').textContent = rows.filter(r => ['running','cancelling'].includes(r.dataset.status)).length;
+  document.getElementById('stat-running').textContent = rows.filter(r => ['queued','running','cancelling'].includes(r.dataset.status)).length;
   document.getElementById('stat-done').textContent = rows.filter(r => r.dataset.status === 'done').length;
-  document.getElementById('stat-attention').textContent = rows.filter(r => !['running','cancelling','done'].includes(r.dataset.status)).length;
+  document.getElementById('stat-attention').textContent = rows.filter(r => !['queued','running','cancelling','done'].includes(r.dataset.status)).length;
 }
 const deleteDialog = document.getElementById('delete-dialog');
 let pendingDelete = null;
 function requestDelete(id, button) {
   const row = document.getElementById('row-' + id);
   if (!row || !deleteDialog || deleteDialog.open) return;
-  pendingDelete = {id, button};
+  const visibleRows = [...document.querySelectorAll('#scans-list .scan-row:not([hidden])')];
+  const position = visibleRows.indexOf(row);
+  const neighbor = visibleRows[position + 1] || visibleRows[position - 1];
+  pendingDelete = {id, button, nextFocus:neighbor?.querySelector('.link-btn')};
   document.getElementById('delete-target').textContent = row.querySelector('.scan-repo')?.textContent || id;
+  document.getElementById('delete-job-id').textContent = id;
+  document.getElementById('delete-message').textContent = ['queued','running','cancelling'].includes(row.dataset.status)
+    ? '将停止扫描，并删除本次任务的日志、报告与材料。此操作无法撤销。'
+    : '将删除本次任务的日志、报告与材料。此操作无法撤销。';
+  document.getElementById('delete-feedback').textContent = '';
+  document.getElementById('delete-confirm').textContent = '确认删除';
   deleteDialog.showModal();
 }
 document.getElementById('delete-dismiss').addEventListener('click', () => deleteDialog.close());
-deleteDialog.addEventListener('close', () => { pendingDelete = null; });
+deleteDialog.addEventListener('cancel', event => {
+  if (deleteDialog.getAttribute('aria-busy') === 'true') event.preventDefault();
+});
+deleteDialog.addEventListener('close', () => {
+  const opener = pendingDelete?.button;
+  const nextFocus = pendingDelete?.nextFocus;
+  pendingDelete = null;
+  if (opener?.isConnected) opener.focus({preventScroll:true});
+  else (nextFocus?.isConnected ? nextFocus : document.getElementById('job-query')).focus({preventScroll:true});
+});
 document.getElementById('delete-confirm').addEventListener('click', () => {
   if (pendingDelete) deleteScan(pendingDelete.id, pendingDelete.button);
 });
 async function deleteScan(id, button) {
+  if (deleteDialog.getAttribute('aria-busy') === 'true') return;
   const confirmButton = document.getElementById('delete-confirm');
+  const dismissButton = document.getElementById('delete-dismiss');
+  const modalFeedback = document.getElementById('delete-feedback');
+  deleteDialog.setAttribute('aria-busy','true'); dismissButton.disabled = true;
   confirmButton.disabled = true; confirmButton.textContent = '正在删除…';
   const feedback = document.getElementById('list-feedback');
   if (button) button.disabled = true;
-  feedback.textContent = '';
+  feedback.textContent = ''; modalFeedback.textContent = '';
   try {
     const csrf = document.querySelector('meta[name="csrf"]').content;
     const response = await fetch('/scan/' + encodeURIComponent(id), { method:'DELETE', headers:{'X-CSRF-Token':csrf} });
-    if (!response.ok && response.status !== 404) throw new Error();
+    if (!response.ok && response.status !== 404) throw new Error(response.status === 409
+      ? '任务仍在停止并清理资源，请稍后重试删除。'
+      : response.status === 403 ? '删除请求被拒绝，请刷新页面后重试。' : '删除未完成，请重试。');
     const row = document.getElementById('row-' + id); if (row) row.remove();
     if (!document.querySelector('#scans-list .scan-row')) document.getElementById('scans-list').innerHTML = '<div class="empty-state"><strong>还没有扫描任务</strong>填写上方项目地址，开始第一次安全分析。</div>';
-    updateStats(); feedback.textContent = '扫描及其结果已删除。'; deleteDialog.close();
-  } catch (_) { feedback.textContent = '未能确认删除结果，请刷新任务列表检查。'; if (button) button.disabled = false; }
-  finally { confirmButton.disabled = false; confirmButton.textContent = '确认删除'; }
+    updateStats(); filterJobs(); deleteDialog.close();
+    VulscanUI.notify('扫描及其结果已删除。');
+  } catch (error) {
+    modalFeedback.textContent = error instanceof TypeError ? '暂未确认删除结果。请重试，或刷新列表核对任务。' : error.message;
+    confirmButton.textContent = '重试删除';
+    if (button) button.disabled = false;
+  } finally {
+    deleteDialog.setAttribute('aria-busy','false'); dismissButton.disabled = false; confirmButton.disabled = false;
+    if (!deleteDialog.open) confirmButton.textContent = '确认删除';
+    else if (modalFeedback.textContent) { modalFeedback.tabIndex = -1; modalFeedback.focus(); }
+  }
 }
+function filterJobs() {
+ const query=document.getElementById('job-query').value.trim().toLocaleLowerCase();
+ const status=document.getElementById('job-status').value;
+ const rows=[...document.querySelectorAll('.scan-row')];
+ let count=0; rows.forEach(row=>{row.hidden=!!((status&&row.dataset.status!==status)||(query&&!row.textContent.toLocaleLowerCase().includes(query)));if(!row.hidden)count++;});
+ document.getElementById('job-count').textContent=rows.length ? '显示 '+count+' / '+rows.length+' 个任务' : '';
+}
+['job-query','job-status'].forEach(id=>document.getElementById(id).addEventListener('input',filterJobs));filterJobs();
 </script>
 </body>
 </html>

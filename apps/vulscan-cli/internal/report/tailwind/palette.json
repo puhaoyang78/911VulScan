@@ -2,60 +2,36 @@
   "comment": "#540: the single source of truth for the report palette — consumed by BOTH tailwind.config.js (the build) and the Go coverage test (the config->CSS drift check). Changed here = regenerate + update the report.css sha.",
   "colors": {
     "navy": {
-      "700": "#0f3460",
-      "800": "#16213e",
-      "900": "#1a1a2e"
+      "700": "#f5f7fa",
+      "800": "#ffffff",
+      "900": "#f4f6fa"
     },
-    "accent": "#e94560",
+    "accent": "#0664bd",
     "knostic": {
-      "purple": "#6861FF",
-      "purple-hover": "#7D77FF",
-      "purple-light": "#F0EDFF",
-      "purple-glow": "rgba(104, 97, 255, 0.08)",
-      "navy": "#1F1E45",
-      "navy-deep": "#1F0451",
-      "body": "#727272",
-      "muted": "#87909E",
-      "border": "#B3BEFB",
-      "border-light": "#E8ECF4",
-      "card-bg": "#F5F7FB"
-    },
-    "vulscan": {
-      "page": "#f2f6f7",
-      "ink": "#142c3a",
-      "line": "#dce7e8",
-      "accent": "#087c76",
-      "nav": "#142d3b",
-      "nav-line": "#294653",
-      "nav-text": "#c9e1df",
-      "nav-hover": "#24505a",
-      "hero-start": "#15303d",
-      "hero-end": "#23515a",
-      "hero-text": "#d2eeeb",
-      "hover-line": "#83b9b2",
-      "panel-ink": "#213746",
-      "panel-title": "#203746",
-      "panel-muted": "#647987",
-      "code-ink": "#e2eff0",
-      "chip": "#eaf3f2",
-      "panel-detail": "#34525f",
-      "panel-line": "#dbe6e8",
-      "finding-line": "#dbe7e7",
-      "code-bg": "#172e3d",
-      "focus": "#c69a3b",
-      "shadow-base": "#112531",
-      "shadow-deep": "#11313f",
-      "shadow-teal": "#153f45",
-      "shadow-navy": "#122c3c"
+      "purple": "#0664bd",
+      "purple-hover": "#04529c",
+      "purple-light": "#eff5fd",
+      "purple-glow": "rgba(6,100,189,0.08)",
+      "navy": "#182433",
+      "navy-deep": "#182433",
+      "body": "#304359",
+      "muted": "#526477",
+      "border": "#dce2e9",
+      "border-light": "#e8edf2",
+      "card-bg": "#ffffff"
     }
   },
   "fontFamily": {
     "knostic-sans": [
+      "Inter",
+      "PingFang SC",
+      "Microsoft YaHei",
+      "Noto Sans CJK SC",
       "system-ui",
       "sans-serif"
     ]
   },
   "borderRadius": {
-    "card": "20px"
+    "card": "10px"
   }
 }

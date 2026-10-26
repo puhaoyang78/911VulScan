@@ -211,7 +211,8 @@ func TestUIPagesLoadNoExternalScripts(t *testing.T) {
 		var srcTags []string
 		for _, m := range uiAnyScriptSrc.FindAllStringSubmatch(s, -1) {
 			src := m[1]
-			if !strings.HasPrefix(src, "/assets/") || !vendored[strings.TrimPrefix(src, "/assets/")] {
+			_, mime, assetErr := Asset(strings.TrimPrefix(src, "/assets/"))
+			if !strings.HasPrefix(src, "/assets/") || assetErr != nil || mime != "application/javascript; charset=utf-8" {
 				t.Fatalf("%s: script src %q — only the vendored /assets scripts are permitted (external origin or unknown vendor name)", page, src)
 			}
 			srcTags = append(srcTags, src)
@@ -286,10 +287,11 @@ func TestUIPagesLoadNoExternalScripts(t *testing.T) {
 // relative order while breaking rendering, so the position is pinned
 // alongside the order.
 func TestUIHTMLScriptsVersionedAndOrdered(t *testing.T) {
-	var want []string
+	want := []string{"shell.js"}
 	for _, s := range uiVendorScripts {
 		want = append(want, s.name)
 	}
+	want = append(want, "highlight-11.11.1.min.js", "reader.js", "documents.js")
 	for _, page := range []string{"summary.html", "disclosure.html"} {
 		s := readPage(t, page)
 		var got []string
@@ -297,7 +299,9 @@ func TestUIHTMLScriptsVersionedAndOrdered(t *testing.T) {
 		for _, m := range uiAnyScriptSrc.FindAllStringSubmatchIndex(s, -1) {
 			src := s[m[2]:m[3]]
 			got = append(got, strings.TrimPrefix(src, "/assets/"))
-			lastEnd = m[1] // the whole-match end — never the capture-group end (a tag shape change would silently mis-position the pin)
+			if strings.TrimPrefix(src, "/assets/") != "documents.js" {
+				lastEnd = m[1]
+			}
 		}
 		if len(got) != len(want) {
 			t.Fatalf("%s: script tags %v, want exactly the vendored set %v (an extra or missing vendor script)", page, got, want)
@@ -306,7 +310,7 @@ func TestUIHTMLScriptsVersionedAndOrdered(t *testing.T) {
 			if got[i] != want[i] {
 				t.Fatalf("%s: script tag %d = %q, want %q (versioned names + load order are pinned)", page, i+1, got[i], want[i])
 			}
-			if _, err := FS.ReadFile("vendor/" + got[i]); err != nil {
+			if _, _, err := Asset(got[i]); err != nil {
 				t.Fatalf("%s: script tag references %q which is not in the embed: %v", page, got[i], err)
 			}
 		}
@@ -323,6 +327,9 @@ func TestUIHTMLScriptsVersionedAndOrdered(t *testing.T) {
 		}
 		if consumer < 0 || lastEnd > consumer {
 			t.Fatalf("%s: the vendored scripts end at byte %d but the consuming inline script starts at %d — marked/DOMPurify would be undefined when the consumer runs", page, lastEnd, consumer)
+		}
+		if strings.Index(s, `src="/assets/documents.js"`) < consumer {
+			t.Fatal("document controller runs before its trusted context")
 		}
 	}
 }
@@ -375,8 +382,18 @@ func TestVendorSourcesTxtMatchesPinTable(t *testing.T) {
 // pages from the sanitizer contract. Each page carries exactly ONE
 // innerHTML sink (the primary render), pinned by count below.
 func TestMDSanitizeConfigPinnedAndUsed(t *testing.T) {
+	// Check the complete shared renderer plus each executing consumer.
+	readSanitizedPage := func(t *testing.T, page string) string {
+		t.Helper()
+		source := readPage(t, page)
+		if !strings.Contains(source, "VulscanReader.markdown(document.getElementById('content'), markdown)") {
+			t.Fatalf("%s bypasses the shared Markdown renderer", page)
+		}
+		return readPage(t, "static/reader.js") + "\n" + source
+	}
+
 	extract := func(page string) string {
-		s := readPage(t, page)
+		s := readSanitizedPage(t, page)
 		const def = "const MD_SANITIZE = {"
 		i := strings.Index(s, def)
 		if i < 0 {
@@ -472,7 +489,7 @@ func TestMDSanitizeConfigPinnedAndUsed(t *testing.T) {
 	// the identifier one more time than the legitimate uses. A denylist of
 	// spellings is evaded; a count is not.
 	for _, page := range []string{"summary.html", "disclosure.html"} {
-		ps := readPage(t, page)
+		ps := readSanitizedPage(t, page)
 		wantCount := map[string]int{"summary.html": 2, "disclosure.html": 2}[page]
 		if got := strings.Count(ps, "MD_SANITIZE"); got != wantCount {
 			t.Fatalf("%s: MD_SANITIZE appears %d times, want exactly %d — a post-block mutation (aliasing, bracket spelling, defineProperty, Object.assign) bypasses every pin on the block itself", page, got, wantCount)
@@ -552,8 +569,8 @@ func TestMDSanitizeConfigPinnedAndUsed(t *testing.T) {
 	}
 
 	for _, page := range []string{"summary.html", "disclosure.html"} {
-		s := readPage(t, page)
-		if !strings.Contains(s, "DOMPurify.sanitize(marked.parse(markdown), MD_SANITIZE)") {
+		s := readSanitizedPage(t, page)
+		if !strings.Contains(s, "DOMPurify.sanitize(marked.parse(String(source)),MD_SANITIZE)") {
 			t.Fatalf("%s: the primary sanitize invocation is gone — the policy block exists but the render path bypassed it", page)
 		}
 		// The single-sink pin: exactly ONE innerHTML write per page (the

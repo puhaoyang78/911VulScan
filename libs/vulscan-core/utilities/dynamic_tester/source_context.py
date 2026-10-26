@@ -1,6 +1,7 @@
 """Repository files shared by test generation and Docker staging."""
 
 from pathlib import Path
+import ast
 import shutil
 
 from core.repo_walk import walk_repository
@@ -44,13 +45,28 @@ def describe_repository(repo_path: str | None) -> dict | None:
         return None
     files = repository_files(repo_path)
     manifests = {}
+    module_imports = {}
     for path, relative in files:
         if relative in _MANIFESTS:
             if path.stat().st_size > 12000:
                 raise ValueError(f"依赖清单过大，无法提供完整构建上下文：{relative}")
             manifests[relative] = path.read_text(encoding="utf-8")
+        if path.suffix == ".py" and len(module_imports) < 160 and path.stat().st_size <= 128000:
+            try:
+                tree = ast.parse(path.read_bytes())
+            except (SyntaxError, UnicodeError):
+                continue  # Not parseable as Python 3; never guess dependencies.
+            imports = set()
+            for item in ast.walk(tree):
+                if isinstance(item, ast.Import):
+                    imports.update(alias.name.split(".")[0] for alias in item.names)
+                elif isinstance(item, ast.ImportFrom) and item.level == 0 and item.module:
+                    imports.add(item.module.split(".")[0])
+            if imports:
+                module_imports[relative] = sorted(imports)
     return {"files": [relative for _, relative in files[:160]],
-            "file_count": len(files), "manifests": manifests}
+            "file_count": len(files), "manifests": manifests,
+            "module_imports": module_imports}
 
 
 def stage_repository(work_dir: str, repo_path: str, source_file: str) -> str:

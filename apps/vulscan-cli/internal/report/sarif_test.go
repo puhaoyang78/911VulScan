@@ -531,7 +531,7 @@ func TestSARIFScanMirrorRowDoesNotDuplicateNotifications(t *testing.T) {
 	texts := notificationTexts(t, inv)
 	verifyNotifs := 0
 	for _, txt := range texts {
-		if strings.HasPrefix(txt, "步骤 漏洞验证") {
+		if strings.HasPrefix(txt, "步骤 模型复核") {
 			verifyNotifs++
 		}
 		if strings.HasPrefix(txt, "步骤 扫描：") {
@@ -571,10 +571,10 @@ func TestSARIFPartialWithoutCountsDegradesVisibly(t *testing.T) {
 	texts := notificationTexts(t, inv)
 	found := false
 	for _, txt := range texts {
-		if txt == "步骤 漏洞验证：未完整完成（状态：部分完成）" {
+		if txt == "步骤 模型复核：未完整完成（状态：部分完成）" {
 			found = true
 		}
-		if txt == "步骤 漏洞验证：0 个代码单元出错" {
+		if txt == "步骤 模型复核：0 个函数出错" {
 			t.Errorf("the misleading 0-error text must not appear; got %q", txt)
 		}
 	}

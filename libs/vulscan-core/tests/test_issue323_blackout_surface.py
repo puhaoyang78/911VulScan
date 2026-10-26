@@ -149,7 +149,7 @@ func TestReachabilityLineZZ(t *testing.T) {
 	if !strings.Contains(out, "可达性范围") {
 		t.Fatalf("no reachability line: %q", out)
 	}
-	if !strings.Contains(out, "纳入 120/120 个代码单元（减少 33.3%）") {
+	if !strings.Contains(out, "纳入 120/120 个函数（减少 33.3%）") {
 		t.Fatalf("the counts/pct missing: %q", out)
 	}
 	if !strings.Contains(out, "blacked out") {

@@ -385,6 +385,9 @@ def run_verification(
     # mutable phase holder, so they inherit the #281 post-injection refresh.
     progress = ProgressReporter("Verify", findings_input, tracker=tracker,
                                 cost_baseline=_phase_baseline)
+    from core import ui_events
+    for candidate in vulnerable_results:
+        ui_events.finding(candidate, stage="verify", force=True, model_review="pending")
 
     def _on_finding_done(unit_id: str, detail: str, unit_elapsed: float):
         progress.report(
@@ -413,6 +416,8 @@ def run_verification(
         raise
 
     progress.finish()
+    for reviewed in verified_results:
+        ui_events.finding(reviewed, stage="verify", force=True)
 
     # Count outcomes (see _count_verification_outcomes for the bucketing rules).
     _counts = _count_verification_outcomes(verified_results)

@@ -14,6 +14,25 @@ import (
 	uifiles "github.com/puhaoyang78/911VulScan/apps/vulscan-cli/ui"
 )
 
+func assertUIStyles(t *testing.T, body, nonce string) {
+	t.Helper()
+	for _, tag := range regexp.MustCompile(`<style\b[^>]*>`).FindAllString(body, -1) {
+		if !strings.Contains(tag, `nonce="`+nonce+`"`) {
+			t.Errorf("inline style nonce mismatch: %s", tag)
+		}
+	}
+	// Styles are now external same-origin assets. Require the real design
+	// foundation rather than keeping an empty inline style to satisfy the test.
+	for _, asset := range []string{"tabler-1.4.0.min.css", "workbench.css"} {
+		if !strings.Contains(body, `href="/assets/`+asset+`"`) {
+			t.Errorf("missing local stylesheet %s", asset)
+		}
+		if data, mime, err := uifiles.Asset(asset); err != nil || len(data) == 0 || mime != "text/css; charset=utf-8" {
+			t.Errorf("invalid local stylesheet %s", asset)
+		}
+	}
+}
+
 // #578 follow-up A + 1a: the CSP contract. The four UI pages carry a
 // per-response nonce (header == every inline script/style tag); /report/{id}
 // carries the no-network policy; everything unwrapped carries the fail-closed
@@ -81,9 +100,7 @@ func TestCSPPoliciesPerRoute(t *testing.T) {
 		if !strings.Contains(body, `<script nonce="`+m[1]+`">`) {
 			t.Error("GET /: the inline script's nonce does not match the header's nonce — the page is CSP-dead")
 		}
-		if !strings.Contains(body, `<style nonce="`+m[1]+`">`) {
-			t.Error("GET /: the inline style's nonce does not match the header's nonce")
-		}
+		assertUIStyles(t, body, m[1])
 		if strings.Contains(body, "onclick=") {
 			t.Error("GET /: inline event handlers survive — the nonce script-src blocks them, breaking the buttons")
 		}
@@ -110,9 +127,7 @@ func TestCSPPoliciesPerRoute(t *testing.T) {
 			if !strings.Contains(body, `<script nonce="`+m[1]+`">`) {
 				t.Errorf("GET %s: the inline script's nonce does not match the header's nonce", path)
 			}
-			if !strings.Contains(body, `<style nonce="`+m[1]+`">`) {
-				t.Errorf("GET %s: the inline style's nonce does not match the header's nonce", path)
-			}
+			assertUIStyles(t, body, m[1])
 			if strings.Contains(body, "onclick=") {
 				t.Errorf("GET %s: inline event handlers survive — the nonce script-src blocks them", path)
 			}

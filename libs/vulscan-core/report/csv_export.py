@@ -111,7 +111,7 @@ def _format_diff_banner(diff: dict) -> str:
     scope = diff.get("scope") or ""
     units_str = ""
     if units_in is not None and units_total is not None:
-        units_str = f"，{units_in}/{units_total} 个代码单元"
+        units_str = f"，{units_in}/{units_total} 个函数"
     scope_str = f"，范围={scope}" if scope else ""
     return f"# 增量扫描：{base}..{head}{scope_str}{units_str}"
 
@@ -339,7 +339,7 @@ def export_csv(experiment_path: str, dataset_path: str, output_path: str):
     for row in rows:
         f = row['stage2_verdict']
         findings[f] = findings.get(f, 0) + 1
-    print("发现项：" + "，".join(f"{display_label(k)}：{v}" for k, v in findings.items()))
+    print("漏洞：" + "，".join(f"{display_label(k)}：{v}" for k, v in findings.items()))
 
 
 def main():

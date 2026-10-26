@@ -24,7 +24,7 @@ class _FakeDocker:
         self.image = None
         self._run_outcome = run_outcome  # (stdout, stderr, code, timed_out)
 
-    def __call__(self, cmd, timeout=None, cwd=None):
+    def __call__(self, cmd, timeout=None, cwd=None, on_output=None):
         self.calls.append(list(cmd))
         if cmd[:2] == ["docker", "info"]:
             return "fixture-daemon", "", 0, False

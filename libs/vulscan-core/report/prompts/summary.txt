@@ -42,9 +42,9 @@ INSTRUCTIONS:
 - Scan Mode is derived from the top-level `diff` field on the input data:
   - If `diff` is missing or `diff.mode != "incremental"`, write: `全量扫描`
   - If `diff.mode == "incremental"`, write:
-    `增量扫描（{diff.base_sha[:8]}..{diff.head_sha[:8]}，范围={diff.scope}，{diff.units_in_diff}/{diff.units_total_parsed} 个代码单元）`
+    `增量扫描（{diff.base_sha[:8]}..{diff.head_sha[:8]}，范围={diff.scope}，{diff.units_in_diff}/{diff.units_total_parsed} 个函数）`
   - When the scan was incremental, ALSO add a paragraph immediately after the metadata block:
-    `> 本次为增量扫描，仅分析 {diff.base_sha[:8]} 与 {diff.head_sha[:8]} 之间变更涉及的 {diff.units_in_diff}/{diff.units_total_parsed} 个代码单元。未变更单元沿用最近一次判定，本次未重新检查。`
+    `> 本次为增量扫描，仅分析 {diff.base_sha[:8]} 与 {diff.head_sha[:8]} 之间变更涉及的 {diff.units_in_diff}/{diff.units_total_parsed} 个函数。未变更单元沿用最近一次判定，本次未重新检查。`
 - Processing Level comes from pipeline_stats.processing_level; if null or missing, write "未提供"
 - Reachable units comes from pipeline_stats.reachable_units; total units from pipeline_stats.total_units. When pipeline_stats.reachability_filter_applied is true, append " ({pipeline_stats.reachable_units} of {pipeline_stats.original_units} parsed, {pipeline_stats.reachability_reduction_percentage}% pruned by the reachability filter)" to the Reachable units line so the pruning is visible; when false, append " (reachability filtering not applied/recorded)"
 - Reachability warnings: iterate pipeline_stats.reachability_warnings; if non-empty, render each entry as its own bullet under the Reachable units line; if empty, OMIT the "Reachability warnings" line entirely

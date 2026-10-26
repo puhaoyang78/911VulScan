@@ -89,6 +89,15 @@ assert not (root / "openant").exists()
                         with urllib.request.urlopen(match.group(), timeout=5) as response:
                             assert response.status == 200
                             assert "911VulScan" in response.read().decode()
+                        # Check exact packaged font/highlighter/theme bytes,
+                        # not just an HTML page mentioning their filenames.
+                        for name, folder in (("tabler-1.4.0.min.css", "design"),
+                                             ("highlight-11.11.1.min.js", "design"),
+                                             ("inter-latin-wght-5.2.5.woff2", "design"),
+                                             ("jetbrains-mono-latin-400-5.2.5.woff2", "design"),
+                                             ("workbench.css", "static"), ("shell.js", "static"), ("scan.js", "static")):
+                            with urllib.request.urlopen(match.group() + "/assets/" + name, timeout=5) as asset:
+                                assert asset.read() == (source / "apps/vulscan-cli/ui" / folder / name).read_bytes(), name
                         break
                     if server.poll() is not None:
                         raise RuntimeError(output)

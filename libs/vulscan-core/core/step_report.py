@@ -19,10 +19,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from core.schemas import StepReport
+from core import ui_events
 
 
 @contextmanager
-def step_context(step: str, output_dir: str, inputs: dict | None = None):
+def step_context(step: str, output_dir: str, inputs: dict | None = None, *, persist: bool = True):
     """Context manager that builds a StepReport around a pipeline step.
 
     Automatically captures:
@@ -47,6 +48,9 @@ def step_context(step: str, output_dir: str, inputs: dict | None = None):
     )
 
     start = time.monotonic()
+    ui_events.emit("stage.changed", stage=step, status="running", message="阶段开始")
+    if step == "analyze":
+        ui_events.emit("discovery.started", stage=step, message="开始发现候选问题")
 
     # Snapshot starting cost so we can compute the delta
     start_cost, start_tokens = _snapshot_usage()
@@ -239,12 +243,25 @@ def step_context(step: str, output_dir: str, inputs: dict | None = None):
                 # dropped spend — both markers, never one without the other.
                 report.token_usage["accounting_error"] = True
                 report.token_usage["cost_incomplete"] = True
-        report.write(output_dir)
-        print(
-            f"[{step}] Report: {output_dir}/{step}.report.json "
-            f"({report.duration_seconds}s, ${report.cost_usd:.4f})",
-            file=sys.stderr,
-        )
+        if persist:
+            report.write(output_dir)
+        _ui_summary = report.summary if isinstance(report.summary, dict) else {}
+        if step == "parse" and isinstance(_ui_summary.get("total_units"), int):
+            ui_events.emit("progress.updated", stage=step, processed=_ui_summary["total_units"],
+                           total=_ui_summary["total_units"], unit="已解析函数",
+                           elapsed_seconds=report.duration_seconds, message="代码解析结束")
+        ui_events.emit("stage.changed", stage=step, status=report.status,
+                       duration_seconds=report.duration_seconds, message="阶段结束",
+                       details="\n".join(str(error) for error in report.errors) or str(_ui_summary.get("reason", "")))
+        if report.errors:
+            ui_events.emit("error", stage=step, status=report.status,
+                           message="阶段存在错误", details="\n".join(str(error) for error in report.errors))
+        if persist:
+            print(
+                f"[{step}] Report: {output_dir}/{step}.report.json "
+                f"({report.duration_seconds}s, ${report.cost_usd:.4f})",
+                file=sys.stderr,
+            )
 
 
 def _snapshot_usage() -> tuple[float | None, dict | None]:

@@ -328,6 +328,7 @@ def scan_repository(
     llm_reachability: bool = False,
     llm_reachability_max_code_bytes: int = 1500,
     library_mode: bool = False,
+    include_intentional: bool = False,
 ) -> ScanResult:
     """Scan a repository for vulnerabilities.
 
@@ -372,6 +373,9 @@ def scan_repository(
     repo_path = os.path.abspath(repo_path)
     output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
+
+    from core import ui_events
+    ui_events.start(verify=verify, dynamic=dynamic_test)
 
     # Reset tracking
     tracking.reset_tracking()
@@ -574,6 +578,9 @@ def scan_repository(
             threat_model_ctx = load_threat_model(Path(repo_path))
 
             if threat_model_ctx is not None:
+                from context.application_context import stamp_intentional_vulnerability
+                threat_model_ctx = stamp_intentional_vulnerability(
+                    threat_model_ctx, Path(repo_path), force=include_intentional)
                 app_context_path = os.path.join(output_dir, "application_context.json")
                 save_context(threat_model_ctx, Path(app_context_path))
                 result.app_context_path = app_context_path
@@ -599,7 +606,8 @@ def scan_repository(
             else:
                 try:
                     context = generate_application_context(
-                        Path(repo_path), registry.get("app_context")
+                        Path(repo_path), registry.get("app_context"),
+                        include_intentional=include_intentional
                     )
                     app_context_path = os.path.join(
                         output_dir, "application_context.json"
@@ -1753,6 +1761,8 @@ def scan_repository(
     _write_scan_report(output_dir, result, collected_step_reports,
                        repo_path=repo_path)
     _print_summary(result)
+    ui_events.emit("scanner.terminal", stage="scan", status="completed",
+                   message="主扫描调用结束，等待报告与资源清理")
 
     return result
 
@@ -1797,6 +1807,8 @@ def _record_skip(result: ScanResult, step: str, reason: str) -> None:
     """
     result.skipped_steps.append(step)
     result.skipped_step_reasons[step] = reason
+    from core import ui_events
+    ui_events.skipped(step, reason)
 
 
 def _load_step_report(output_dir: str, step: str) -> dict:
@@ -2366,6 +2378,16 @@ def _write_scan_report(
     )
 
     path = scan_report.write(output_dir)
+    from core import ui_events
+    _coverage_note = (
+        f"分析结果记录 {result.metrics.total} 个函数，其中错误 {result.metrics.errors} 个；"
+        "这是已保存记录的范围，不是全仓库覆盖率。"
+    )
+    if result.excluded_languages:
+        _coverage_note += " 排除的语言：" + ", ".join(result.excluded_languages) + "。"
+    ui_events.emit("coverage.updated", stage="scan",
+                   status="incomplete" if result.degraded or result.metrics.errors else "reported",
+                   message=_coverage_note)
     print(f"[Scan] Aggregate report: {path}", file=sys.stderr)
     return path
 

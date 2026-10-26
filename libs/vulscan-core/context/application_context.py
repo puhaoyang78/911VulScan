@@ -126,6 +126,12 @@ class ApplicationContext:
     not_a_vulnerability: list[str] = field(default_factory=list)
     requires_remote_trigger: bool = True
 
+    # 靶场/教学仓库：漏洞是刻意保留的演示功能。为真时不再把教学缺陷写进
+    # ``not_a_vulnerability``，第 1 阶段提示词改写成「仍按真实漏洞上报」，
+    # 并且不做「只报远程可利用」的收窄——练习程序的本地缺陷照样是它的考点。
+    deliberately_vulnerable: bool = False
+    deliberate_vulnerability_evidence: list[str] = field(default_factory=list)
+
     # Metadata
     confidence: float = 0.0
     evidence: list[str] = field(default_factory=list)
@@ -252,10 +258,23 @@ class ApplicationContext:
         """
         if self.requires_remote_trigger:
             return False
+        # 靶场里「本地用户自己能做的事」正是要演示的缺陷，不能按本地权限收窄。
+        if self.deliberately_vulnerable:
+            return False
         # #621: delegate to untrusted_boundaries() — the substring rule lives
         # in ONE place (see its docstring); this gate must answer the same
         # question the Stage-2 persona asks, never a drifting second copy.
         return not self.untrusted_boundaries()
+
+    def intent_note(self) -> str:
+        """靶场说明：命中的依据，供提示词与扫描记录引用。"""
+        if not self.deliberately_vulnerable:
+            return ""
+        detail = "；".join(self.deliberate_vulnerability_evidence[:4])
+        return ("该仓库是刻意保留漏洞的练习/教学程序"
+                + (f"（判断依据：{detail}）" if detail else "")
+                + "。其中的演示缺陷按真实漏洞评估：只要攻击者能利用并造成影响就应上报，"
+                  "不要因为“这是教学示例”而判定为安全。")
 
 
 def _context_kwargs_from_dict(data: dict) -> dict:
@@ -756,6 +775,19 @@ If the repository doesn't fit any of these types (e.g., desktop app, mobile app,
 - **library**: No direct attack surface. Vulnerabilities depend on how the caller uses the library.
 - **agent_framework**: Code execution is the CORE FEATURE. Focus on sandbox escapes, not code execution itself.
 
+## Deliberately vulnerable repositories
+
+Some repositories exist to TEACH: DVWA, DSVW, OWASP Juice Shop/WebGoat, "damn vulnerable" samples
+and CTF challenges keep their SQL injection, XSS, path traversal or RCE on purpose.
+
+- If the repository says (README, name, docs) that it is intentionally vulnerable, a training
+  target or a CTF, set `deliberately_vulnerable: true`.
+- For such a repository, do NOT put its vulnerability classes into `not_a_vulnerability`.
+  That list is for behaviour that is genuinely safe; using it for the teaching bugs is what
+  makes a whole scan come back empty. Demo features stay reportable findings.
+- `intended_behaviors` may still describe the demo features (e.g. "shows SQL injection on
+  /login"), but the wording must not read as "therefore not a vulnerability".
+
 ## Output Format
 
 Respond with a JSON object (no other text):
@@ -764,6 +796,7 @@ Respond with a JSON object (no other text):
 {{
   "application_type": "web_app|cli_tool|library|agent_framework|unsupported",
   "purpose": "1-2 sentence description of what this application does",
+  "deliberately_vulnerable": false,
   "intended_behaviors": [
     "List of behaviors that are BY DESIGN, not vulnerabilities",
     "Be specific - e.g., 'Executes user-provided code in sandboxed environment'",
@@ -804,6 +837,7 @@ def generate_application_context(
     repo_path: Path,
     binding: PhaseBinding,
     force_regenerate: bool = False,
+    include_intentional: bool = False,
 ) -> ApplicationContext | None:
     """Generate application context using LLM analysis.
 
@@ -927,7 +961,8 @@ def generate_application_context(
     # context/generate_context.py and core/scanner.py — wrap this call in a broad
     # try/except and continue without a context).
     try:
-        return ApplicationContext(**data)
+        return stamp_intentional_vulnerability(
+            ApplicationContext(**data), repo_path, force=include_intentional)
     except TypeError as e:
         print(
             f"WARNING: LLM returned an incomplete application context "
@@ -935,6 +970,32 @@ def generate_application_context(
             file=sys.stderr,
         )
         return None
+
+
+def stamp_intentional_vulnerability(
+    context: ApplicationContext,
+    repo_path: Path,
+    force: bool = False,
+) -> ApplicationContext:
+    """把「靶场」判定盖到上下文上：自动识别结果与显式要求取并集。
+
+    ``force`` 来自 ``--include-intentional``：仓库文档没写清楚时，由操作者
+    直接声明"这是一次针对练习程序的扫描"，同样走免抑制路径。
+    """
+    from context.intentional import detect_intentional_vulnerabilities
+
+    detected, evidence = detect_intentional_vulnerabilities(repo_path)
+    if not (detected or force):
+        return context
+    context.deliberately_vulnerable = True
+    merged = list(context.deliberate_vulnerability_evidence or [])
+    for item in evidence:
+        if item not in merged:
+            merged.append(item)
+    if force and not merged:
+        merged.append("操作者通过 --include-intentional 指定本次按靶场处理")
+    context.deliberate_vulnerability_evidence = merged[:6]
+    return context
 
 
 def save_context(context: ApplicationContext, output_path: Path) -> None:

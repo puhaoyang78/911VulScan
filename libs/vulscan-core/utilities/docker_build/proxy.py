@@ -8,6 +8,7 @@ Docker 构建容器里的 ``127.0.0.1`` 指向容器自身，不是宿主回环�
 
 from contextlib import contextmanager
 import ipaddress
+import http.client
 import json
 import select
 import socket
@@ -48,17 +49,32 @@ def describe_proxy(proxy: str | None) -> str:
     return f"构建代理 {proxy}" if proxy else "未启用构建代理（直连）"
 
 
-def probe_proxy(proxy: str | None, timeout: float = 5.0) -> None:
-    """在真正构建前确认代理端口可连接，快速给出可操作的错误。"""
+def probe_proxy(proxy: str | None, timeout: float = 5.0, *, target: str | None = None) -> None:
+    """确认端口；指定依赖源时还验证 CONNECT、TLS 与 HTTP 响应。
+
+    HEAD 不下载索引或安装包，不读取系统绕过规则，也不切换到直连。
+    它只验证所需链路可用，不能保证后续大文件下载速度。
+    """
     if not proxy:
         return
     url = urlsplit(proxy)
     try:
-        with socket.create_connection((url.hostname, url.port), timeout=timeout):
-            return
-    except OSError as exc:
+        if target is None:
+            with socket.create_connection((url.hostname, url.port), timeout=timeout):
+                return
+        endpoint = urlsplit(target)
+        connection = http.client.HTTPSConnection(url.hostname, url.port, timeout=timeout)
+        try:
+            connection.set_tunnel(endpoint.hostname, endpoint.port or 443)
+            connection.request("HEAD", endpoint.path or "/", headers={"Connection": "close"})
+            response = connection.getresponse()
+            if response.status >= 400:
+                raise OSError(f"依赖源返回 HTTP {response.status}")
+        finally:
+            connection.close()
+    except (OSError, http.client.HTTPException) as exc:
         raise DockerBuildEnvironmentError(
-            f"Docker 构建代理无法连接（{url.hostname}:{url.port}）：{exc}。"
+            f"Docker 构建代理无法连接{('依赖源 ' + target) if target else ''}（{url.hostname}:{url.port}）：{exc}。"
             "请确认代理已启动，或清空代理设置以使用直连。") from exc
 
 

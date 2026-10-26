@@ -16,7 +16,7 @@ class _Recorder:
         self._results = list(results)
         self.calls: list[list[str]] = []
 
-    def __call__(self, cmd, timeout=None, cwd=None):
+    def __call__(self, cmd, timeout=None, cwd=None, on_output=None):
         self.calls.append(list(cmd))
         return self._results.pop(0)
 

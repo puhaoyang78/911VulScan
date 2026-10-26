@@ -279,6 +279,7 @@ def cmd_scan(args):
             commit_sha=getattr(args, "commit_sha", None),
             diff_manifest=getattr(args, "diff_manifest", None),
             library_mode=getattr(args, "library_mode", False),
+            include_intentional=getattr(args, "include_intentional", False),
             llm_reachability=getattr(args, "llm_reachability", False),
             llm_reachability_max_code_bytes=getattr(
                 args, "llm_reachability_max_code_bytes", 1500
@@ -1173,7 +1174,7 @@ def _remediation_for_unrecognized(actionable, error_rows):
     suppressed when unclassifiable rows exist (either the canonical
     error verdict or an off-enum spelling)."""
     if not actionable and not error_rows:
-        return "<p>未发现漏洞或安全问题，所有代码单元均安全或已有适当防护。</p>"
+        return "<p>未发现漏洞或安全问题，所有函数均安全或已有适当防护。</p>"
     if not actionable and error_rows:
         n_err = sum(1 for f in error_rows if f.get("verdict") == "error")
         n_unknown = len(error_rows) - n_err
@@ -1181,8 +1182,8 @@ def _remediation_for_unrecognized(actionable, error_rows):
         if n_err:
             parts.append(f"{n_err} 个分析出错")
         if n_unknown:
-            parts.append(f"{n_unknown} 个判定无法识别")
-        return ("<p>没有可直接处理的发现项，但仍有代码单元未完成分类："
+            parts.append(f"{n_unknown} 个结论无法识别")
+        return ("<p>没有可直接处理的漏洞，但仍有函数未完成分类："
                 f"{'，'.join(parts)}。请人工复核。</p>")
     return None  # the actionable path takes the LLM call
 
@@ -1220,7 +1221,7 @@ def cmd_report_data(args):
         with step_context("report-data", results_dir, inputs={
             "results_path": os.path.abspath(results_path),
             "dataset_path": os.path.abspath(dataset_path),
-        }) as ctx:
+        }, persist=not getattr(args, "no_llm", False)) as ctx:
             # Load data
             experiment = read_json(results_path)
             # fa17 TRUST BOUNDARY: normalize model-supplied `results` to dicts-only
@@ -1321,6 +1322,15 @@ def cmd_report_data(args):
                 code = unit.get("code")
                 source_code = code.get("primary_code") if isinstance(code, dict) else code
                 fields = finding_fields(result, source_code)
+                from report.details import model_review_status
+                _vulns = result.get("vulnerabilities")
+                _vuln = next((v for v in _vulns if isinstance(v, dict)), {}) if isinstance(_vulns, list) else {}
+                fields.update({
+                    "title": report_text(result.get("name") or _vuln.get("name") or result.get("attack_vector")),
+                    "finding_id": route_key,
+                    "candidate": verdict in ("vulnerable", "bypassable") or bool(result.get("verification")),
+                    "model_review_status": model_review_status(result),
+                })
 
                 # #745: the delegation-dismissed SAFE row's followable edge.
                 # The analysis scope is function-local by construction
@@ -1337,7 +1347,7 @@ def cmd_report_data(args):
                 _deferred = _deferred_edges(unit)
                 findings.append({
                     **fields,
-                    "reproduction": render_reproduction(dt_result) if dt_result else "未记录可关联的动态测试。未提供构建、触发或运行证据；不能据此声称已复现。",
+                    "reproduction": render_reproduction(dt_result) if dt_result else "未记录可关联的动态测试。未提供构建、触发或运行记录；不能据此声称已复现。",
                     "verdict": verdict,
                     "verdict_color": verdict_colors.get(verdict, "#6c757d"),
                     "file": file_path,
@@ -1372,8 +1382,9 @@ def cmd_report_data(args):
 
             # --- Group findings by verdict, sub-grouped by dynamic test outcome ---
             dt_subgroup_defs = [
-                ("已确认", lambda s: s == "CONFIRMED"),
-                ("未复现", lambda s: s in ("NOT_REPRODUCED", "BLOCKED")),
+                ("动态已复现", lambda s: s == "CONFIRMED"),
+                ("未复现", lambda s: s == "NOT_REPRODUCED"),
+                ("测试受阻", lambda s: s == "BLOCKED"),
                 ("测试错误", lambda s: s == "ERROR"),
                 ("无法确定", lambda s: s == "INCONCLUSIVE"),
                 ("已跳过", lambda s: s == "SKIPPED"),
@@ -1451,7 +1462,9 @@ def cmd_report_data(args):
             actionable = [f for f in findings if f["verdict"] in ("vulnerable", "bypassable", "inconclusive")]
 
             _msg = _remediation_for_unrecognized(actionable, _error_group)
-            if _msg is not None:
+            if getattr(args, "no_llm", False):
+                remediation_html = ""
+            elif _msg is not None:
                 remediation_html = _msg
             else:
                 # attack_vector and analysis are untrusted Stage-1/2 LLM output.
@@ -1849,6 +1862,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan_p.add_argument("--no-skip-tests", action="store_true", help="Include test files in parsing (default: tests are skipped)")
     scan_p.add_argument("--library-mode", action="store_true",
                         help="Seed the exported public API as entry points (for libraries with no main/route/CLI entry point)")
+    scan_p.add_argument("--include-intentional", action="store_true",
+                        help="Report the deliberately kept bugs of a practice/CTF repository instead of suppressing them")
     scan_p.add_argument("--limit", type=int, help="Max units to analyze and enhance (the LLM reachability pass still reviews the full codebase)")
     scan_p.add_argument(
         "--llm-config",
@@ -2239,6 +2254,7 @@ def build_parser() -> argparse.ArgumentParser:
             "HTML-report remediation guidance, which rides the report phase."
         ),
     )
+    rd_p.add_argument("--no-llm", action="store_true", help="只读取已有分析与动态测试输出，不调用模型或改写步骤记录")
     rd_p.set_defaults(func=cmd_report_data)
 
     # ---------------------------------------------------------------

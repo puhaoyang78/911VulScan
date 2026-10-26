@@ -18,7 +18,7 @@ func readableFinding() Finding {
 		VulnerableCode: "copy(dst, input);", SuggestedFix: "if (length >= capacity) return ERROR;",
 		StepsToReproduce:   "使用超出目标容量的合成输入。",
 		Stage2Verification: "静态复核已完成；不等于动态复现。",
-		Reproduction:       "构建：fixture-build\n运行：fixture-run\n预期：拒绝输入\n实际证据：exit status 1\nAddressSanitizer: synthetic fixture only",
+		Reproduction:       "构建：fixture-build\n运行：fixture-run\n预期：拒绝输入\n实际输出：exit status 1\nAddressSanitizer: synthetic fixture only",
 	}
 }
 
@@ -47,10 +47,10 @@ func TestFindingDetailsRenderAcrossLayouts(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, want := range []string{
-				"发现项描述", f.Description, "CWE-120", f.CWEName, "影响（分析评估）", f.Impact,
-				"修复建议", f.Remediation, f.VulnerableCode, "建议修复示例（未测试）", "if (length &gt;= capacity) return ERROR;",
-				f.StepsToReproduce, f.Stage2Verification, "PoC 构建、运行与证据", "exit status 1",
-				"AddressSanitizer: synthetic fixture only", "不代表已执行验证",
+				"问题描述", f.Description, "CWE-120", f.CWEName, "影响", f.Impact,
+				"修复建议", f.Remediation, f.VulnerableCode, "修复示例", "未测试", "if (length &gt;= capacity) return ERROR;",
+				f.StepsToReproduce, f.Stage2Verification, "PoC 构建、运行与输出", "exit status 1",
+				"AddressSanitizer: synthetic fixture only", "模型复核", "动态测试",
 			} {
 				if !strings.Contains(out.String(), want) {
 					t.Errorf("missing report detail %q", want)
@@ -94,7 +94,7 @@ func TestLegacyFindingShowsEvidenceGaps(t *testing.T) {
 	if err := RenderOverview(d, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"旧版分析", "CWE 未提供", "未提供影响评估", "未提供修复建议", "未提供代码片段", "未提供可用的修复代码示例", "不能视为已验证", "不据此宣称已复现"} {
+	for _, want := range []string{"旧版分析", "CWE 未提供", "未提供影响评估", "未提供修复建议", "未提供代码片段", "未提供可用的修复代码示例", "尚未记录动态测试", "未记录动态测试输出"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing legacy evidence gap %q", want)
 		}
@@ -147,5 +147,16 @@ func TestCWELabelKeepsClassificationAndMissingState(t *testing.T) {
 		if got := (Finding{CWEID: tc.id, CWEName: tc.name}).CWELabel(); got != tc.want {
 			t.Errorf("CWELabel(%q, %q) = %q, want %q", tc.id, tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestPayloadTitlesAndDiagnosticSummaryStayReadable(t *testing.T) {
+	f := Finding{Title: "AUTH_COOKIE=" + strings.Repeat("a", 600), Function: "jwtmain", DynamicTestDetails: "Docker 构建超时：#0 building\n#1 log"}
+	if f.DisplayTitle() != "jwtmain" || f.DynamicSummary() != "Docker 构建超时" {
+		t.Fatal("payload or transcript leaked into a compact heading")
+	}
+	f.Title = "SQL 注入"
+	if f.DisplayTitle() != f.Title {
+		t.Fatal("real short title was replaced")
 	}
 }

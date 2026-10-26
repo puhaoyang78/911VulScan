@@ -212,7 +212,7 @@ func PrintScanSummary(data map[string]any) {
 	// line the "eliminated" number silently shrinks when they split out.
 	reclassifiedProtected := intFromAny(metrics["stage2_disagreed_protected"])
 
-	PrintKeyValue("已分析代码单元", fmt.Sprintf("%d", total))
+	PrintKeyValue("已分析函数", fmt.Sprintf("%d", total))
 
 	if vulnerable > 0 {
 		red.Printf("  存在漏洞：")
@@ -282,7 +282,7 @@ func PrintParseSummary(data map[string]any) {
 		PrintKeyValue("处理层级", level)
 	}
 	if units := intFromAny(data["units_count"]); units > 0 {
-		PrintKeyValue("已提取代码单元", fmt.Sprintf("%d", units))
+		PrintKeyValue("已提取函数", fmt.Sprintf("%d", units))
 	}
 	if path, ok := data["dataset_path"].(string); ok {
 		PrintKeyValue("输出位置", path)
@@ -306,7 +306,7 @@ func PrintAnalyzeSummary(data map[string]any) {
 	inconclusive := intFromAny(metrics["inconclusive"])
 	errors := intFromAny(metrics["errors"])
 
-	PrintKeyValue("代码单元总数", fmt.Sprintf("%d", total))
+	PrintKeyValue("函数总数", fmt.Sprintf("%d", total))
 
 	combined := vulnerable + bypassable
 	if combined > 0 {
@@ -371,7 +371,7 @@ func PrintEnhanceSummary(data map[string]any) {
 
 	units := intFromAny(data["units_enhanced"])
 	errors := intFromAny(data["error_count"])
-	PrintKeyValue("已增强代码单元", fmt.Sprintf("%d", units))
+	PrintKeyValue("已增强函数", fmt.Sprintf("%d", units))
 	if errors > 0 {
 		yellow.Printf("  错误：%d\n", errors)
 	}
@@ -525,7 +525,7 @@ func PrintScanSummaryV2(data map[string]any) {
 			head := shortSHA8(diff["head_sha"])
 			unitsIn := intFromAny(diff["units_in_diff"])
 			unitsTotal := intFromAny(diff["units_total_parsed"])
-			modeLine := fmt.Sprintf("增量扫描（%s..%s，%d/%d 个代码单元）", base, head, unitsIn, unitsTotal)
+			modeLine := fmt.Sprintf("增量扫描（%s..%s，%d/%d 个函数）", base, head, unitsIn, unitsTotal)
 			PrintKeyValue("模式", modeLine)
 		} else {
 			PrintKeyValue("模式", "完整扫描")
@@ -541,7 +541,7 @@ func PrintScanSummaryV2(data map[string]any) {
 	errors := intFromAny(metrics["errors"])
 	verified := intFromAny(metrics["verified"])
 
-	PrintKeyValue("已分析代码单元", fmt.Sprintf("%d", total))
+	PrintKeyValue("已分析函数", fmt.Sprintf("%d", total))
 
 	// #323: the reachability advisory, in the Scan Results section (wave r1:
 	// it landed under Output Files before — a coverage number beside the
@@ -563,9 +563,9 @@ func PrintScanSummaryV2(data map[string]any) {
 				pct = f
 			}
 			PrintKeyValue("可达性范围", fmt.Sprintf(
-				"纳入 %d/%d 个代码单元（减少 %.1f%%）", reachable, original, pct))
+				"纳入 %d/%d 个函数（减少 %.1f%%）", reachable, original, pct))
 		} else {
-			PrintKeyValue("可达性范围", fmt.Sprintf("纳入 %d 个代码单元", reachable))
+			PrintKeyValue("可达性范围", fmt.Sprintf("纳入 %d 个函数", reachable))
 		}
 		if warns, ok := reach["reachability_warnings"].([]any); ok {
 			for _, wn := range warns {

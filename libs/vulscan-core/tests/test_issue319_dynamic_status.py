@@ -124,7 +124,7 @@ def test_disclosure_header_stamps_the_dynamic_dimension():
              "dynamic_testing_attempted": {"status": "ERROR"},
              "stage1_verdict": "vulnerable"}
     h2 = _disclosure_verdict_header(failed)
-    assert "动态测试未确认" in h2, h2
+    assert "动态测试" in h2, h2
     assert "错误" in h2
     # deep-refute (fable, ship-fix stage 7): the Stage-2 stamp must SURVIVE
     # the dynamic-failure line — the #210/#283 regression (an early-return

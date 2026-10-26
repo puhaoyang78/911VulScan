@@ -4,17 +4,18 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	uifiles "github.com/puhaoyang78/911VulScan/apps/vulscan-cli/ui"
 	"html/template"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"golang.org/x/net/html"
 )
 
-//go:embed templates/overview.gohtml
+//go:embed templates/*.gohtml
 var templateFS embed.FS
-
-//go:embed templates/report-reskin.gohtml
-var reskinFS embed.FS
 
 // #332: the report templates' third-party scripts (tailwindcss, chart.js,
 // chartjs-plugin-datalabels) are VENDORED at pinned versions — the CDN tags
@@ -54,8 +55,17 @@ var (
 
 func init() {
 	funcMap := template.FuncMap{
-		"displayLabel":  displayLabel,
-		"displayLabels": displayLabels,
+		"designCSS":      uifiles.InlineDesignCSS,
+		"designLicenses": uifiles.LicensesText,
+		"designJS":       uifiles.InlineJS,
+		"findingView": func(d ReportData, f Finding) map[string]any {
+			return map[string]any{"Finding": f, "FileURL": d.FileURL(f.File)}
+		},
+		"dynamicLabel":      dynamicLabel,
+		"dynamicGroupLabel": dynamicGroupLabel,
+		"verdictColor":      verdictColor,
+		"displayLabel":      displayLabel,
+		"displayLabels":     displayLabels,
 		"toJSON": func(v any) template.JS {
 			b, _ := json.Marshal(v)
 			return template.JS(b)
@@ -90,11 +100,11 @@ func init() {
 	}
 
 	overviewTmpl = template.Must(
-		template.New("overview.gohtml").Funcs(funcMap).ParseFS(templateFS, "templates/overview.gohtml"),
+		template.New("overview.gohtml").Funcs(funcMap).ParseFS(templateFS, "templates/overview.gohtml", "templates/document.gohtml"),
 	)
 
 	reskinTmpl = template.Must(
-		template.New("report-reskin.gohtml").Funcs(funcMap).ParseFS(reskinFS, "templates/report-reskin.gohtml"),
+		template.New("report-reskin.gohtml").Funcs(funcMap).ParseFS(templateFS, "templates/report-reskin.gohtml", "templates/document.gohtml"),
 	)
 }
 
@@ -108,12 +118,12 @@ func GenerateOverview(data ReportData, outputPath string) error {
 	return generateToFile(overviewTmpl, data, outputPath)
 }
 
-// RenderReskin renders the Knostic-themed HTML report to the given writer.
+// RenderReskin preserves the alternate report entry point with the shared reader.
 func RenderReskin(data ReportData, w io.Writer) error {
 	return reskinTmpl.Execute(w, data)
 }
 
-// GenerateReskin renders the Knostic-themed HTML report to a file.
+// GenerateReskin renders the shared standalone HTML report to a file.
 func GenerateReskin(data ReportData, outputPath string) error {
 	return generateToFile(reskinTmpl, data, outputPath)
 }
@@ -131,4 +141,41 @@ func generateToFile(tmpl *template.Template, data ReportData, outputPath string)
 	defer f.Close()
 
 	return tmpl.Execute(f, data)
+}
+
+// ExistingRemediation preserves authored guidance when an older static report
+// is presented with the current template. The new render applies SafeRemediation
+// again; no HTML from the old document becomes trusted script or application UI.
+func ExistingRemediation(r io.Reader) (string, error) {
+	doc, err := html.Parse(r)
+	if err != nil {
+		return "", err
+	}
+	var find func(*html.Node) *html.Node
+	find = func(n *html.Node) *html.Node {
+		for _, attr := range n.Attr {
+			if attr.Key == "class" {
+				for _, class := range strings.Fields(attr.Val) {
+					if class == "remediation-content" {
+						return n
+					}
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if found := find(c); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	var out strings.Builder
+	if n := find(doc); n != nil {
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if err := html.Render(&out, c); err != nil {
+				return "", err
+			}
+		}
+	}
+	return out.String(), nil
 }

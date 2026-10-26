@@ -153,7 +153,7 @@ def collect_result(
 
     if status == "CONFIRMED" and not any(e.type.strip() and e.content.strip() for e in evidence):
         status = "INCONCLUSIVE"
-        details = "测试声称已确认，但未提供有效证据，无法确认漏洞。"
+        details = "测试声称已复现，但未提供测试输出，无法确认漏洞。"
 
     return DynamicTestResult(
         finding_id=finding_id,

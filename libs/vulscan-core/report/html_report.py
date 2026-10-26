@@ -129,7 +129,7 @@ def _build_header_subtitle(
         units_total = diff.get("units_total_parsed")
         units_str = ""
         if units_in is not None and units_total is not None:
-            units_str = f" · {units_in}/{units_total} 个代码单元"
+            units_str = f" · {units_in}/{units_total} 个函数"
         return (
             f'<span class="incremental-badge">增量扫描</span> '
             f'{repo_name} · {html.escape(base)}..{html.escape(head)}{html.escape(units_str)} · '
@@ -206,8 +206,8 @@ def generate_remediation_guidance(findings: list) -> str:
     if not actionable:
         errored = sum(1 for f in findings if f['verdict'] == 'error')
         if errored:
-            return (f"<p>未确认任何漏洞，但有 {errored} 个代码单元分析出错，需要人工复核。</p>")
-        return "<p>未发现漏洞或安全问题，所有代码单元均安全或已有适当防护。</p>"
+            return (f"<p>未确认任何漏洞，但有 {errored} 个函数分析出错，需要人工复核。</p>")
+        return "<p>未发现漏洞或安全问题，所有函数均安全或已有适当防护。</p>"
 
     # Build prompt
     findings_text = ""
@@ -703,7 +703,7 @@ def generate_html_report(
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-value">{total_units}</div>
-                <div class="stat-label">代码单元</div>
+                <div class="stat-label">函数</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">{total_files}</div>
@@ -731,11 +731,11 @@ def generate_html_report(
             <h2>结果分布</h2>
             <div class="charts-grid">
                 <div class="chart-container">
-                    <div class="chart-title">按代码单元</div>
+                    <div class="chart-title">按函数</div>
                     <canvas id="unitChart"></canvas>
                 </div>
                 <div class="chart-container">
-                    <div class="chart-title">按文件（最高风险判定）</div>
+                    <div class="chart-title">按文件（最高风险结论）</div>
                     <canvas id="fileChart"></canvas>
                 </div>
             </div>
@@ -781,11 +781,11 @@ def generate_html_report(
         {_build_pipeline_costs_html(step_reports or [])}
 
         <section class="section">
-            <h2>全部发现项</h2>
+            <h2>全部漏洞</h2>
             <table>
                 <thead>
                     <tr>
-                        <th>判定</th>
+                        <th>结论</th>
                         <th>文件</th>
                         <th>函数</th>
                         <th>攻击方式</th>
@@ -909,7 +909,7 @@ def main():
         exp_dir = os.path.dirname(os.path.abspath(args.experiment))
         step_reports = _load_step_reports_from_dir(exp_dir)
 
-    print("正在整理发现项…")
+    print("正在整理漏洞…")
     findings = prepare_findings_summary(experiment, dataset)
 
     print("正在调用大语言模型生成修复建议…")

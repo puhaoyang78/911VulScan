@@ -1,15 +1,15 @@
-<h1>The browser-smoke canary markdown — exercises every MD_SANITIZE class.</h1>
-<h1>Rendered by the REAL vendored marked + DOMPurify in a real browser; the</h1>
-<h1>sanitized #content innerHTML is compared against golden_expected.html</h1>
-<h1>(full equality) plus hard canary assertions the --update-golden path can</h1>
-<h1>never touch.</h1>
-<h1>Security Analysis: vulscan</h1>
+<h1 id="section-0">The browser-smoke canary markdown — exercises every MD_SANITIZE class.</h1>
+<h1 id="section-1">Rendered by the REAL vendored marked + DOMPurify in a real browser; the</h1>
+<h1 id="section-2">sanitized #content innerHTML is compared against golden_expected.html</h1>
+<h1 id="section-3">(full equality) plus hard canary assertions the --update-golden path can</h1>
+<h1 id="section-4">never touch.</h1>
+<h1 id="section-5">Security Analysis: vulscan</h1>
 <p><strong>Repository:</strong> <a href="https://example.com/org/repo">https://example.com/org/repo</a>
 <strong>Language:</strong> go
 <strong>Commit:</strong> abc123</p>
-<h2>Summary</h2>
+<h2 id="section-6">Summary</h2>
 <p>A <strong>bold</strong> claim, <em>emphasis</em>, <del>strikethrough</del>, and <code>inline code</code>.</p>
-<h3>The hostile shapes (must all be stripped by the sanitizer)</h3>
+<h3 id="section-7">The hostile shapes (must all be stripped by the sanitizer)</h3>
 <ul>
 <li>an image: </li>
 <li>a form: </li>
@@ -18,14 +18,16 @@
 <li>a scheme link: <a>click</a> and <a>data</a></li>
 <li>a data attribute: <div>tagged</div></li>
 </ul>
-<h3>A code fence</h3>
-<pre><code class="language-go">func main() { fmt.Println("hello") }
-</code></pre>
+<h3 id="section-8">A code fence</h3>
+<div class="code-reader"><div class="code-toolbar"><span class="code-label">go · 片段行号</span><button type="button" aria-label="复制代码原文">复制</button><button type="button" aria-pressed="false">换行：关</button></div><div class="code-viewport" tabindex="0" aria-label="go代码，可横向滚动"><div class="code-lines" aria-hidden="true">1
+2</div><pre><code class="language-go hljs" data-highlighted="yes"><span class="hljs-function"><span class="hljs-keyword">func</span> <span class="hljs-title">main</span><span class="hljs-params">()</span></span> { fmt.Println(<span class="hljs-string">"hello"</span>) }
+</code></pre></div></div>
 <p>Raw script inside a fence (must survive as literal text, not execute):</p>
-<pre><code>&lt;script&gt;alert("fenced")&lt;/script&gt;
-</code></pre>
-<h3>A table</h3>
-<table>
+<div class="code-reader"><div class="code-toolbar"><span class="code-label">纯文本 · 片段行号</span><button type="button" aria-label="复制代码原文">复制</button><button type="button" aria-pressed="false">换行：关</button></div><div class="code-viewport" tabindex="0" aria-label="纯文本代码，可横向滚动"><div class="code-lines" aria-hidden="true">1
+2</div><pre><code class="language-plaintext">&lt;script&gt;alert("fenced")&lt;/script&gt;
+</code></pre></div></div>
+<h3 id="section-9">A table</h3>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>Verdict</th>
@@ -40,12 +42,12 @@
 <td>not_vulnerable</td>
 <td>3</td>
 </tr>
-</tbody></table>
-<h3>A task list</h3>
+</tbody></table></div>
+<h3 id="section-10">A task list</h3>
 <ul>
 <li> unchecked task</li>
 <li> completed task</li>
 </ul>
-<h3>A link that must survive</h3>
+<h3 id="section-11">A link that must survive</h3>
 <p><a href="https://example.com/docs">safe link</a></p>
 

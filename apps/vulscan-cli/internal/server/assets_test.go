@@ -6,14 +6,38 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path"
-	"regexp"
 	"strings"
 	"testing"
 
 	uifiles "github.com/puhaoyang78/911VulScan/apps/vulscan-cli/ui"
 )
+
+func TestHandleDesignAndApplicationAssets(t *testing.T) {
+	h := (&Server{}).Handler()
+	for _, name := range []string{"tabler-1.4.0.min.css", "workbench.css", "index.css", "report.css", "shell.js", "scan.js", "reader.js", "documents.js", "report.js", "highlight-11.11.1.min.js", "inter-latin-wght-5.2.5.woff2", "jetbrains-mono-latin-400-5.2.5.woff2"} {
+		want, mime, err := uifiles.Asset(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest("GET", "/assets/"+name, nil)
+		req.Host = "localhost:8080"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), want) || rec.Header().Get("Content-Type") != mime || rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("asset response differs from embed: %s", name)
+		}
+	}
+	for _, name := range []string{"SOURCES.txt", "embed.go", "unknown.js"} {
+		req := httptest.NewRequest("GET", "/assets/"+name, nil)
+		req.Host = "localhost"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 404 {
+			t.Errorf("unexpected asset access: %s", name)
+		}
+	}
+}
 
 // #577: /assets serves ONLY the vendored ui scripts, by exact versioned
 // name. The route is the serving half of the vendored-script governance:
@@ -90,52 +114,41 @@ func TestHandleAssetServesVersionedVendor(t *testing.T) {
 // net drifted: embed list, page tags, pin table, this allowlist, and the
 // renovate reference files are supposed to move together in one commit).
 func TestHandleAssetAllowlistMatchesEmbeddedVendor(t *testing.T) {
-	src, err := os.ReadFile("server.go") // in-package: cwd IS this package's dir
-	if err != nil {
-		t.Fatalf("reading server.go: %v", err)
-	}
-	s := string(src)
-	i := strings.Index(s, "func (s *Server) handleAsset")
-	if i < 0 {
-		t.Fatal("handleAsset not found in server.go")
-	}
-	block := s[i:]
-	if next := strings.Index(block[10:], "\nfunc "); next > 0 {
-		block = block[:10+next]
-	}
-	allow := map[string]bool{}
-	caseLine := regexp.MustCompile(`case [^:]+:`)
-	quoted := regexp.MustCompile(`"([^"]+)"`)
-	for _, line := range caseLine.FindAllString(block, -1) {
-		for _, q := range quoted.FindAllStringSubmatch(line, -1) {
-			allow[q[1]] = true
-		}
-	}
-	if len(allow) == 0 {
-		t.Fatal("no case literals found in handleAsset — the parser or the guard changed shape")
-	}
-	embedded := map[string]bool{}
-	err = fs.WalkDir(uifiles.FS, "vendor", func(p string, d fs.DirEntry, err error) error {
+	count := 0
+	err := fs.WalkDir(uifiles.FS, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(p, ".js") {
+		if d.IsDir() {
 			return nil
 		}
-		embedded[path.Base(p)] = true
+		ext := path.Ext(p)
+		if ext != ".js" && ext != ".css" && ext != ".woff2" {
+			return nil
+		}
+		if !strings.HasPrefix(p, "vendor/") && !strings.HasPrefix(p, "static/") && !strings.HasPrefix(p, "design/") {
+			return nil
+		}
+		want, err := uifiles.FS.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		got, _, err := uifiles.Asset(path.Base(p))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Errorf("embedded resource is not served exactly: %s", p)
+		}
+		count++
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walking the embedded vendor dir: %v", err)
+		t.Fatal(err)
 	}
-	for name := range allow {
-		if !embedded[name] {
-			t.Errorf("handleAsset allowlists %q but it is not embedded — the rename net drifted (a dead 200-route that 404s at ReadFile)", name)
-		}
+	if count < 13 {
+		t.Fatal("resource inventory is incomplete")
 	}
-	for name := range embedded {
-		if !allow[name] {
-			t.Errorf("embedded vendor script %q is not in the handleAsset allowlist — the pages reference it but the route would 404 it", name)
+	for _, name := range []string{"../embed.go", "/etc/passwd", "SOURCES.txt", "Tabler-LICENSE.txt", "marked.min.js"} {
+		if _, _, err := uifiles.Asset(name); err == nil {
+			t.Errorf("unexpected allowlisted asset %s", name)
 		}
 	}
 }

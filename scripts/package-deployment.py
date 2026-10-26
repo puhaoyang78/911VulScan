@@ -29,7 +29,7 @@ def included(name: str) -> bool:
         return (rel in {"go.mod", "go.sum", "Makefile"}
                 or p.suffix == ".go"
                 or (rel.startswith(("ui/", "internal/report/templates/", "internal/report/vendor/"))
-                    and p.suffix in {".html", ".gohtml", ".js", ".css", ".txt"}))
+                    and p.suffix in {".html", ".gohtml", ".js", ".css", ".txt", ".woff2"}))
     if name.startswith(CORE):
         rel = name[len(CORE):]
         if rel in {"pyproject.toml", "requirements.txt", "README.md"}:
@@ -47,7 +47,13 @@ def selected(root: Path) -> list[Path]:
     names = set(subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0"))
     # Newly introduced product files are explicit until the first commit.
     names.update({"README.deploy.md", "THIRD_PARTY_NOTICES.md", "scripts/install-deployment.sh",
-                  CORE + "vulscan/__init__.py", CORE + "vulscan/__main__.py"})
+                  CORE + "vulscan/__init__.py", CORE + "vulscan/__main__.py",
+                  CORE + "core/ui_events.py", CLI + "internal/server/events.go",
+                  CLI + "internal/report/templates/document.gohtml"})
+    # These are curated production asset directories referenced by Go embed;
+    # include new resource files before a commit without sweeping scratch dirs.
+    for directory in (CLI + "ui/design", CLI + "ui/static"):
+        names.update(p.relative_to(root).as_posix() for p in (root / directory).glob("*") if p.is_file())
     paths = sorted(root / name for name in names if name and included(name) and (root / name).is_file())
     required = ["LICENSE", "THIRD_PARTY_NOTICES.md", "README.deploy.md", "config/languages.json", "config/models.json", CLI + "main.go", CORE + "pyproject.toml", CORE + "README.md", CORE + "vulscan/__main__.py", "scripts/install-deployment.sh"]
     names = {p.relative_to(root).as_posix() for p in paths}

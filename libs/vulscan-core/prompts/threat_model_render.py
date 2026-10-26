@@ -155,7 +155,12 @@ def render_threat_model_context(ctx, *, for_verification: bool = False) -> str:
         for item in ctx.vulnerability_criteria:
             lines.append(f"- {collapse_inline(item)}")
 
-    if ctx.not_a_vulnerability:
+    intent = ctx.intent_note() if hasattr(ctx, "intent_note") else ""
+    if intent:
+        lines.append("**Deliberately vulnerable by design — STILL REPORT:**")
+        lines.append(collapse_inline(intent))
+        lines.append("")
+    elif ctx.not_a_vulnerability:
         lines.append("")
         lines.append("**These are NOT vulnerabilities here — do not flag them:**")
         # Deliberately NOT truncated. The legacy path caps this at 5 to bound

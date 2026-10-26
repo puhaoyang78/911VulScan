@@ -240,7 +240,8 @@ def run_dynamic_tests(
     # 一次并给出可操作的说明，而不是让每条发现各自耗尽构建预算。
     from utilities.docker_build.preflight import verify_build_environment
     from utilities.dynamic_tester.docker_executor import _run_command
-    environment = verify_build_environment(docker_proxy, _run_command)
+    environment = verify_build_environment(docker_proxy, _run_command,
+                                           language=repo_info["language"])
     from utilities.docker_build import (
         available_images, build_proxy_arguments, dockerfile_bases,
         ensure_base_images, ensure_toolchain, native_toolchain,
@@ -250,6 +251,25 @@ def run_dynamic_tests(
 
     # 已缓存镜像确实进入生成提示词；此前只有消费者，没有赋值入口。
     repo_info["base_images"] = available_images(_run_command)
+
+    # 依赖镜像：仓库依赖只装一次，每条发现的测试镜像直接复用。构建失败不致命，
+    # 生成器会退回"在 Dockerfile 里自己装"。
+    from utilities.docker_build.dependencies import (
+        ensure_dependency_image,
+        plan_for_repository,
+    )
+    dependency_plan = plan_for_repository(
+        repo_info["language"], repo_path, tuple(repo_info.get("base_images") or ()))
+    if dependency_plan is not None:
+        dependency_image = None
+        with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
+            with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
+                dependency_image = ensure_dependency_image(
+                    dependency_plan, repo_path, _run_command,
+                    proxy_arguments=proxy_args, build_timeout=policy.build_timeout)
+        if dependency_image:
+            repo_info["deps_image"] = dependency_image
+            repo_info["deps_hint"] = dependency_plan.prompt_note
 
     # C/C++ 共用工具链，必须在任何模型生成调用之前只准备一次。
     # 这样拉取/工具链构建失败会在阶段入口明确报错，不会逐项消耗
@@ -433,9 +453,13 @@ def run_dynamic_tests(
     print(f"正在动态测试仓库 {repo_info['name']} 的 {total} 项发现 "
           f"（已完成 {restored} 项，剩余 {remaining} 项）",
           file=sys.stderr)
+    from core import ui_events
+    ui_events.emit("progress.updated", stage="dynamic-test", processed=0, total=total,
+                   unit="发现", message="动态测试队列已建立，等待执行或恢复检查点")
 
     try:
       for i, finding in enumerate(findings):
+        from core import ui_events
         # str() at the boundary: id is repo/JSON-derived and may be non-str; it flows
         # to run_single_container's finding_id.lower() and checkpoint's safe_filename,
         # both of which would raise on a non-str and abort the whole run.
@@ -482,6 +506,8 @@ def run_dynamic_tests(
                 ],
             )
             results.append(result)
+            ui_events.dynamic(finding, result)
+            ui_events.emit("progress.updated", stage="dynamic-test", processed=i + 1, total=total, unit="发现", message="恢复已保存测试")
             continue
 
         # Skip findings whose language has no Docker template, BEFORE spending
@@ -501,10 +527,13 @@ def run_dynamic_tests(
                 status="SKIPPED", details=_reason,
                 elapsed_seconds=0,
             ))
+            ui_events.dynamic(finding, results[-1])
+            ui_events.emit("progress.updated", stage="dynamic-test", processed=i + 1, total=total, unit="发现", message="跳过不支持的语言")
             continue
 
         print(f"\n[{i+1}/{total}] 正在测试 {finding_id}："
               f"{finding.get('name', 'unknown')}...", file=sys.stderr)
+        ui_events.dynamic(finding, status="RUNNING", phase="generation")
 
         # Begin per-unit tracking so we can capture token counts for this
         # finding in addition to cost.
@@ -545,6 +574,8 @@ def run_dynamic_tests(
             (result.unpriced_models,
              result.unpriced_cache_models) = unpriced_kinds_from(unit_usage)
             results.append(result)
+            ui_events.dynamic(finding, result, phase="generation")
+            ui_events.emit("progress.updated", stage="dynamic-test", processed=i + 1, total=total, unit="发现", message="测试生成失败")
             if checkpoint:
                 checkpoint.save(finding_id, result.to_dict())
                 # #311: the saved ERROR unit file IS the count — derive the
@@ -657,6 +688,7 @@ def run_dynamic_tests(
                 break
 
             generation = retry_gen
+            ui_events.dynamic(finding, status="RUNNING", attempt=retry_count + 1, phase="build")
             execution = run_single_container(generation, finding_id,
                                              source_file=source_file, repo_path=repo_path,
                                              docker_proxy=docker_proxy, policy=policy)
@@ -675,6 +707,8 @@ def run_dynamic_tests(
         (result.unpriced_models,
          result.unpriced_cache_models) = unpriced_kinds_from(unit_usage)
         results.append(result)
+        ui_events.dynamic(finding, result, attempt=retry_count + 1, execution=execution, phase="analysis")
+        ui_events.emit("progress.updated", stage="dynamic-test", processed=i + 1, total=total, unit="发现", message="测试项处理结束")
 
         # Save checkpoint and update summary after each finding.
         # #311: the counts are re-derived from the saved unit files (the

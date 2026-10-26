@@ -322,14 +322,14 @@ def merge_dynamic_results(pipeline_data: dict, pipeline_path: str) -> dict:
     # #314 suggestion 3: what happened is SURFACED, never silent
     print(f"  已从 {dynamic_path.name} 合并 {merged_count} 条动态测试结果", file=sys.stderr)
     if attempted_count:
-        print(f"  [提示] {attempted_count} 条动态测试结果未确认漏洞，"
+        print(f"  [提示] {attempted_count} 条动态测试结果未复现漏洞，"
               f"已记录为 dynamic_testing_attempted，不能视为已验证", file=sys.stderr)
     if skipped_count:
         print(f"  [提示] {skipped_count} 条动态测试结果已跳过，"
               f"该语言没有测试模板，未执行测试且未附加结果", file=sys.stderr)
     if refused_count:
         print(f"  [警告] 已拒绝 {refused_count} 条动态测试结果，"
-              f"其 identity_key 与发现项不一致，结果文件可能来自"
+              f"其 identity_key 与漏洞不一致，结果文件可能来自"
               f"旧扫描；请重新运行动态测试",
               file=sys.stderr)
     if duplicate_ids:
@@ -424,7 +424,7 @@ def _context_provenance_header(pipeline_data: dict) -> str:
             "> **⚠ 安全模型来自仓库控制的文件。**",
             "> 本次扫描的攻击者模型来自被扫描仓库中的 `VULSCAN.THREATMODEL.md`。"
             "该文件可能受攻击者影响，"
-            "发现项的范围仅在该文件可信的前提下有效。",
+            "漏洞的范围仅在该文件可信的前提下有效。",
         ]
         sha = pipeline_data.get("threat_model_sha256")
         if sha:
@@ -443,14 +443,14 @@ def _context_provenance_header(pipeline_data: dict) -> str:
             "> **⚠ 安全覆盖配置来自仓库提交的文件。**",
             "> 本次扫描采用了 " + named + " 中的覆盖配置。"
             "被扫描仓库的内容可能受攻击者影响，其中的 "
-            "`not_a_vulnerability` 条目会排除发现项。"
-            "发现项的范围仅在该文件可信的前提下有效。",
+            "`not_a_vulnerability` 条目会排除漏洞。"
+            "漏洞的范围仅在该文件可信的前提下有效。",
         ]
         n = pipeline_data.get("manual_exclusions")
         if isinstance(n, int):
             lines.append(
                 f"> 生效的仓库排除规则：{n} 条"
-                "（被排除的发现项不会出现在报告中）")
+                "（被排除的漏洞不会出现在报告中）")
         for warning in pipeline_data.get("manual_override_warnings") or []:
             lines.append(f"> - {warning}")
         return "\n".join(lines) + "\n\n"
@@ -485,7 +485,7 @@ def _reachability_header(pipeline_data: dict) -> str:
         # (wave r1 fable): the analyzed count is total_units — a --limit
         # run would otherwise print "120 of 120 analyzed" directly above a
         # warning saying only a subset was analyzed.
-        lines.append(f"> 范围内的代码单元：{reachable}/{original}（减少 {stats.get('reachability_reduction_percentage', 0)}%）")
+        lines.append(f"> 范围内的函数：{reachable}/{original}（减少 {stats.get('reachability_reduction_percentage', 0)}%）")
     for w in warnings:
         if isinstance(w, str) and w.strip():
             lines.append(f"> - {w.strip()}")
@@ -509,7 +509,7 @@ _SUMMARY_SERVER_SECTIONS = (
     # line claimed a browser attacker for every app type, even when Stage 2
     # never ran).
     "Methodology", "分析方法", "扫描流程统计", "各步骤耗时", "各步骤费用",
-    "扫描结果", "已确认的漏洞", "未确认的发现项", "各步骤预估费用",
+    "扫描结果", "已确认的漏洞", "未确认的漏洞", "各步骤预估费用",
 )
 
 
@@ -556,7 +556,7 @@ def _summary_methodology_block(pipeline_data: dict) -> str:
         "## 分析方法",
         "",
         "两阶段分析：",
-        "1. 第 1 阶段：使用大语言模型检测筛选后代码单元中的漏洞",
+        "1. 第 1 阶段：使用大语言模型检测筛选后函数中的漏洞",
         "2. 第 2 阶段：模拟攻击者验证漏洞是否可利用",
         "",
     ]
@@ -569,7 +569,7 @@ def _summary_methodology_block(pipeline_data: dict) -> str:
             None)
         if reason == "failed":
             lines.append(
-                "第 2 阶段未能完成；本次扫描未对发现项应用攻击者模型。")
+                "第 2 阶段未能完成；本次扫描未对漏洞应用攻击者模型。")
         else:
             lines.append(
                 "本次扫描未运行第 2 阶段，未应用攻击者模型。")
@@ -632,7 +632,7 @@ def _verified_tier(f: dict) -> str:
     if isinstance(dt, dict) and dt.get("status") == "CONFIRMED":
         return "动态测试确认"
     if isinstance(dta, dict) and dta.get("status"):
-        return f"动态测试未确认（{display_label(dta.get('status'))}）"
+        return f"动态测试：{display_label(dta.get('status'))}"
     v = str(f.get("stage2_verdict", "")).lower()
     if v in _STAGE2_CONFIRMED:
         return "第 2 阶段已验证"
@@ -651,7 +651,7 @@ def _summary_statistics_block(pipeline_data: dict) -> str:
     lines: list[str] = []
     parsed = stats.get("parsed_units")
     if isinstance(parsed, int) and not isinstance(parsed, bool):
-        lines.append(f"- 已解析：{parsed} 个代码单元")
+        lines.append(f"- 已解析：{parsed} 个函数")
     if stats.get("reachability_filter_applied"):
         orig = stats.get("original_units")
         reach = stats.get("reachable_units")
@@ -659,7 +659,7 @@ def _summary_statistics_block(pipeline_data: dict) -> str:
             pct = stats.get("reachability_reduction_percentage")
             pct_str = f"{pct}" if isinstance(pct, (int, float)) else (
                 f"{round(100 * (orig - reach) / orig, 1)}")
-            lines.append(f"- 可达性筛选后范围内的代码单元：{reach}/"
+            lines.append(f"- 可达性筛选后范围内的函数：{reach}/"
                          f"{orig}（裁剪 {pct_str}%）")
     analyzed = stats.get("units_analyzed")
     total = stats.get("total_units")
@@ -668,14 +668,14 @@ def _summary_statistics_block(pipeline_data: dict) -> str:
         s1err = stats.get("stage1_errors")
         if isinstance(s1err, int) and s1err:
             extra = f"（{s1err} 个出错）"
-        base = f"- 第 1 阶段已分析：{analyzed} 个代码单元"
+        base = f"- 第 1 阶段已分析：{analyzed} 个函数"
         if isinstance(total, int) and total != analyzed:
             base += f"（共 {total} 个）"
         lines.append(base + extra)
     vi = stats.get("findings_input")
     va = stats.get("units_analyzed_total")
     if isinstance(vi, int) and isinstance(va, int):
-        adj = f"- 第 2 阶段已判定：{vi}/{va} 个已分析代码单元"
+        adj = f"- 第 2 阶段已复核：{vi}/{va} 个已分析函数"
         down, up = stats.get("downgraded"), stats.get("upgraded")
         if isinstance(down, int) or isinstance(up, int):
             adj += f"（{down or 0} 个降级，{up or 0} 个升级）"
@@ -706,7 +706,7 @@ def _summary_tables_block(pipeline_data: dict) -> str:
             if isinstance(v, int) and not isinstance(v, bool):
                 rows.append(f"| {label} | {v} |")
         if rows:
-            parts.append("## 扫描结果\n\n| 结果 | 代码单元数 |\n|---|---|\n"
+            parts.append("## 扫描结果\n\n| 结果 | 函数数 |\n|---|---|\n"
                          + "\n".join(rows) + "\n")
             # #744 (the r1-F4 catch): the identity block renders BESIDE the
             # count — the issue's own symptom was 'the summary reports
@@ -733,7 +733,7 @@ def _summary_tables_block(pipeline_data: dict) -> str:
                                   + "（建议人工复核 / manual review recommended）")
                 if _lines:
                     parts.append(
-                        "### 无法确定的发现项 / Inconclusive rows（建议人工复核 / manual review recommended）\n\n"
+                        "### 无法确定的漏洞 / Inconclusive rows（建议人工复核 / manual review recommended）\n\n"
                         + "\n".join(_lines) + "\n")
 
     durations = stats.get("durations") or {}
@@ -784,12 +784,12 @@ def _summary_tables_block(pipeline_data: dict) -> str:
                 rows.append(f"| {i} | {f.get('name', '?')} | "
                             f"{display_label(f.get('stage2_verdict', ''))} |")
             parts.append(
-                "## 未确认的发现项\n\n"
-                "以下发现项未被第 2 阶段确认（未验证、验证未完成、已重新分类或未重新检查）：\n\n"
-                "| # | 发现项 | 第 2 阶段 |\n|---|---|---|\n"
+                "## 未确认的漏洞\n\n"
+                "以下漏洞未经第 2 阶段复核（未复核、复核未完成、已改判或未重新检查）：\n\n"
+                "| # | 漏洞 | 第 2 阶段 |\n|---|---|---|\n"
                 + "\n".join(rows) + "\n")
     elif not parts:
-        parts.append("没有可报告的发现项。\n")
+        parts.append("没有可报告的漏洞。\n")
 
     return ("\n\n".join(parts) + "\n\n") if parts else ""
 
@@ -952,9 +952,9 @@ def _disclosure_verdict_header(vulnerability_data: dict) -> str:
     if isinstance(dt, dict) and dt.get("status") == "CONFIRMED":
         dt_line = "已通过动态测试确认（Docker 容器）"
     elif isinstance(dta, dict) and dta.get("status"):
-        dt_line = f"动态测试未确认（{display_label(dta.get('status'))}）"
+        dt_line = f"动态测试：{display_label(dta.get('status'))}"
     if verdict in _STAGE2_CONFIRMED:
-        status = f"已通过第 2 阶段攻击者模拟确认（{display_label(verdict)}）"
+        status = f"模型复核保留：已通过第 2 阶段攻击者模拟确认（{display_label(verdict)}）；不等于动态复现。"
     elif (verdict in ("vulnerable", "bypassable")
           and stage1 and stage1 != verdict):
         # #283: stage1 != stage2 on a still-real verdict is the Stage-2
@@ -964,15 +964,18 @@ def _disclosure_verdict_header(vulnerability_data: dict) -> str:
         # (or stage1 is absent) the finding may not have been through Stage 2
         # at all — the conservative UNVERIFIED wording stays.
         status = (
-            f"已由第 2 阶段攻击者模拟判定，重新分类："
-            f"{display_label(stage1)} → {display_label(verdict)}，仍为有效发现项"
+            f"经第 2 阶段攻击者模拟复核后改判："
+            f"{display_label(stage1)} → {display_label(verdict)}，仍为有效漏洞"
         )
     else:  # unverified / error / same-verdict vulnerable/bypassable
         status = (
-            "未验证，尚未通过第 2 阶段攻击者模拟确认 "
-            f"（{display_label(verdict or 'unknown')}）"
+            "未经复核：第 2 阶段未完成攻击者模拟 "
+            f"（结论：{display_label(verdict or 'unknown')}）"
         )
-    lines = [f"> **验证状态：** {status}"]
+    lines = [f"> **复核状态：** {status}"]
+    finding_id = str(vulnerability_data.get("id") or "未记录").replace("\r", " ").replace("\n", " ")
+    target = str(vulnerability_data.get("affected_versions") or "未记录；请核对扫描任务的目标提交").replace("\r", " ").replace("\n", " ")
+    lines.extend([f"> **所属发现：** {finding_id}", f"> **目标版本：** {target}"])
     if dt_line:
         lines.append(f"> **动态测试：** {dt_line}")
     loc = vulnerability_data.get("location")
@@ -995,8 +998,8 @@ def _disclosure_verdict_header(vulnerability_data: dict) -> str:
         # finding — a Windows/legacy-model output shape would break out).
         _norm = qual.replace("\r\n", "\n").replace("\r", "\n")
         _had_update = isinstance(vulnerability_data.get("consistency_update"), dict)
-        _label = ("第 2 阶段解释（一致性更新前的分析，"
-                  "上述判定在此分析之后发生变化）："
+        _label = ("第 2 阶段说明（复核更新前的分析，"
+                  "上述结论在此说明之后发生变化）："
                   if _had_update else "第 2 阶段解释：")
         # The banner length is DELIBERATELY UNBOUNDED (the fable+astra gate
         # decision, recorded here): the explanation's gate clause ("the path
@@ -1015,7 +1018,7 @@ def _disclosure_verdict_header(vulnerability_data: dict) -> str:
             _to = str(cu.get("to") or "?").strip()
             _reason = str(cu.get("reason") or "").strip()
             _reason_part = f" — {_reason}" if _reason else ""
-            lines.append(f"> **一致性更新：** {display_label(_from)} → {display_label(_to)}{_reason_part}")
+            lines.append(f"> **复核后更正：** {display_label(_from)} → {display_label(_to)}{_reason_part}")
 
     return "\n".join(lines) + "\n\n"
 

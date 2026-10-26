@@ -51,3 +51,18 @@ Original research, ideation, and original prototype: [Nahum Korda](https://githu
 Original productization: [Alex Raihelgaus](https://github.com/ar7casper/), [Daniel Geyshis](https://github.com/dgeyshis).
 
 With thanks to: [Michal Kamensky](https://github.com/kamenskymic/), [Imri Goldberg](https://github.com/lorg), Daniel Cuthbert. Josh Grossman, and Avi Douglen.
+
+## Offline UI resources
+
+- Tabler free core 1.4.0 (MIT): `apps/vulscan-cli/ui/design/tabler-1.4.0.min.css`.
+  Only core CSS is loaded, without demo scripts, plugin bundles or remote services.
+- Inter, Fontsource variable package 5.2.5 (SIL OFL 1.1): Latin variable normal face.
+  Chinese text uses the explicitly listed system font fallbacks.
+- JetBrains Mono, Fontsource package 5.2.5 (SIL OFL 1.1): Latin normal 400 face.
+- highlight.js 11.11.1 (BSD-3-Clause): core plus C, C++, Python, JavaScript, Go,
+  Bash/Shell and JSON. Unknown languages remain escaped plain text.
+
+Upstream npm package URLs, verified package integrity values, byte-level resource
+records and all retained licenses are in `apps/vulscan-cli/ui/design/`.
+Fonts, highlighting and report interactions are embedded into standalone HTML;
+web pages load the same assets from the Go binary. Neither path needs a CDN.

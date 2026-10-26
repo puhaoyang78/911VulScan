@@ -16,6 +16,16 @@ class DeploymentTests(unittest.TestCase):
         for name in ["LICENSE", "config/models.json", "apps/vulscan-cli/ui/vendor/SOURCES.txt", "apps/vulscan-cli/internal/report/vendor/report.css", "libs/vulscan-core/parsers/go/test_pipeline.py", "libs/vulscan-core/utilities/autopatcher/test_plan_discovery.py", "libs/vulscan-core/utilities/autopatcher/prompts/patch_generator.md", "libs/vulscan-core/utilities/dynamic_tester/docker_templates/c.Dockerfile", "libs/vulscan-core/vulscan/__main__.py"]:
             self.assertTrue(packager.included(name), name)
 
+    def test_offline_ui_resources_in_source_archive(self):
+        names = {p.relative_to(packager.ROOT).as_posix() for p in packager.selected(packager.ROOT)}
+        for folder in ("design", "static"):
+            for p in (packager.ROOT / packager.CLI / "ui" / folder).iterdir():
+                if p.is_file():
+                    self.assertIn(p.relative_to(packager.ROOT).as_posix(), names)
+        self.assertIn(packager.CORE + "core/ui_events.py", names)
+        self.assertIn(packager.CLI + "internal/server/events.go", names)
+        self.assertIn(packager.CLI + "internal/report/templates/document.gohtml", names)
+
     def test_development_excluded(self):
         for name in [".git/config", "CHANGELOG.md", "libs/vulscan-core/tests/test_scanner.py", "apps/vulscan-cli/cmd/root_test.go", "apps/vulscan-cli/internal/server/testdata/a.html", "libs/vulscan-core/core/__pycache__/a.pyc", "libs/vulscan-core/parsers/javascript/node_modules/a.js", "libs/vulscan-core/utilities/autopatcher/tools/run_cve_batch.py", "config/testdata/detection_parity.json"]:
             self.assertFalse(packager.included(name), name)

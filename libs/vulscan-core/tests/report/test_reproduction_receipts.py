@@ -30,7 +30,7 @@ def test_records_actual_staging_and_commands_without_changing_execution(tmp_path
     payload = json.dumps({"status": "CONFIRMED", "details": "fixture response differs",
                           "evidence": [{"type": "http_response", "content": "fixture HTTP 200"}]})
 
-    def command(argv, timeout, cwd=None):
+    def command(argv, timeout, cwd=None, on_output=None):
         calls.append((argv, timeout, cwd))
         if argv[:2] == ["docker", "info"]:
             return "fixture-daemon", "", 0, False
@@ -113,7 +113,7 @@ def test_absent_receipts_are_not_fabricated_and_poisoned_shapes_do_not_crash():
     legacy = DynamicTestResult("F", "CONFIRMED", "legacy", test_code="legacy script")
     assert "reproduction" not in legacy.to_dict()
     output = render_reproduction(legacy.to_dict())
-    assert "未记录有效证据" in output and "构建/运行命令未记录" in output
+    assert "未记录测试输出" in output and "构建/运行命令未记录" in output
     assert "legacy script" in output and "退出码 0" not in output
     output = render_reproduction({"status": {"unsafe": "value"}, "evidence": "not-list",
         "reproduction": {"commands": [None, {"stage": {}, "argv": 2}], "artifacts": [42]}})

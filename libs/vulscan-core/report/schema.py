@@ -118,9 +118,9 @@ def validate_pipeline_output(data: dict) -> PipelineOutput:
     for i, finding in enumerate(data["findings"]):
         for field in finding_required:
             if field not in finding:
-                raise ValidationError(f"发现项 {i}：缺少必填字段 '{field}'")
+                raise ValidationError(f"漏洞 {i}：缺少必填字段 '{field}'")
 
         if "file" not in finding["location"] or "function" not in finding["location"]:
-            raise ValidationError(f"发现项 {i}：location 必须包含 'file' 和 'function'")
+            raise ValidationError(f"漏洞 {i}：location 必须包含 'file' 和 'function'")
 
     return PipelineOutput.from_dict(data)

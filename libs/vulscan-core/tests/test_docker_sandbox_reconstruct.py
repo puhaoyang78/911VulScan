@@ -115,7 +115,7 @@ def test_run_single_hardening_flags(monkeypatch):
     from utilities.dynamic_tester import docker_executor as de
     calls = []
 
-    def fake_run(cmd, timeout, cwd=None):
+    def fake_run(cmd, timeout, cwd=None, on_output=None):
         calls.append(cmd)
         # first call = build (return success); second = run
         return ("", "", 0, False)

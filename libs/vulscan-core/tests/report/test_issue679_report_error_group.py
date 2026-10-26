@@ -64,7 +64,7 @@ def test_report_data_shows_error_and_off_enum(tmp_path: Path):
         "BOTH the canonical error row and the off-enum row join the visible "
         "group (the T1 F1 split's call-site half — mutant C)")
     remediation = data.get("remediation_html", "")
-    assert "判定无法识别" in remediation and "分析出错" in remediation, (
+    assert "结论无法识别" in remediation and "分析出错" in remediation, (
         "the honest message names both counts")
     assert "未发现漏洞或安全问题" not in remediation, (
         "the false-clean text is suppressed")

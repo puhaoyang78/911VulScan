@@ -39,8 +39,8 @@ def render_reproduction(record: dict) -> str:
     lines = [
         "### PoC 构建、触发与验证记录", "",
         "以下内容仅整理已有测试产物和执行记录，不重新运行测试，也不生成新的攻击步骤。", "",
-        "#### 预期行为与判定边界", "",
-        "预期行为、测试断言和静态分析不是实测证据。崩溃类漏洞应核对目标位置、"
+        "#### 预期行为与结论边界", "",
+        "预期行为、测试断言和静态分析不是实测输出。崩溃类漏洞应核对目标位置、"
         "sanitizer/调用栈及异常终止；非崩溃类漏洞应核对越权响应、文件内容或其他实际安全影响。"
         "单独的非零退出码不能确认漏洞；正常退出也不能证明安全或已修复。", "",
     ]
@@ -104,13 +104,13 @@ def render_reproduction(record: dict) -> str:
             label = display_label(kind) if isinstance(kind, str) and kind in {
                 "file_read", "http_response", "command_output", "network_capture"
             } else "其他"
-            lines += [f"**证据 {index}（测试产出：{label}）**",
+            lines += [f"**测试输出 {index}（类型：{label}）**",
                       "原始类型：", fenced(item.get("type")),
                       "原始内容：", fenced(item.get("content")), ""]
     else:
-        lines += ["未记录有效证据；不得仅凭状态标签声称已观察到崩溃或安全影响。", ""]
+        lines += ["未记录测试输出；不得仅凭状态标签声称已观察到崩溃或安全影响。", ""]
     if not commands:
-        lines += ["未保留命令级退出状态、标准输出和标准错误；现有证据不包含这些字段时，不能补写。", ""]
+        lines += ["未保留命令级退出状态、标准输出和标准错误；现有记录不包含这些字段时，不能补写。", ""]
     lines += ["#### 留存的 PoC 与构建文件", ""]
     if artifacts:
         for artifact in artifacts:

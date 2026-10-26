@@ -24,3 +24,11 @@ CODE BLOCKS:
 - Include only the minimal code needed to show the vulnerability
 - Add brief inline comments to highlight the vulnerable line
 - Do not include full function bodies unless necessary
+
+WORDING REQUIREMENT (Simplified Chinese output):
+用安全行业的常见说法，不要自造抽象词：代码按「函数」「文件」「代码位置」描述，不要写「代码单元」；
+复现过程产生的输出叫「测试输出」，不要写「证据」；对结果的判断叫「结论」，不要写「判定」「裁决」；
+被检查的对象叫「漏洞」或「疑似漏洞」，不要写「发现项」。
+状态只用：已复现、未复现、无法确定、测试受阻、测试错误、已跳过。
+先写观察到的事实，再写影响与结论；不用「赋能」「闭环」「链路」「维度」「原子」「幂等」「收敛」这类词。
+不要自称「AI」「模型」「助手」；没记录的内容写「未记录」，不要编造。

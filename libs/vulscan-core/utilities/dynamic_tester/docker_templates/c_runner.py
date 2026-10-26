@@ -121,7 +121,7 @@ def classify_run(stdout: str, stderr: str, returncode: int, *,
             return {**parsed, "status": "INCONCLUSIVE",
                     "details": "测试自行声称已确认，但缺少指向真实目标的 sanitizer 诊断与错误终止，当前 C/C++ 模板不能自动确认。原测试说明：" + parsed["details"]}
         return parsed
-    return _result("INCONCLUSIVE", "C/C++ 测试正常退出，但未输出有效的结构化验证结果；不能据此判定已修复。", stderr, stdout)
+    return _result("INCONCLUSIVE", "C/C++ 测试正常退出，但未输出有效的结构化验证结果；不能据此判断已修复。", stderr, stdout)
 
 
 def compile_command(source: Path, binary: Path, language: str) -> list[str]:
@@ -193,7 +193,7 @@ def run_test(source: Path, language: str, *, timeout: int = 30,
                                       encoding="utf-8", errors="replace", cwd=scratch,
                                       env=env, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            return _result("INCONCLUSIVE", "C/C++ 测试执行超时，无法判定漏洞是否复现。",
+            return _result("INCONCLUSIVE", "C/C++ 测试执行超时，无法确定漏洞是否复现。",
                            _timeout_output(exc.stderr), _timeout_output(exc.stdout))
         except OSError as exc:
             return {**_result("ERROR", f"C/C++ 测试程序无法启动：{exc}"), "retryable": False}

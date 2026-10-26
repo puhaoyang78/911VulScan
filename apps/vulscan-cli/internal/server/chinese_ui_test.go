@@ -296,76 +296,40 @@ func TestDeepSeekEndpointOriginDisclosure(t *testing.T) {
 	}
 }
 
-// This is a deterministic JavaScript state test, not a visual/browser test.
-// It checks the actual Python scanner's numbered messages, including degraded
-// and skipped stages; it deliberately uses no network, browser, or live model.
+// Legacy human progress is a labelled degradation path only. New jobs use the
+// structured reducer (events_test.go); connection/cancel transitions are tested
+// against the real browser, independently of task status.
 func TestChineseProgressHandlesActualScannerMessages(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node is needed for JavaScript state tests")
 	}
-	tmpl, err := template.ParseFS(uifiles.FS, "scan.html")
+	js, err := uifiles.FS.ReadFile("static/scan.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var page bytes.Buffer
-	if err := tmpl.Execute(&page, scanPageData{ID: "deadbeef", Nonce: "nonce"}); err != nil {
-		t.Fatal(err)
-	}
-	matches := regexp.MustCompile(`(?s)<script nonce="[^"]*">(.*?)</script>`).FindStringSubmatch(page.String())
-	if len(matches) != 2 {
-		t.Fatal("scan page script not found")
-	}
-	prelude := `
-const assert = require('node:assert/strict');
-class Element {
- constructor() { this.textContent='阶段'; this.attrs={}; this.dataset={}; const values=new Set(); this.classList={add:v=>values.add(v),remove:v=>values.delete(v),contains:v=>values.has(v)}; }
- addEventListener(){}
- setAttribute(k,v){this.attrs[k]=v;} removeAttribute(k){delete this.attrs[k];}
-}
-const elements={};
-global.document={getElementById:id=>elements[id]||(elements[id]=new Element()),querySelector:selector=>selector==='.step.failed' ? Object.values(elements).find(e=>e.classList.contains('failed')) : null};
-global.window={addEventListener(){}};
-global.EventSource=class { static CLOSED=2; static CONNECTING=0; constructor(){EventSource.last=this;} addEventListener(){} close(){} };
-global.fetch=async()=>({ok:true,json:async()=>[]});
-`
 	checks := `
-const stream=EventSource.last; stream.readyState=EventSource.CONNECTING; stream.onerror();
-assert.equal(elements['status-text'].dataset.state,'reconnecting');
-stream.onopen(); assert.equal(elements['status-text'].dataset.state,'running');
-updateSteps('[1/8] Parsing repository...');
-assert(stepEls.parse.classList.contains('active'));
-updateSteps('[2/8] Generating application context...');
-assert(stepEls.parse.classList.contains('done'));
-assert(stepEls.enhance.classList.contains('active'));
-updateSteps('[3/8] Enhancing dataset...');
-updateSteps('  WARNING: Enhancement failed: temporary provider error');
-assert(stepEls.enhance.classList.contains('failed'));
-updateSteps('[4/8] Running vulnerability detection (Stage 1)...');
-assert(stepEls.analyze.classList.contains('active'));
-updateSteps('  - Skipping verification (no vulnerable findings).');
-assert(stepEls.verify.classList.contains('skipped'));
-updateSteps('  - Skipping dynamic test (Docker not found).');
-assert(stepEls.dynamic.classList.contains('skipped'));
-assert.equal(countEls.dynamic.textContent,'未找到 Docker');
-updateSteps('[8/8] Generating reports...');
-onDone('done');
-assert(stepEls.report.classList.contains('done'));
-assert(!stepEls.verify.classList.contains('done'));
-assert(!stepEls.enhance.classList.contains('done'));
-assert(elements['status-text'].textContent.includes('警告'));
-assert(elements['btn-report'].classList.contains('ready'));
-stream.readyState=EventSource.CLOSED; stream.onerror();
-assert.equal(elements['status-text'].dataset.state,'done');
-assert(presentLog('[1/8] Parsing repository...').includes('正在解析仓库'));
-assert.equal(presentLog('source.c: unsafe_call(x)'), 'source.c: unsafe_call(x)');
+const assert=require('node:assert/strict'), read=VulscanScan.legacyRecord;
+assert.equal(read('[1/8] Parsing repository...').stage,'parse');
+assert.equal(read('[2/8] Generating application context...').stage,'enhance');
+assert.equal(read('[3/8] Enhancing dataset...').status,'running');
+assert.equal(read('  WARNING: Enhancement failed: temporary provider error').status,'error');
+assert.equal(read('[4/8] Running vulnerability detection (Stage 1)...').stage,'analyze');
+assert.equal(read('  - Skipping verification (no vulnerable findings).').status,'skipped');
+const skipped=read('  - Skipping dynamic test (Docker not found).');
+assert.equal(skipped.stage,'dynamic-test');assert.equal(skipped.status,'skipped');assert.equal(skipped.activity,'未找到 Docker');
+assert.equal(read('[8/8] Generating reports...').stage,'report');
+assert.equal(read('source.c: unsafe_call(x)'),null);
+const p=read('[Enhance] 94/987 src/typecheck.c::tc_error neutral 7.5s (elapsed 3m11s, ETA ~30m23s, $0.0064)');
+assert.equal(p.processed,94);assert.equal(p.total,987);assert.equal(p.elapsed,'3m11s');assert.equal(p.eta,'~30m23s');
+assert.equal(read('[Enhance] --- 100/987 (10.1%) | elapsed 3m20s | ETA ~30m0s | cost $0.10 ---').processed,100);
 `
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, node)
-	cmd.Stdin = strings.NewReader(prelude + matches[1] + checks)
+	cmd.Stdin = strings.NewReader(string(js) + checks)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("progress state regression: %v\n%s", err, out)
+		t.Fatalf("legacy progress regression: %v\n%s", err, out)
 	}
 }
 
@@ -452,7 +416,7 @@ func TestScanPageShowsSelectedTimeBudget(t *testing.T) {
 		if err := tmpl.Execute(&out, scanPageData{ID: "fixture", ScanTimeout: tc.value}); err != nil {
 			t.Fatal(err)
 		}
-		budget := regexp.MustCompile(`(?s)<p id="scan-timeout-budget">(.*?)</p>`).FindStringSubmatch(out.String())
+		budget := regexp.MustCompile(`(?s)<p\b[^>]*id="scan-timeout-budget"[^>]*>(.*?)</p>`).FindStringSubmatch(out.String())
 		if len(budget) != 2 || !strings.Contains(budget[1], tc.want) || !strings.Contains(budget[1], "非单阶段 ETA") {
 			t.Fatalf("budget %q not accurately displayed: %v", tc.value, budget)
 		}

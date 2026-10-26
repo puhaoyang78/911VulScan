@@ -523,7 +523,8 @@ class UnstoppedProducerError(RuntimeError):
 MAX_COMMAND_OUTPUT = 256 * 1024  # retained bytes per stream; pipes are continuously drained
 
 
-def _run_command(cmd: list[str], timeout: int, cwd: str = None) -> tuple[str, str, int, bool]:
+def _run_command(cmd: list[str], timeout: int, cwd: str = None,
+                 on_output=None) -> tuple[str, str, int, bool]:
     """Drain both pipes with bounded memory; stop CLI process groups on cancellation.
 
     Killing the CLI does not kill daemon containers: owned-resource cleanup below
@@ -532,12 +533,20 @@ def _run_command(cmd: list[str], timeout: int, cwd: str = None) -> tuple[str, st
     buffers = [bytearray(), bytearray()]
     truncated = [False, False]
     def drain(pipe, index):
+        import codecs
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         try:
-            while chunk := pipe.read(8192):
+            # read1 returns available bytes immediately; read(8192) could hide
+            # an entire quiet dependency build until exit or the buffer filled.
+            while chunk := pipe.read1(8192):
                 buffers[index].extend(chunk)
                 if len(buffers[index]) > MAX_COMMAND_OUTPUT:
                     del buffers[index][:-MAX_COMMAND_OUTPUT]
                     truncated[index] = True
+                if on_output:
+                    on_output(decoder.decode(chunk))
+            if on_output:
+                on_output(decoder.decode(b"", final=True))
         finally:
             pipe.close()
     own_session = os.name == "posix" and not os.environ.get("VULSCAN_DOCKER_OWNER")
@@ -637,8 +646,15 @@ def _staged_artifacts(work_dir: str, source_file: str | None) -> dict:
 def _run_recorded_command(result: DockerExecutionResult, stage: str,
                           cmd: list[str], timeout: int, cwd: str = None):
     """Preserve an existing command's result without changing its behavior."""
-    outcome = _run_command(cmd, timeout=timeout, cwd=cwd)
+    from core import ui_events
+    ui_started = time.monotonic()
+    ui_events.command(stage, "running", details=" ".join(cmd))
+    outcome = _run_command(cmd, timeout=timeout, cwd=cwd,
+                           on_output=ui_events.command_output(stage))
     stdout, stderr, code, timed_out = outcome
+    ui_events.command(stage, "error" if timed_out or (stage == "build" and code != 0) else "completed",
+                      details=f"exit_code={code}; timed_out={timed_out}\n{stdout}\n{stderr}",
+                      duration_seconds=round(time.monotonic() - ui_started, 2))
     result.reproduction.setdefault("commands", []).append({
         "stage": stage, "argv": list(cmd), "cwd": cwd,
         "exit_code": code, "timed_out": timed_out,

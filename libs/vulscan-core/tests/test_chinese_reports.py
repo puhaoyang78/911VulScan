@@ -39,11 +39,11 @@ def test_summary_tables_and_verification_dimensions_are_chinese():
     data = {"pipeline_stats": {"parsed_units": 12, "durations": {"verify": 10.22}, "costs": {"verify": {"actual": 0.0}}}, "results": {"vulnerable": 1, "errors": 0}, "findings": [{"name": "路径穿越", "location": {"file": "src/main.c", "function": "load"}, "cwe_id": 22, "severity": "high", "stage1_verdict": "vulnerable", "stage2_verdict": "confirmed", "dynamic_testing_attempted": {"status": "ERROR"}}]}
     before = deepcopy(data)
     text = generator._summary_statistics_block(data) + generator._summary_tables_block(data)
-    for expected in ("已解析：12", "漏洞验证", "10.2s", "$0.00", "已确认的漏洞", "高危", "动态测试未确认（错误）", "src/main.c:load", "CWE-22"):
+    for expected in ("已解析：12", "模型复核", "10.2s", "$0.00", "已确认的漏洞", "高危", "动态测试：错误", "src/main.c:load", "CWE-22"):
         assert expected in text
     header = generator._disclosure_verdict_header(data["findings"][0])
     assert "已通过第 2 阶段攻击者模拟确认" in header
-    assert "动态测试未确认（错误）" in header
+    assert "动态测试：错误" in header
     for english in ("## Pipeline Statistics", "## Results", "## Confirmed Vulnerabilities", "| Severity |", "**Verification:**", "dynamic test failed"):
         assert english not in text + header
     assert data == before
@@ -119,14 +119,14 @@ def test_report_data_chinese_fallback_preserves_json_contract(tmp_path, capsys):
     assert data["findings"][0]["verdict"] == "safe"
     assert data["unit_chart"]["labels"] == ["safe"]
     fallback = _remediation_for_unrecognized([], [{"verdict": "error"}, {"verdict": "unknown"}])
-    assert "1 个分析出错" in fallback and "1 个判定无法识别" in fallback
+    assert "1 个分析出错" in fallback and "1 个结论无法识别" in fallback
     assert "未发现漏洞" not in fallback
 
 
 def test_empty_and_warning_report_fallbacks_have_chinese_headings():
     fallback = generator._summary_methodology_block({}) + generator._summary_tables_block({"findings": []})
     warning = generator._context_provenance_header({"context_source": "threat_model"})
-    assert "## 分析方法" in fallback and "没有可报告的发现项" in fallback
+    assert "## 分析方法" in fallback and "没有可报告的漏洞" in fallback
     assert "安全模型来自仓库控制的文件" in warning
     for english in ("## Methodology", "No findings to report", "Attacker model:", "Security model supplied"):
         assert english not in fallback + warning

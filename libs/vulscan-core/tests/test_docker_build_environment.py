@@ -178,3 +178,37 @@ def test_container_timeout_stays_inconclusive():
     result = collect_result({"id": "V-1"}, {"test_script": "x", "dockerfile": "y"}, execution)
     assert result.status == "INCONCLUSIVE"
     assert execution.retryable is False and execution.execution_error is None
+
+
+def test_proxy_probes_real_dependency_source_not_only_listening_port(monkeypatch):
+    from utilities.docker_build import proxy
+    calls = []
+    class Connection:
+        def __init__(self, host, port, timeout):
+            calls.append((host, port, timeout))
+        def set_tunnel(self, host, port):
+            calls.append(('CONNECT', host, port))
+        def request(self, method, path, headers):
+            calls.append((method, path))
+        def getresponse(self):
+            from types import SimpleNamespace
+            return SimpleNamespace(status=200)
+        def close(self):
+            calls.append('closed')
+    monkeypatch.setattr(proxy.http.client, 'HTTPSConnection', Connection)
+    proxy.probe_proxy('http://127.0.0.1:7890', target='https://pypi.org/simple/')
+    assert calls == [('127.0.0.1', 7890, 5.0), ('CONNECT', 'pypi.org', 443), ('HEAD', '/simple/'), 'closed']
+
+
+def test_proxy_dependency_timeout_closes_and_does_not_fall_back(monkeypatch):
+    from utilities.docker_build import proxy
+    closed = []
+    class Connection:
+        def __init__(self, *args, **kwargs): pass
+        def set_tunnel(self, *args): pass
+        def request(self, *args, **kwargs): raise TimeoutError('upstream timed out')
+        def close(self): closed.append(True)
+    monkeypatch.setattr(proxy.http.client, 'HTTPSConnection', Connection)
+    with pytest.raises(DockerBuildEnvironmentError, match='pypi.org'):
+        proxy.probe_proxy('http://127.0.0.1:7890', target='https://pypi.org/simple/')
+    assert closed == [True]

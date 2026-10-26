@@ -318,6 +318,8 @@ def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, wo
         cp_is_stale = bool(cp_data) and _cp_is_stale(cp_data, unit)
         if cp_data and not _cp_is_error(cp_data) and not cp_is_stale:
             results[i] = cp_data.get("result", {})
+            from core import ui_events
+            ui_events.finding(results[i])
             code_by_route[cp_data.get("route_key", uid)] = cp_data.get("code_for_route", "")
         else:
             units_to_process.append((i, unit))
@@ -347,6 +349,11 @@ def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, wo
 
     def _process_and_save(i, unit):
         out = _process_unit(binding, unit, i, json_corrector, app_context)
+        from core import ui_events
+        ui_events.finding(out["result"])
+        if out["result"].get("error"):
+            ui_events.emit("error", stage="analyze", status="partial", message="函数分析失败",
+                           details=str(out["result"].get("route_key") or out["result"].get("unit_id") or "") + "\n" + str(out["result"]["error"]))
         # Save checkpoint
         if checkpoint is not None:
             uid = out["result"].get("unit_id", f"unit_{i}")

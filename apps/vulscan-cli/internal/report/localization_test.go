@@ -25,7 +25,7 @@ func TestChineseReportsKeepMachineValues(t *testing.T) {
 			if err := render(data, &out); err != nil {
 				t.Fatal(err)
 			}
-			for _, expected := range []string{`lang="zh-CN"`, "911VulScan", "上游来源", "OpenAnt", "安全分析报告", "结果分布", "修复建议", "存在漏洞", "高危", "已确认", "漏洞验证", "成功", "src/处理.py"} {
+			for _, expected := range []string{`lang="zh-CN"`, "911VulScan", "上游来源", "OpenAnt", "安全分析报告", "结果分布", "修复建议", "存在漏洞", "高危", "已复现", "模型复核", "成功", "src/处理.py"} {
 				if !strings.Contains(out.String(), expected) {
 					t.Errorf("missing Chinese display value %q", expected)
 				}

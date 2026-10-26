@@ -3,6 +3,7 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	uifiles "github.com/puhaoyang78/911VulScan/apps/vulscan-cli/ui"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -187,7 +188,7 @@ func TestReportCSSCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("report.css is go:embed'd — a missing file is a build failure: %v", err)
 	}
-	css := string(cssBytes)
+	css := string(cssBytes) + "\n" + string(uifiles.InlineDesignCSS())
 
 	// Hoisted (round-2): the harvest runs ONCE, not per-template.
 	lits, harvestedMethods, err := statusColorLiterals()
@@ -203,7 +204,7 @@ func TestReportCSSCoverage(t *testing.T) {
 	}
 	for _, tmpl := range []string{"templates/overview.gohtml",
 		"templates/report-reskin.gohtml"} {
-		srcBytes, err := os.ReadFile(tmpl)
+		srcBytes, err := readReportTemplate(tmpl)
 		if err != nil {
 			t.Fatalf("read %s: %v", tmpl, err)
 		}
@@ -267,7 +268,7 @@ func TestReportCSSCoverageMutation(t *testing.T) {
 	// first — the mutation is meaningful only if the rule exists).
 	css := string(cssBytes)
 	tok := ""
-	for _, candidate := range []string{"max-w-[1400px]", "mx-auto", "border-b", "py-3"} {
+	for _, candidate := range []string{"text-gray-400", "text-red-400", "text-green-400"} {
 		if hasSelector(css, candidate) {
 			tok = candidate
 			break
@@ -399,7 +400,7 @@ func TestReportCSSPaletteFreshness(t *testing.T) {
 	var classTokens []string
 	for _, tmpl := range []string{"templates/overview.gohtml",
 		"templates/report-reskin.gohtml"} {
-		srcBytes, err := os.ReadFile(tmpl)
+		srcBytes, err := readReportTemplate(tmpl)
 		if err != nil {
 			t.Fatalf("read %s: %v", tmpl, err)
 		}
@@ -568,7 +569,7 @@ func TestRemediationAllowElementsStyled(t *testing.T) {
 		// port was silently cut).
 		hook := "[&_" + el + "]:"
 		for _, tmpl := range []string{"templates/overview.gohtml", "templates/report-reskin.gohtml"} {
-			srcBytes, err := os.ReadFile(tmpl)
+			srcBytes, err := readReportTemplate(tmpl)
 			if err != nil {
 				t.Fatalf("read %s: %v", tmpl, err)
 			}
@@ -593,16 +594,14 @@ func TestRemediationAllowElementsStyled(t *testing.T) {
 // but never directly asserted — a future boundary "cleanup" would regress
 // silently.
 func TestHasSelectorEscapeContinuation(t *testing.T) {
-	cssBytes, err := os.ReadFile(filepath.Join("vendor", "report.css"))
-	if err != nil {
-		t.Fatalf("report.css is go:embed'd — a missing file is a build failure: %v", err)
-	}
-	css := string(cssBytes)
+	// Arbitrary-value classes no longer occur in the report layout; retain the
+	// escape-boundary regression using the same real Tailwind selector syntax.
+	css := `.max-w-\[1400px\]{max-width:1400px}`
 	if hasSelector(css, "max-w") {
-		t.Fatal("hasSelector(\"max-w\") false-matched — the escape continuation (\\.max-w-\\[1400px\\]) must not be a boundary hit")
+		t.Fatal("escaped continuation false-matched")
 	}
 	if !hasSelector(css, "max-w-[1400px]") {
-		t.Fatal("hasSelector(\"max-w-[1400px]\") missed the real selector — the boundary is over-strict")
+		t.Fatal("arbitrary-value selector missed")
 	}
 }
 
@@ -632,7 +631,7 @@ func TestTemplateStyleHexesComeFromPalette(t *testing.T) {
 	const allowWhite = "255,255,255"
 	for _, tmpl := range []string{"templates/overview.gohtml",
 		"templates/report-reskin.gohtml"} {
-		srcBytes, err := os.ReadFile(tmpl)
+		srcBytes, err := readReportTemplate(tmpl)
 		if err != nil {
 			t.Fatalf("read %s: %v", tmpl, err)
 		}
@@ -689,4 +688,17 @@ func TestVendorCSSPrecedesTemplateStyles(t *testing.T) {
 			t.Fatalf("%s: the vendor CSS block (%d) renders AFTER the hand-written styles (%d) — the cascade order inverted; the hand-written rules would lose at equal specificity", name, vendor, hand)
 		}
 	}
+}
+
+// Audit the shared body that both wrapper templates execute.
+func readReportTemplate(name string) ([]byte, error) {
+	root, err := os.ReadFile(name)
+	if err != nil {
+		return nil, err
+	}
+	common, err := os.ReadFile("templates/document.gohtml")
+	if err != nil {
+		return nil, err
+	}
+	return append(root, common...), nil
 }

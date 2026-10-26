@@ -14,7 +14,7 @@ GEN = {"dockerfile": "FROM fixture", "test_script": "print('fixture')"}
 
 
 def fake_docker(calls, failure=None):
-    def run(cmd, timeout, cwd=None):
+    def run(cmd, timeout, cwd=None, on_output=None):
         calls.append(cmd)
         if cmd[:2] == ["docker", "info"]:
             return "fixture-daemon-id", "", 0, False
@@ -225,3 +225,17 @@ def test_generated_staging_collision_remains_repairable(tmp_path, monkeypatch):
     assert not calls  # Prepared-only cleanup requires neither Docker nor a build.
     assert source.read_text(encoding="utf-8") == "# actual target\n"
     assert not list(registry.iterdir())
+
+
+def test_command_output_is_streamed_before_exit():
+    import time
+    output = []
+    started = time.monotonic()
+    def observe(text):
+        output.append((time.monotonic()-started, text))
+    out, err, code, timed = executor._run_command(
+        [sys.executable,'-c',"import time;print('构建进行中',flush=True);time.sleep(0.6);print('完成',flush=True)"],
+        5, on_output=observe)
+    assert code==0 and not timed and not err
+    assert out=='构建进行中\n完成\n'
+    assert next(t for t,text in output if '构建进行中' in text)<0.5

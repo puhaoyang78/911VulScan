@@ -1131,6 +1131,8 @@ class FindingVerifier:
             print(f"[Verify] ERROR {route_key}: {err_msg}", file=sys.stderr, flush=True)
 
         unit_elapsed = time.monotonic() - unit_start
+        from core import ui_events
+        ui_events.finding(result, stage="verify", force=True, duration_seconds=unit_elapsed)
         usage = self.tracker.get_unit_usage()
         return route_key, detail, unit_elapsed, worker, usage
 

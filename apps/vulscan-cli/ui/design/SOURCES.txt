@@ -1,0 +1,30 @@
+Pinned offline design assets. Only Tabler core CSS; no Tabler demo JS, plugins or charts.
+highlight.js: upstream ES core.min.js wrapped in IIFE, final export replaced with window.hljs=te;
+then verbatim language builds: c, cpp, python, javascript, go, bash, json. Unknown language = plain text.
+Tabler root license omitted from npm tarball; retained from https://raw.githubusercontent.com/tabler/tabler/dev/LICENSE on 2026-10-25.
+
+https://registry.npmjs.org/@tabler/core/-/core-1.4.0.tgz
+sha512-5BigzOlbOH9N0Is4u0rYNRCiwtnUXWO57K9zwuscygcicAa8UV9MGaS4zTgQsZEtZ9tsNANhN/YD8gCBGKYCiw==
+
+https://registry.npmjs.org/@fontsource-variable/inter/-/inter-5.2.5.tgz
+sha512-TrWffUAFOnT8zroE9YmGybagoOgM/HjRqMQ8k9R0vVgXlnUh/vnpbGPAS/Caz1KIlOPnPGh6fvJbb7DHbFCncA==
+
+https://registry.npmjs.org/@fontsource/jetbrains-mono/-/jetbrains-mono-5.2.5.tgz
+sha512-TPZ9b/uq38RMdrlZZkl0RwN8Ju9JxuqMETrw76pUQFbGtE1QbwQaNsLlnUrACNNBNbd0NZRXiJJSkC8ajPgbew==
+
+https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.11.1.tgz
+sha512-VEPdHzwelZ12hEX18BHduqxMZGolcUsrbeokHYxOUIm8X2+M7nx5QPtPeQgRxR9XjhdLv4/7DD5BWOlSrJ3k7Q==
+
+Original font licenses also retained from rsms/inter v4.1 LICENSE.txt and JetBrains/JetBrainsMono v2.304 OFL.txt.
+
+SHA256 of actual shipped bytes (enforced by design_test.go):
+6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490  Highlight-LICENSE.txt
+18aabf190848725e2576eefb5c29ba06aac1029d02132252a7f312eac2e50cf3  Inter-LICENSE.txt
+262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a  Inter-UPSTREAM-LICENSE.txt
+18aabf190848725e2576eefb5c29ba06aac1029d02132252a7f312eac2e50cf3  JetBrainsMono-LICENSE.txt
+30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad  JetBrainsMono-UPSTREAM-LICENSE.txt
+4f88a82d13be3c5c63a12c5631eae914aa4381b6dc17641bf1ab85f3f8f6c8a5  Tabler-LICENSE.txt
+195a78ebdc17c5e30945084b850362432b109e2e6f9501ab15e406c7a5c712bb  highlight-11.11.1.min.js
+f052ee44c3728dfd23aba8a4567150bc314d23903026fbb6ad089422c2df56af  inter-latin-wght-5.2.5.woff2
+14425ba9c695763c1547f48a206b7aa60350a33ae23de09f0407877f3fcd89eb  jetbrains-mono-latin-400-5.2.5.woff2
+7ef750bd10546a695d0b12767ad8048bd8f3ec5de7daefb1067f9d0daa3d1c9a  tabler-1.4.0.min.css

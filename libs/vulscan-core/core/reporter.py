@@ -200,7 +200,7 @@ def _dedup_caller_callee(
         if (f.get("route_key") or f.get("unit_id", "")) not in remove_keys
     ]
     removed = len(confirmed) - len(deduped)
-    print(f"[报告] 已去重 {removed} 个调用者/被调用者发现项", file=sys.stderr)
+    print(f"[报告] 已去重 {removed} 个重复漏洞", file=sys.stderr)
     return deduped
 
 
@@ -830,7 +830,7 @@ def build_pipeline_output(
     if isinstance(reachable_units, int) and reachable_units > total_units:
         reachability_warnings.append(
             f"reachable_units（{reachable_units}）超过已分析的 total_units"
-            f"（{total_units}）：本次仅分析了部分可达代码单元（例如使用了 --limit）。"
+            f"（{total_units}）：本次仅分析了部分可达函数（例如使用了 --limit）。"
             "reachable_units 为可达性筛选保留的数量，units_analyzed 为实际分析的数量。"
         )
 
@@ -957,7 +957,7 @@ def build_pipeline_output(
         _banner = (
             f"[报告] 增量扫描：base={diff_meta.get('base_ref')}, "
             f"scope={diff_meta.get('scope')}, "
-            f"{diff_meta.get('units_in_diff', '?')}/{diff_meta.get('units_total_parsed', '?')} 个代码单元"
+            f"{diff_meta.get('units_in_diff', '?')}/{diff_meta.get('units_total_parsed', '?')} 个函数"
         )
         if diff_meta.get("pr_number"):
             _banner += f", PR #{diff_meta['pr_number']}"
@@ -965,7 +965,9 @@ def build_pipeline_output(
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     write_json(output_path, pipeline_output, ensure_ascii=False)
-    print(f"  pipeline_output.json：{len(findings_data)} 个发现项", file=sys.stderr)
+    from core import ui_events
+    ui_events.pipeline_findings(findings_data)
+    print(f"  pipeline_output.json：{len(findings_data)} 个漏洞", file=sys.stderr)
     print(f"  已写入 {output_path}", file=sys.stderr)
 
     return output_path, len(findings_data)

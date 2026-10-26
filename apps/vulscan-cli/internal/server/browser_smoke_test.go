@@ -104,6 +104,18 @@ func TestBrowserSmoke(t *testing.T) {
 	}, reportPath); err != nil {
 		t.Fatalf("GenerateReskin: %v", err)
 	}
+	if capture := os.Getenv("VULSCAN_SCREENSHOTS"); capture != "" {
+		if err := os.MkdirAll(capture, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(reportPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(capture, "report.html"), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	j := &Job{
 		ID:              id,
 		Repo:            "https://example.com/org/repo",
@@ -115,6 +127,8 @@ func TestBrowserSmoke(t *testing.T) {
 		done:            make(chan struct{}),
 	}
 	s.mgr.add(j)
+	seedUIFixtures(t, s)
+	seedReviewJob(t, s)
 
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()

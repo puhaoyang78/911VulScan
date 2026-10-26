@@ -20,6 +20,11 @@
 导入本包不产生 Docker 调用。
 """
 
+from utilities.docker_build.dependencies import (
+    DependencyPlan,
+    ensure_dependency_image,
+    plan_for_repository,
+)
 from utilities.docker_build.errors import DockerBuildEnvironmentError
 from utilities.docker_build.images import (
     PullResult,
@@ -60,6 +65,7 @@ __all__ = [
     "BUILD",
     "BUILD_TIMEOUT",
     "CLEANUP",
+    "DependencyPlan",
     "DockerBuildEnvironmentError",
     "ENVIRONMENT",
     "FAILURE_LABELS",
@@ -76,6 +82,8 @@ __all__ = [
     "describe_proxy",
     "dockerfile_bases",
     "ensure_base_images",
+    "ensure_dependency_image",
+    "plan_for_repository",
     "ensure_toolchain",
     "is_registry_failure",
     "native_toolchain",

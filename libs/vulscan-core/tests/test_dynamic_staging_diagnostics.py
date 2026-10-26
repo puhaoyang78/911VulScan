@@ -98,7 +98,7 @@ def test_imported_finding_reaches_staging_and_repairs_build_failure(
             "requirements": "", "requirements_filename": requirements_filename,
             "docker_compose": None, "needs_attacker_server": False})
     builds = []
-    def command(cmd, timeout, cwd=None):
+    def command(cmd, timeout, cwd=None, on_output=None):
         if cmd[:2] == ["docker", "info"]:
             return "fixture-daemon", "", 0, False
         if cmd[:3] == ["docker", "system", "df"]:

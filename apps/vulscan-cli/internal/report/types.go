@@ -199,6 +199,65 @@ func (d ReportData) HasFindingGroups() bool {
 	return len(d.FindingsByVerdict) > 0
 }
 
+// FindingCounts is a projection of recorded identities, not a sum of the
+// overlapping pipeline summary fields. Legacy rows stay explicitly unknown.
+func (d ReportData) FindingCounts() map[string]string {
+	out := map[string]string{"candidates": "—", "retained": "—", "excluded": "—", "reproduced": "—"}
+	rows := d.Findings
+	if rows == nil {
+		for _, g := range d.FindingsByVerdict {
+			if g.HasSubgroups {
+				for _, sg := range g.Subgroups {
+					rows = append(rows, sg.Findings...)
+				}
+			} else {
+				rows = append(rows, g.Findings...)
+			}
+		}
+	}
+	known := rows != nil
+	reviewKnown, dynamicKnown := false, false
+	values := map[string]int{}
+	seen := map[string]bool{}
+	for _, f := range rows {
+		if f.ID == "" || f.Candidate == nil {
+			known = false
+		}
+		id := f.ID
+		if id == "" && f.File != "" && f.Function != "" {
+			id = f.File + ":" + f.Function
+		}
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if f.Candidate != nil && *f.Candidate {
+			values["candidates"]++
+		}
+		if f.ModelReviewStatus == "retained" || f.ModelReviewStatus == "excluded" || f.ModelReviewStatus == "inconclusive" || f.ModelReviewStatus == "error" {
+			reviewKnown = true
+			values[f.ModelReviewStatus]++
+		}
+		if f.DynamicTestStatus == "CONFIRMED" || f.DynamicTestStatus == "NOT_REPRODUCED" || f.DynamicTestStatus == "BLOCKED" || f.DynamicTestStatus == "ERROR" || f.DynamicTestStatus == "INCONCLUSIVE" {
+			dynamicKnown = true
+			if f.DynamicTestStatus == "CONFIRMED" {
+				values["reproduced"]++
+			}
+		}
+	}
+	if known {
+		out["candidates"] = fmt.Sprint(values["candidates"])
+	}
+	if reviewKnown {
+		out["retained"] = fmt.Sprint(values["retained"])
+		out["excluded"] = fmt.Sprint(values["excluded"])
+	}
+	if dynamicKnown {
+		out["reproduced"] = fmt.Sprint(values["reproduced"])
+	}
+	return out
+}
+
 // Stats holds the summary statistics for the report header cards.
 type Stats struct {
 	TotalUnits int `json:"total_units"`
@@ -235,6 +294,10 @@ type FindingSubgroup struct {
 
 // Finding represents a single finding row in the report table.
 type Finding struct {
+	ID                 string `json:"finding_id"`
+	Title              string `json:"title"`
+	Candidate          *bool  `json:"candidate"`
+	ModelReviewStatus  string `json:"model_review_status"`
 	Number             int    `json:"number"`
 	Verdict            string `json:"verdict"`
 	VerdictColor       string `json:"verdict_color"`
@@ -287,6 +350,60 @@ func (f Finding) HasReportDetails() bool {
 	return f.IsHighSeverity() || f.Impact != "" || f.Remediation != "" || f.SuggestedFix != ""
 }
 
+func (f Finding) InFindingNavigation() bool {
+	if f.Candidate != nil {
+		return *f.Candidate
+	}
+	return f.IsHighSeverity()
+}
+
+// DisplayTitle keeps generated payloads and verdict tokens out of headings.
+// The original title and attack vector remain in the evidence and search index.
+func (f Finding) DisplayTitle() string {
+	title := strings.TrimSpace(f.Title)
+	switch strings.ToLower(title) {
+	case "vulnerable", "bypassable", "safe", "error", "候选问题（未提供标题）":
+		title = ""
+	}
+	if title != "" && len([]rune(title)) <= 96 {
+		return title
+	}
+	location := f.Function
+	if location == "" {
+		location = f.File
+	}
+	if location == "" {
+		location = "候选问题"
+	}
+	if f.CWEName != "" {
+		return f.CWEName + " · " + location
+	}
+	return location
+}
+
+func (d ReportData) NavigationFindings() []Finding {
+	rows := d.Findings
+	if len(d.FindingsByVerdict) > 0 {
+		rows = nil
+		for _, group := range d.FindingsByVerdict {
+			if group.HasSubgroups {
+				for _, subgroup := range group.Subgroups {
+					rows = append(rows, subgroup.Findings...)
+				}
+			} else {
+				rows = append(rows, group.Findings...)
+			}
+		}
+	}
+	var out []Finding
+	for _, f := range rows {
+		if f.InFindingNavigation() {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // CWELabel displays the recorded classification without inventing one for
 // legacy artifacts. This string is escaped by html/template like all evidence.
 func (f Finding) CWELabel() string {
@@ -310,9 +427,9 @@ func (f Finding) SeverityColor() string {
 	case "critical":
 		return "#721c24"
 	case "high":
-		return "#dc3545"
+		return "#b4232a"
 	case "medium":
-		return "#fd7e14"
+		return "#89520d"
 	case "low":
 		return "#6c757d"
 	}
@@ -324,19 +441,33 @@ func (f Finding) HasDynamicTest() bool {
 	return f.DynamicTestStatus != ""
 }
 
+func (f Finding) DynamicSummary() string {
+	line := strings.SplitN(f.DynamicTestDetails, "\n", 2)[0]
+	// Build diagnostics include the entire CLI transcript after the cause.
+	for _, prefix := range []string{"Docker 构建超时", "Docker 构建失败", "Docker 环境不可用", "Docker 基础镜像不可用", "容器执行失败", "容器执行超时"} {
+		if strings.HasPrefix(line, prefix) {
+			return prefix
+		}
+	}
+	if text := []rune(line); len(text) > 160 {
+		return string(text[:160]) + "…"
+	}
+	return line
+}
+
 // DynamicTestColor returns a color for the dynamic test status badge.
 func (f Finding) DynamicTestColor() string {
 	switch f.DynamicTestStatus {
 	case "CONFIRMED":
 		return "#dc3545"
 	case "NOT_REPRODUCED":
-		return "#28a745"
+		return "#64748b"
 	case "BLOCKED":
-		return "#28a745"
+		return "#8a5a10"
 	case "ERROR":
 		return "#6c757d"
 	case "INCONCLUSIVE":
-		return "#fd7e14"
+		return "#89520d"
 	default:
 		return "#6c757d"
 	}

@@ -466,7 +466,7 @@ def test_off_enum_row_is_reported_not_false_clean():
         "spelling is 'unrecognized' (the T1 F1 split)")
     # the honest message names both counts
     msg = _remediation_for_unrecognized([], [{"verdict": "error"}, {"verdict": "Probably Fine"}])
-    assert "1 个分析出错" in msg and "1 个判定无法识别" in msg
+    assert "1 个分析出错" in msg and "1 个结论无法识别" in msg
     assert "未发现漏洞或安全问题" not in msg
 
 
@@ -494,7 +494,7 @@ def test_remediation_message_honest_when_unrecognized():
     assert "未发现漏洞或安全问题" in _remediation_for_unrecognized([], [])
     # the off-enum case: the honest message
     msg = _remediation_for_unrecognized([], [{"verdict": "Probably Fine"}])
-    assert "1 个判定无法识别" in msg and "未发现漏洞或安全问题" not in msg
+    assert "1 个结论无法识别" in msg and "未发现漏洞或安全问题" not in msg
     assert "分析出错" not in msg  # an off-enum row is not a canonical error
     # the actionable case: the LLM path (None)
     assert _remediation_for_unrecognized([{"verdict": "vulnerable"}], []) is None

@@ -31,7 +31,7 @@ const palette = require('./palette.json')
 
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ['../templates/overview.gohtml', '../templates/report-reskin.gohtml', '../types.go'],
+  content: ['../templates/overview.gohtml', '../templates/report-reskin.gohtml', '../templates/document.gohtml', '../types.go'],
   theme: {
     extend: {
       colors: {

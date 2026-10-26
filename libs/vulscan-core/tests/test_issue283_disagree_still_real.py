@@ -173,7 +173,7 @@ def test_disclosure_doc_emitted_and_header_honest(tmp_path, monkeypatch):
                     input_tokens=1, output_tokens=1, stop_reason="end_turn")
 
     text, _usage = gen.generate_disclosure(rec, "prod", _Binding())
-    assert "已由第 2 阶段攻击者模拟判定" in text, (
+    assert "经第 2 阶段攻击者模拟复核后改判" in text, (
         "the disclosure header must say ADJUDICATED for the "
         "vulnerable->bypassable reclassification"
     )
@@ -187,13 +187,13 @@ def test_header_branches_unchanged():
     Stage 2 at all)."""
     from report.generator import _disclosure_verdict_header
     hdr = _disclosure_verdict_header({"stage2_verdict": "unverified"})
-    assert "未验证" in hdr
+    assert "未经复核" in hdr
     # reclassification signal: stage1 present and differs
     hdr2 = _disclosure_verdict_header(
         {"stage2_verdict": "bypassable", "stage1_verdict": "vulnerable"})
-    assert "已由第 2 阶段攻击者模拟判定" in hdr2
+    assert "经第 2 阶段攻击者模拟复核后改判" in hdr2
     # same verdict / absent stage1: conservative UNVERIFIED (existing tests)
     hdr2b = _disclosure_verdict_header({"stage2_verdict": "bypassable"})
-    assert "未验证" in hdr2b
+    assert "未经复核" in hdr2b
     hdr3 = _disclosure_verdict_header({"stage2_verdict": "confirmed"})
     assert "已通过第 2 阶段攻击者模拟确认" in hdr3

@@ -41,7 +41,7 @@ def generate_report(
         f"# 动态测试结果： {repo_name}",
         "",
         f"**日期：** {now}",
-        f"**已测试的发现项总数：** {total - skipped}",
+        f"**已测试的漏洞总数：** {total - skipped}",
         f"**已跳过（该语言没有 Docker 模板）：** {skipped}",
         f"**预估总费用：** ${total_cost_usd:.4f}"
         + ((f" — 费用统计不完整 / run cost incomplete: {len(total_unpriced)} unpriced "
@@ -56,7 +56,7 @@ def generate_report(
         "",
         "| 状态 | 数量 |",
         "|--------|-------|",
-        f"| 已确认 | {confirmed} |",
+        f"| 已复现 | {confirmed} |",
         f"| 未复现 | {not_reproduced} |",
         f"| 测试受阻 | {blocked} |",
         f"| 无法确定 | {inconclusive} |",

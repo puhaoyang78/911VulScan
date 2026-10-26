@@ -8,6 +8,7 @@ import json
 import sys
 from pathlib import Path
 
+from core.verdict_taxonomy import fold_legacy_finding
 from utilities.file_io import read_json
 
 
@@ -44,18 +45,18 @@ def finding_fields(result: dict, source_code="") -> dict:
         return report_text(result.get(key) or vuln.get(key) or fallback)
 
     if verification.get("incomplete"):
-        status = "第 2 阶段未完成，尚未确认；需要人工复核。"
+        status = "第 2 阶段复核未完成，结论待定；需要人工复核。"
     elif verification.get("agree") is True:
         status = "第 2 阶段模型复核同意；不等于 PoC 已执行或崩溃已复现。"
     elif verification:
-        status = "第 2 阶段模型复核已调整判定；以最终判定及解释为准，不等于动态验证。"
+        status = "第 2 阶段模型复核已改判；以最终结论与说明为准，不等于动态测试。"
     else:
         status = "未记录第 2 阶段复核；当前是静态分析结果，不等于动态验证。"
     explanation = report_text(verification.get("explanation"))
     if explanation:
         status += "\n" + explanation
     if result.get("consistency_update"):
-        status += "\n一致性更新（上方解释可能早于此更新）：\n" + report_text(result["consistency_update"])
+        status += "\n复核后更正（上方说明可能早于此更正）：\n" + report_text(result["consistency_update"])
     return {
         "description": value("description", result.get("reasoning")),
         "cwe_id": value("cwe_id"),
@@ -68,6 +69,25 @@ def finding_fields(result: dict, source_code="") -> dict:
         "steps_to_reproduce": value("steps_to_reproduce"),
         "stage2_verification": status,
     }
+
+
+def model_review_status(result: dict) -> str:
+    """Presentation of the actual verifier result, independent of Docker status."""
+    verification = result.get("verification")
+    if not isinstance(verification, dict) or not verification:
+        return "unreviewed"
+    if result.get("error"):
+        return "error"
+    if verification.get("incomplete") or verification.get("explanation") == "Max iterations reached":
+        return "inconclusive"
+    verdict = fold_legacy_finding(str(result.get("finding") or result.get("verdict") or "").lower())
+    if verdict in ("vulnerable", "bypassable"):
+        return "retained"
+    if verdict in ("safe", "protected"):
+        return "excluded"
+    if verdict in ("inconclusive", ""):
+        return "inconclusive"
+    return "error"  # same off-enum error classification as the verifier
 
 
 def load_dynamic_by_route(results_path: str) -> dict:
@@ -87,7 +107,7 @@ def load_dynamic_by_route(results_path: str) -> dict:
     except (OSError, ValueError) as exc:
         # Sidecars are optional: a partial write must not destroy a valid
         # static report. Do not attach an unverified or partially read receipt.
-        print(f"[报告] 动态证据未关联：无法读取可选结果文件（{type(exc).__name__}）。",
+        print(f"[报告] 动态测试输出未关联：无法读取可选结果文件（{type(exc).__name__}）。",
               file=sys.stderr)
         return {}
     if not isinstance(dynamic, dict) or not isinstance(pipeline, dict):

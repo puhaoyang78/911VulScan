@@ -519,3 +519,18 @@ def test_orchestrator_coerces_nonstr_finding_id(tmp_path, monkeypatch):
     assert isinstance(captured.get("finding_id"), str), (
         f"finding_id not coerced to str: {captured.get('finding_id')!r}"
     )
+
+
+def test_target_imports_reach_generation_when_manifest_is_incomplete(tmp_path):
+    from utilities.dynamic_tester.source_context import describe_repository
+    from utilities.dynamic_tester.test_generator import _build_finding_prompt, SYSTEM_PROMPT
+    (tmp_path / 'main.py').write_text('import jwt\nfrom Crypto.Cipher import AES\nfrom local_helper import target\nimport os\n', encoding='utf-8')
+    (tmp_path / 'local_helper.py').write_text('def target(): return 1\n')
+    (tmp_path / 'requirements.txt').write_text('Flask>=3.1\n')
+    context = describe_repository(str(tmp_path))
+    assert context['module_imports']['main.py'] == ['Crypto', 'jwt', 'local_helper', 'os']
+    prompt = _build_finding_prompt({'id':'V-1','location':{'file':'main.py','function':'handle'}}, {'language':'python','source_context':context})
+    assert 'Recorded Python imports in target module' in prompt
+    assert '"jwt"' in prompt and '"Crypto"' in prompt
+    assert 'Import names are not necessarily package distribution names' in prompt
+    assert 'chains of alternative installers' in SYSTEM_PROMPT

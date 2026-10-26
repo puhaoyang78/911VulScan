@@ -111,7 +111,7 @@ def test_invalid_optional_sidecars_do_not_block_static_csv(tmp_path, capsys, sid
         row = next(csv.DictReader(stream))
     assert row["description"] == "索引未经范围检查。"
     assert row["dynamic_test_status"] == "" and row["reproduction"] == ""
-    assert "动态证据未关联" in capsys.readouterr().err
+    assert "动态测试输出未关联" in capsys.readouterr().err
 
 
 def test_unreadable_optional_evidence_warns_without_claiming_no_test(tmp_path, monkeypatch, capsys):
@@ -124,7 +124,7 @@ def test_unreadable_optional_evidence_warns_without_claiming_no_test(tmp_path, m
     monkeypatch.setattr(details, "read_json", unreadable)
     assert load_dynamic_by_route(str(results)) == {}
     warning = capsys.readouterr().err
-    assert "动态证据未关联" in warning and "PermissionError" in warning
+    assert "动态测试输出未关联" in warning and "PermissionError" in warning
 
 
 def test_live_report_data_and_csv_keep_full_details_without_api(tmp_path, monkeypatch, capsys):
@@ -170,3 +170,19 @@ def test_unknown_and_skipped_dynamic_rows_remain_in_grouped_html(tmp_path, monke
     groups = json.loads(capsys.readouterr().out)["data"]["findings_by_verdict"]
     rows = [f for group in groups for sub in group["subgroups"] for f in sub["findings"]]
     assert {f["dynamic_test_status"] for f in rows} == {"SKIPPED", "UNKNOWN"}
+
+
+def test_report_projection_no_llm_preserves_original_step_records(tmp_path, monkeypatch, capsys):
+    import utilities.llm
+    _, results, dataset = _fixture(tmp_path)
+    original = tmp_path / 'report-data.report.json'
+    original.write_text('{"cost_usd":1.5,"status":"success"}')
+    before = {p.name:p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
+    def forbidden(*args, **kwargs):
+        raise AssertionError('read-only report projection called a model')
+    monkeypatch.setattr(utilities.llm, 'simple_text', forbidden)
+    assert cli.cmd_report_data(SimpleNamespace(results=str(results),dataset=str(dataset),no_llm=True))==0
+    data = json.loads(capsys.readouterr().out)['data']
+    assert data['findings'][0]['cwe_id']=='125'
+    assert data['remediation_html']==''
+    assert {p.name:p.read_bytes() for p in tmp_path.iterdir() if p.is_file()} == before

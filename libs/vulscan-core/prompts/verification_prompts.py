@@ -360,7 +360,13 @@ def _format_builtin_app_context_for_verification(app_context: "ApplicationContex
             lines.append(f"- {collapse_inline(source)}: {collapse_inline(level)}")
         lines.append("")
 
-    if app_context.not_a_vulnerability:
+    _intent = app_context.intent_note() if hasattr(app_context, "intent_note") else ""
+    if _intent:
+        # 靶场：不要用「这是教学示例」否掉复现结论，只看能否利用。
+        lines.append("**Deliberately vulnerable by design — judge exploitability, not intent:**")
+        lines.append(collapse_inline(_intent))
+        lines.append("")
+    elif app_context.not_a_vulnerability:
         lines.append("**Do NOT flag as vulnerable:**")
         for item in app_context.not_a_vulnerability[:5]:  # Limit for verification prompt
             lines.append(f"- {collapse_inline(item)}")

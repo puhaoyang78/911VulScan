@@ -38,6 +38,7 @@ import (
 
 // Job status constants.
 const (
+	StatusQueued     = "queued"
 	StatusRunning    = "running"
 	StatusCancelling = "cancelling"
 	StatusCancelled  = "cancelled"
@@ -55,6 +56,8 @@ const (
 type jobMeta struct {
 	DockerProxy string    `json:"docker_proxy,omitempty"`
 	ScanTimeout string    `json:"scan_timeout,omitempty"`
+	// Ref is the tag/branch/commit the repository was checked out at.
+	Ref string `json:"ref,omitempty"`
 	LLMConfig   string    `json:"llm_config,omitempty"`
 	ID          string    `json:"id"`
 	Repo        string    `json:"repo"`
@@ -64,15 +67,20 @@ type jobMeta struct {
 
 // Job represents a single scan job.
 type Job struct {
+	Snapshot        *jobSnapshot
 	mu              sync.Mutex
 	ID              string
 	Repo            string
+	// Ref is the requested tag/branch/commit; empty scans the default branch.
+	Ref             string
 	StartedAt       time.Time
 	Status          string
 	LogBuf          []string
 	logBytes        int  // total bytes buffered, to bound memory (see addLog)
 	logCapped       bool // true once a line/byte limit was hit; no more appends
 	ReportPath      string
+	reportRenderMu  sync.Mutex
+	reportView      *report.ReportData
 	SummaryPath     string
 	DisclosurePaths []string
 	Cancel          context.CancelFunc
@@ -99,9 +107,6 @@ func (j *Job) addLog(line string) {
 
 // addLogLocked requires j.mu (also used for atomic cancellation updates).
 func (j *Job) addLogLocked(line string) {
-	if j.logCapped {
-		return
-	}
 	// Never persist an explicitly supplied provider key, even if a subprocess echoes it.
 	for name, secret := range j.keyEnv {
 		if strings.Contains(name, "API_KEY") && secret != "" {
@@ -110,6 +115,10 @@ func (j *Job) addLogLocked(line string) {
 	}
 	line = strings.ReplaceAll(line, "\r", " ")
 	line = strings.ReplaceAll(line, "\n", " ")
+	j.acceptUIEventLocked(line)
+	if j.logCapped {
+		return
+	}
 	// Bound memory against a repo that floods stderr — by line count AND total
 	// bytes (a few huge lines can blow past a line cap). Cap and stop (rather than
 	// trim the front) so SSE replay indices stay stable.
@@ -328,6 +337,7 @@ func (s *Server) recoverJobs() {
 		jobDir := filepath.Join(s.outDir, id)
 
 		job := &Job{ID: id}
+		job.outDir = jobDir
 
 		// Try to read meta.json.
 		var persistedStatus string
@@ -335,6 +345,7 @@ func (s *Server) recoverJobs() {
 			var m jobMeta
 			if json.Unmarshal(data, &m) == nil {
 				job.Repo = m.Repo
+				job.Ref = m.Ref
 				job.StartedAt = m.StartedAt
 				job.llmConfig = m.LLMConfig
 				job.dockerProxy = m.DockerProxy
@@ -360,28 +371,23 @@ func (s *Server) recoverJobs() {
 
 		// Determine status from presence of report.html.
 		reportPath := filepath.Join(jobDir, "report.html")
-		if _, err := os.Stat(reportPath); err == nil {
+		if isRegularNoSymlink(jobDir, reportPath) {
 			job.Status = StatusDone
 			job.ReportPath = reportPath
-			// Look for summary.
-			for _, sp := range []string{
-				filepath.Join(jobDir, "report", "SUMMARY_REPORT.md"),
-				filepath.Join(jobDir, "SUMMARY_REPORT.md"),
-			} {
-				if _, err := os.Stat(sp); err == nil {
-					job.SummaryPath = sp
-					break
-				}
-			}
-			// Look for disclosure reports.
-			job.DisclosurePaths = findDisclosures(jobDir)
 		} else {
 			job.Status = StatusError
 		}
+		for _, sp := range []string{filepath.Join(jobDir, "report", "SUMMARY_REPORT.md"), filepath.Join(jobDir, "SUMMARY_REPORT.md")} {
+			if isRegularNoSymlink(jobDir, sp) {
+				job.SummaryPath = sp
+				break
+			}
+		}
+		job.DisclosurePaths = findDisclosures(jobDir)
 		// #320 (wave r3): the persisted terminal status wins over the
 		// report.html inference — a timed-out job reloaded as a generic
 		// error loses the distinct state the UI renders.
-		if persistedStatus == StatusTimeout || persistedStatus == StatusCancelled {
+		if persistedStatus == StatusDone || persistedStatus == StatusTimeout || persistedStatus == StatusCancelled || persistedStatus == StatusError {
 			job.Status = persistedStatus
 		} else if persistedStatus == StatusCancelling {
 			// Restart interrupted cleanup; never infer success from a partial report.
@@ -404,6 +410,17 @@ func (s *Server) recoverJobs() {
 			job.LogBuf = lines
 		}
 
+		if f, _, err := openRegularInRoot(jobDir, filepath.Join(jobDir, "snapshot.json")); err == nil {
+			var snapshot jobSnapshot
+			if json.NewDecoder(io.LimitReader(f, 64<<20)).Decode(&snapshot) == nil && snapshot.Version == 1 && snapshot.JobID == id && snapshot.Stages != nil && snapshot.Findings != nil {
+				job.Snapshot = &snapshot
+				if scanActive(snapshot.Status) && persistedStatus != StatusDone && persistedStatus != StatusTimeout && persistedStatus != StatusCancelled && persistedStatus != StatusError {
+					job.Status = StatusError
+					job.runnerEventLocked("recovery", "error", "服务重启前未记录任务终态，已保留现有结果", "请核对活动与日志；未自动恢复扫描。", true)
+				}
+			}
+			f.Close()
+		}
 		s.mgr.add(job)
 	}
 }
@@ -445,8 +462,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.noncedPage(s.handleIndex))
 	mux.HandleFunc("POST /scan", s.handleStartScan)
 	mux.HandleFunc("GET /assets/{name}", s.handleAsset)
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("GET /refs", s.handleRefs)
 	mux.HandleFunc("GET /scan/{id}", s.noncedPage(s.handleScanPage))
 	mux.HandleFunc("GET /scan/{id}/logs", s.handleScanLogs)
+	mux.HandleFunc("GET /scan/{id}/logs.txt", s.handleLogDownload)
+	mux.HandleFunc("GET /scan/{id}/snapshot", s.handleSnapshot)
+	mux.HandleFunc("GET /scan/{id}/events", s.handleSnapshotEvents)
 	mux.HandleFunc("GET /report/{id}", s.reportCSP(s.handleReport))
 	mux.HandleFunc("GET /summary/{id}", s.noncedPage(s.handleSummary))
 	mux.HandleFunc("GET /disclosures/{id}", s.handleDisclosureList)
@@ -466,7 +488,7 @@ func (s *Server) noncedPage(h http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'none'; script-src 'self' 'nonce-"+nonce+"'; "+
 				"style-src 'self' 'nonce-"+nonce+"'; style-src-attr 'unsafe-inline'; "+
-				"connect-src 'self'; form-action 'self'; base-uri 'none'; "+
+				"font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; "+
 				"object-src 'none'; frame-ancestors 'none'")
 		w.Header().Set("Cache-Control", "no-store")
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), cspNonceKey{}, nonce)))
@@ -482,7 +504,7 @@ func (s *Server) reportCSP(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
-				"img-src 'self' data:; connect-src 'none'; form-action 'none'; "+
+				"font-src data:; img-src 'self' data:; connect-src 'none'; form-action 'none'; "+
 				"base-uri 'none'; frame-ancestors 'none'")
 		h.ServeHTTP(w, r)
 	}
@@ -700,7 +722,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		v := &jobView{
 			ID:         j.ID,
 			Repo:       j.Repo,
-			StartedAt:  j.StartedAt.UTC().Format("2006-01-02 15:04:05"),
+			StartedAt:  j.StartedAt.In(time.FixedZone("UTC+8", 8*3600)).Format("2006-01-02 15:04:05"),
 			Status:     j.Status,
 			HasReport:  j.ReportPath != "",
 			HasSummary: j.SummaryPath != "",
@@ -720,7 +742,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, v := range views {
 		switch v.Status {
-		case StatusRunning, StatusCancelling:
+		case StatusQueued, StatusRunning, StatusCancelling:
 			d.RunningCount++
 		case StatusDone:
 			d.DoneCount++
@@ -777,19 +799,15 @@ func sameOriginOK(r *http.Request) bool {
 
 func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	switch name {
-	case "marked-18.1.1.min.js", "dompurify-3.4.17.min.js":
-	default:
-		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
-		return
-	}
-	data, err := uifiles.FS.ReadFile("vendor/" + name)
+	data, mime, err := uifiles.Asset(name)
 	if err != nil {
 		http.Error(w, "未找到所请求的任务或文件", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Content-Type", mime)
+	// Application scripts keep stable URLs across binary upgrades. Revalidate
+	// them on refresh so a new template never runs against yesterday's UI code.
+	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(data)
 }
 
@@ -880,6 +898,11 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	ref, err := validateGitRef(r.FormValue("ref"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	languages := r.Form["languages"]
 	for _, l := range languages {
 		if !supportedLanguages[l] {
@@ -926,7 +949,7 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write meta.json immediately.
-	meta := jobMeta{ID: id, Repo: repo, StartedAt: time.Now().UTC(), LLMConfig: llmConfig, ScanTimeout: scanTimeoutValue(scanTimeout), DockerProxy: dockerProxy}
+	meta := jobMeta{ID: id, Repo: repo, Ref: ref, StartedAt: time.Now().UTC(), LLMConfig: llmConfig, ScanTimeout: scanTimeoutValue(scanTimeout), DockerProxy: dockerProxy}
 	if data, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(filepath.Join(jobDir, "meta.json"), data, 0640)
 	}
@@ -935,8 +958,9 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	job := &Job{
 		ID:          id,
 		Repo:        repo,
+		Ref:         ref,
 		StartedAt:   meta.StartedAt,
-		Status:      StatusRunning,
+		Status:      StatusQueued,
 		Cancel:      cancel,
 		ctx:         ctx,
 		keyEnv:      keyEnv,
@@ -950,6 +974,8 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		done:        make(chan struct{}),
 		outDir:      jobDir,
 	}
+	job.Snapshot = newJobSnapshot(job, false)
+	job.runnerEventLocked("queue", "queued", "任务已排队，等待执行槽位", "", false)
 	s.mgr.add(job)
 	go s.runJob(job)
 
@@ -1166,7 +1192,92 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	data, err := s.reportViewData(r.Context(), job, f)
+	if err != nil {
+		http.Error(w, "报告读取失败："+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if data != nil {
+		var rendered bytes.Buffer
+		if err := report.RenderReskin(*data, &rendered); err != nil {
+			http.Error(w, "报告渲染失败", http.StatusInternalServerError)
+			return
+		}
+		http.ServeContent(w, r, "report.html", fi.ModTime(), bytes.NewReader(rendered.Bytes()))
+		return
+	}
 	http.ServeContent(w, r, filepath.Base(rp), fi.ModTime(), f)
+}
+
+// Historical HTML is immutable scan output. Re-project saved records without a
+// model call, then show the current reader while retaining authored remediation.
+// Cache per job so refresh, HEAD and parallel requests share one projection.
+func (s *Server) reportViewData(ctx context.Context, job *Job, original *os.File) (*report.ReportData, error) {
+	job.reportRenderMu.Lock()
+	defer job.reportRenderMu.Unlock()
+	if job.reportView != nil {
+		return job.reportView, nil
+	}
+	root := filepath.Join(s.outDir, job.ID)
+	var data report.ReportData
+	if f, _, err := openRegularInRoot(root, filepath.Join(root, "report-data.json")); err == nil {
+		defer f.Close()
+		if err := json.NewDecoder(f).Decode(&data); err != nil {
+			return nil, err
+		}
+	} else {
+		results, dataset := findResultsFile(root), findDatasetFile(root)
+		if results == "" || dataset == "" || s.pythonPath == "" {
+			return nil, nil
+		}
+		job.mu.Lock()
+		active := scanActive(job.Status)
+		job.mu.Unlock()
+		if active {
+			return nil, nil
+		}
+		for _, path := range []string{results, dataset} {
+			f, _, err := openRegularInRoot(root, path)
+			if err != nil {
+				return nil, err
+			}
+			f.Close()
+		}
+		projectionCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		stdout, code, err := python.InvokeCtxCaptureEnv(projectionCtx, s.pythonPath,
+			[]string{"report-data", results, "--dataset", dataset, "--no-llm"}, "", nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		if code != 0 {
+			return nil, fmt.Errorf("已有数据投影退出码 %d", code)
+		}
+		var envelope types.Envelope
+		if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope); err != nil {
+			return nil, err
+		}
+		if envelope.Status != "success" {
+			return nil, fmt.Errorf("已有数据无法读取")
+		}
+		b, err := json.Marshal(envelope.Data)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(b, &data); err != nil {
+			return nil, err
+		}
+		if _, err := original.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		guidance, err := report.ExistingRemediation(original)
+		if err != nil {
+			return nil, err
+		}
+		data.RemediationHTML = guidance
+	}
+	job.reportView = &data
+	return &data, nil
 }
 
 type summaryData struct {
@@ -1391,7 +1502,7 @@ func findDisclosures(outDir string) []string {
 // scanActive includes stopping jobs: SSE must not announce completion until
 // subprocess termination, owned-resource cleanup, and log persistence finish.
 func scanActive(status string) bool {
-	return status == StatusRunning || status == StatusCancelling
+	return status == StatusQueued || status == StatusRunning || status == StatusCancelling
 }
 
 // handleCancelScan stops execution without deleting the job or its artifacts.
@@ -1412,8 +1523,9 @@ func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job.mu.Lock()
-	if job.Status == StatusRunning && job.Cancel != nil {
+	if (job.Status == StatusRunning || job.Status == StatusQueued) && job.Cancel != nil {
 		job.Status = StatusCancelling
+		job.runnerEventLocked("cleanup", "running", "已请求停止扫描，等待进程退出和资源清理", "", false)
 		job.addLogLocked("[cancel] 已请求取消，正在停止扫描并清理本任务资源…")
 		job.persistTerminalStatus(StatusCancelling)
 		job.Cancel()
@@ -1499,7 +1611,7 @@ func (s *Server) runJob(job *Job) {
 		job.mu.Lock()
 		defer job.mu.Unlock()
 		status := job.Status
-		if status == StatusCancelling || (status == StatusRunning && job.ctx.Err() != nil) {
+		if status == StatusCancelling || ((status == StatusRunning || status == StatusQueued) && job.ctx.Err() != nil) {
 			status = StatusCancelled
 			// Retain access to any partial reports, without presenting them as
 			// a successful scan. Download handlers still validate safe paths.
@@ -1513,9 +1625,21 @@ func (s *Server) runJob(job *Job) {
 				}
 			}
 			job.DisclosurePaths = findDisclosures(outDir)
-		} else if status == StatusRunning {
+		} else if status == StatusRunning || status == StatusQueued {
 			status = StatusError
 		}
+		// All terminal outcomes retain real partial artifacts, including timeout
+		// and failure. Availability never implies successful coverage.
+		if p := filepath.Join(outDir, "report.html"); isRegularNoSymlink(outDir, p) {
+			job.ReportPath = p
+		}
+		for _, p := range []string{filepath.Join(outDir, "report", "SUMMARY_REPORT.md"), filepath.Join(outDir, "SUMMARY_REPORT.md")} {
+			if isRegularNoSymlink(outDir, p) {
+				job.SummaryPath = p
+				break
+			}
+		}
+		job.DisclosurePaths = findDisclosures(outDir)
 		logData := strings.Join(job.LogBuf, "\n") + "\n"
 		job.keyEnv = nil // release per-run credentials after the last subprocess exits
 		_ = os.WriteFile(filepath.Join(outDir, "logs.txt"), []byte(logData), 0640)
@@ -1523,6 +1647,33 @@ func (s *Server) runJob(job *Job) {
 		// Serialize final persistence with cancellation requests; terminal state
 		// is visible only after the final artifact writes have completed.
 		job.Status = status
+		snapshot := job.snapshotLocked()
+		now := time.Now().UTC()
+		snapshot.FinishedAt = &now
+		snapshot.UpdatedAt = now
+		snapshot.Revision++
+		for _, finding := range snapshot.Findings {
+			if finding.Dynamic == "running" {
+				finding.Dynamic = "interrupted"
+				finding.DynamicDetails = "任务结束前未报告本次测试结果，请查看该发现的活动记录。"
+				finding.FailurePhase = ""
+			}
+		}
+		if status != StatusDone {
+			if st := snapshot.Stages[snapshot.Stage]; st != nil && st.Status == "running" {
+				st.Status = "interrupted"
+			}
+		}
+		start := len(job.LogBuf) - 5
+		if start < 0 {
+			start = 0
+		}
+		job.runnerEventLocked("task", status, "任务已结束；已保留实际产物与日志", strings.Join(job.LogBuf[start:], "\n"), true)
+		if len(snapshot.Pending) > 0 {
+			snapshot.Partial = true
+			snapshot.Coverage = "event_gap"
+		}
+		job.persistSnapshotLocked()
 	}()
 
 	// Acquire a run slot, but abort promptly if the job was cancelled/deleted
@@ -1537,6 +1688,14 @@ func (s *Server) runJob(job *Job) {
 	if job.ctx.Err() != nil {
 		return
 	}
+	job.mu.Lock()
+	if job.Status == StatusQueued {
+		job.Status = StatusRunning
+	}
+	job.snapshotLocked()
+	job.persistSnapshotLocked()
+	job.mu.Unlock()
+	job.runnerEvent("initialize", "running", "已获得执行槽位，正在准备扫描", "")
 
 	job.addLog("→ 开始扫描：" + job.Repo)
 
@@ -1548,16 +1707,49 @@ func (s *Server) runJob(job *Job) {
 
 	if isURL {
 		cloneDir := filepath.Join(outDir, "repo")
+		job.runnerEvent("clone", "running", "正在获取仓库", job.Repo)
 		job.addLog("[clone] 正在克隆仓库：" + job.Repo + "…")
-		if err := cloneRepo(job.ctx, job.Repo, cloneDir, job.addLog); err != nil {
+		if job.Ref != "" {
+			job.addLog("[clone] 目标版本：" + job.Ref)
+		}
+		if err := cloneRepo(job.ctx, job.Repo, job.Ref, cloneDir, job.addLog); err != nil {
 			if job.ctx.Err() == nil {
 				job.addLog("[clone] 克隆失败：" + err.Error())
+				job.runnerEvent("clone", "error", "获取仓库失败", err.Error())
 				job.setError()
 			}
 			return
 		}
 		localPath = cloneDir
+		job.runnerEvent("clone", "success", "仓库获取完成", "")
 	}
+	var branch, commit string
+	metadataCtx, metadataCancel := context.WithTimeout(job.ctx, 2*time.Second)
+	for _, field := range []struct {
+		arg string
+		dst *string
+	}{{"--abbrev-ref", &branch}, {"", &commit}} {
+		gitArgs := []string{"-C", localPath, "rev-parse"}
+		if field.arg != "" {
+			gitArgs = append(gitArgs, field.arg)
+		}
+		gitArgs = append(gitArgs, "HEAD")
+		if b, err := exec.CommandContext(metadataCtx, "git", gitArgs...).Output(); err == nil {
+			*field.dst = strings.TrimSpace(string(b))
+		}
+	}
+	metadataCancel()
+	if job.Ref != "" {
+		// A tag or commit checkout leaves a detached HEAD; showing the literal
+		// "HEAD" would tell the operator nothing.
+		branch = job.Ref
+	}
+	job.mu.Lock()
+	metadata := job.snapshotLocked()
+	metadata.Branch = branch
+	metadata.Commit = commit
+	job.persistSnapshotLocked()
+	job.mu.Unlock()
 
 	// Build scan args.
 	args := []string{"scan", "--output", outDir}
@@ -1615,7 +1807,12 @@ func (s *Server) runJob(job *Job) {
 		scanTimeout = 2 * time.Hour
 	}
 	job.addLog(fmt.Sprintf("→ Python 扫描调用总时限：%s（不含排队、克隆、补充报告和清理）", scanTimeout))
-	stdout, exitCode, err := python.InvokeCtxCaptureEnvTimeout(job.ctx, s.pythonPath, args, "", job.keyEnv, job.addLog, scanTimeout)
+	scanEnv := make(map[string]string, len(job.keyEnv)+1)
+	for k, v := range job.keyEnv {
+		scanEnv[k] = v
+	}
+	scanEnv["VULSCAN_JOB_ID"] = job.ID
+	stdout, exitCode, err := python.InvokeCtxCaptureEnvTimeout(job.ctx, s.pythonPath, args, "", scanEnv, job.addLog, scanTimeout)
 	if job.ctx.Err() != nil {
 		return // cancelled — don't mark error
 	}
@@ -1670,7 +1867,9 @@ func (s *Server) runJob(job *Job) {
 
 	// If still missing, try explicit report generation (non-fatal).
 	if !fileExists(reportPath) {
+		job.runnerEvent("report", "running", "正在生成补充 HTML 报告", "")
 		if err := s.generateHTMLReport(job.ctx, outDir, reportPath, job.llmConfig, job.keyEnv, job.addLog); err != nil {
+			job.runnerEvent("report", "error", "补充 HTML 报告生成失败", err.Error())
 			if job.ctx.Err() != nil {
 				return
 			}
@@ -1714,9 +1913,11 @@ func (s *Server) runJob(job *Job) {
 		}
 	}
 	if summaryPath == "" {
+		job.runnerEvent("report", "running", "正在生成补充摘要", "")
 		// Non-fatal — requires API key / LLM.
 		sp := filepath.Join(outDir, "SUMMARY_REPORT.md")
 		if err := s.generateSummary(job.ctx, outDir, sp, job.llmConfig, job.keyEnv, job.addLog); err != nil {
+			job.runnerEvent("report", "partial", "补充摘要生成失败", err.Error())
 			if job.ctx.Err() != nil {
 				return
 			}
@@ -1736,6 +1937,14 @@ func (s *Server) runJob(job *Job) {
 	}
 
 	disclosurePaths := findDisclosures(outDir)
+	job.mu.Lock()
+	if job.Snapshot != nil {
+		if st := job.Snapshot.Stages["report"]; st != nil && st.Status == "running" {
+			st.Status = "success"
+			st.Activity = "报告与材料整理完成"
+		}
+	}
+	job.mu.Unlock()
 
 	job.setDone(reportPath, summaryPath, disclosurePaths)
 }
@@ -2027,7 +2236,11 @@ func repoHostBlocked(ctx context.Context, repo string) bool {
 	return false
 }
 
-func cloneRepo(ctx context.Context, repo, dest string, onLog func(string)) error {
+// cloneRepo fetches the repository into dest and, when ref is set, checks that
+// version out. A tag or branch is fetched directly with --branch; anything else
+// (a commit SHA, or a ref the remote advertises differently) falls back to a
+// full clone followed by `git checkout`, because --branch cannot resolve a SHA.
+func cloneRepo(ctx context.Context, repo, ref, dest string, onLog func(string)) error {
 	if !(strings.HasPrefix(repo, "https://") || strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "git@")) {
 		return fmt.Errorf("不支持此仓库地址协议")
 	}
@@ -2040,13 +2253,120 @@ func cloneRepo(ctx context.Context, repo, dest string, onLog func(string)) error
 	// local, user-chosen scan target.
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git",
+
+	cloneArgs := []string{
 		"-c", "protocol.ext.allow=never",
 		"-c", "protocol.file.allow=user",
 		// Do not follow HTTP redirects: an allowed public host could otherwise
 		// 302 the clone to a loopback/metadata URL that repoHostBlocked never saw.
 		"-c", "http.followRedirects=false",
-		"clone", "--depth", "1", "--", repo, dest)
+		"clone",
+	}
+	if ref == "" {
+		return runGit(ctx, append(cloneArgs, "--depth", "1", "--", repo, dest), "clone", onLog)
+	}
+	if !looksLikeCommitSHA(ref) {
+		// The common case for historical scans: a tag such as v1.0.3.
+		fast := append(append([]string{}, cloneArgs...), "--depth", "1", "--branch", ref, "--", repo, dest)
+		err := runGit(ctx, fast, "clone", onLog)
+		if err == nil {
+			onLog("[clone] 已检出 " + ref + "（浅克隆）")
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		onLog("[clone] 浅克隆 " + ref + " 失败，改用完整克隆后检出…")
+		_ = os.RemoveAll(dest)
+	}
+	// Commit SHA, or a ref --branch refused: clone everything, then check out.
+	if err := runGit(ctx, append(cloneArgs, "--", repo, dest), "clone", onLog); err != nil {
+		return err
+	}
+	return runGit(ctx, []string{"-C", dest, "checkout", "--detach", ref}, "checkout", onLog)
+}
+
+// refOption is one selectable version of a remote repository.
+type refOption struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"` // "tag" | "branch"
+}
+
+// handleRefs lists the tags and branches of a remote so the form can offer a
+// picker instead of asking the operator to recall a tag name. Read-only: it
+// performs `git ls-remote` against the same URL policy as cloneRepo.
+func (s *Server) handleRefs(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginOK(r) {
+		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
+		return
+	}
+	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if repo == "" {
+		http.Error(w, "请先填写仓库地址", http.StatusBadRequest)
+		return
+	}
+	if !(strings.HasPrefix(repo, "https://") || strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "git@")) {
+		http.Error(w, "只有远程仓库可以列出标签；本机路径请直接填写分支名或提交号", http.StatusBadRequest)
+		return
+	}
+	if repoHostBlocked(r.Context(), repo) {
+		http.Error(w, "为保护本机安全，禁止从回环、链路本地或云元数据地址读取版本", http.StatusBadRequest)
+		return
+	}
+	refs, err := listRefs(r.Context(), repo)
+	if err != nil {
+		http.Error(w, "无法读取版本列表："+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{"refs": refs})
+}
+
+// listRefs returns tags first, then branches, each sorted for a readable picker.
+func listRefs(ctx context.Context, repo string) ([]refOption, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git",
+		"-c", "protocol.ext.allow=never",
+		"-c", "http.followRedirects=false",
+		"ls-remote", "--tags", "--heads", "--refs", "--", repo)
+	setProcGroupKill(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("读取超时")
+		}
+		return nil, fmt.Errorf("仓库不可访问")
+	}
+	var tags, branches []refOption
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.SplitN(strings.TrimSpace(line), "\t", 2)
+		if len(fields) != 2 {
+			continue
+		}
+		name := fields[1]
+		switch {
+		case strings.HasPrefix(name, "refs/tags/"):
+			tags = append(tags, refOption{Name: strings.TrimPrefix(name, "refs/tags/"), Kind: "tag"})
+		case strings.HasPrefix(name, "refs/heads/"):
+			branches = append(branches, refOption{Name: strings.TrimPrefix(name, "refs/heads/"), Kind: "branch"})
+		}
+	}
+	sort.Slice(tags, func(i, j int) bool { return tags[i].Name > tags[j].Name })
+	sort.Slice(branches, func(i, j int) bool { return branches[i].Name < branches[j].Name })
+	const limit = 200
+	refs := append(tags, branches...)
+	if len(refs) > limit {
+		refs = refs[:limit]
+	}
+	return refs, nil
+}
+
+// runGit runs one git subcommand, streaming its stderr, and turns a non-zero
+// exit into an error that names the operation the operator asked for.
+func runGit(ctx context.Context, args []string, op string, onLog func(string)) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	// Run git in its own process group and SIGKILL the whole group on cancel, so
 	// helpers (git-remote-https, ssh) are killed too — matching the python path
 	// rather than leaving them to die indirectly on EPIPE. (unix; no-op elsewhere)
@@ -2066,7 +2386,54 @@ func cloneRepo(ctx context.Context, repo, dest string, onLog func(string)) error
 	// Drain any remainder (an over-long line stops Scan) so a malicious git
 	// server cannot wedge cmd.Wait() by filling the stderr pipe.
 	_, _ = io.Copy(io.Discard, stderr)
-	return cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		if op == "checkout" {
+			return fmt.Errorf("无法检出该版本（标签/分支/提交不存在，或仓库不允许匿名访问）：%w", err)
+		}
+		return err
+	}
+	return nil
+}
+
+// looksLikeCommitSHA reports whether ref can only be resolved by checkout.
+func looksLikeCommitSHA(ref string) bool {
+	if len(ref) < 7 || len(ref) > 40 {
+		return false
+	}
+	for _, r := range ref {
+		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') && !(r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// validateGitRef accepts the version strings git itself accepts for a checkout
+// (tags, branches, short and full SHAs) and rejects the shapes that could be
+// mistaken for an option or escape the repository.
+func validateGitRef(raw string) (string, error) {
+	ref := strings.TrimSpace(raw)
+	if ref == "" {
+		return "", nil
+	}
+	if len(ref) > 128 {
+		return "", fmt.Errorf("版本名过长，请填写不超过 128 个字符的标签、分支或提交号")
+	}
+	if strings.HasPrefix(ref, "-") {
+		return "", fmt.Errorf("版本名不能以短横线开头")
+	}
+	if strings.Contains(ref, "..") || strings.Contains(ref, "@{") {
+		return "", fmt.Errorf("版本名包含不允许的字符序列")
+	}
+	for _, r := range ref {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-' || r == '/':
+		default:
+			return "", fmt.Errorf("版本名只能包含字母、数字以及 . _ - /")
+		}
+	}
+	return ref, nil
 }
 
 // patchPipelineOutput updates the repository.url field in pipeline_output.json.
@@ -2156,6 +2523,23 @@ func (s *Server) generateHTMLReport(ctx context.Context, outDir, reportPath, llm
 		return fmt.Errorf("解析报告数据失败：%w", err)
 	}
 
+	// Preserve the actual render input so later versions can display the same
+	// report using their current reader without a new model invocation.
+	dataFile, err := os.CreateTemp(outDir, ".report-data-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(dataFile.Name())
+	if _, err := dataFile.Write(dataBytes); err != nil {
+		dataFile.Close()
+		return err
+	}
+	if err := dataFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(dataFile.Name(), filepath.Join(outDir, "report-data.json")); err != nil {
+		return err
+	}
 	return report.GenerateReskin(reportData, reportPath)
 }
 

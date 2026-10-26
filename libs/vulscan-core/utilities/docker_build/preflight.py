@@ -15,7 +15,7 @@ _DAEMON_PROBE = ["docker", "version", "--format", "{{.Server.Version}}"]
 _BUILDX_PROBE = ["docker", "buildx", "version"]
 
 
-def verify_build_environment(proxy: str | None, runner) -> dict:
+def verify_build_environment(proxy: str | None, runner, *, language: str = "") -> dict:
     """检查 docker CLI、守护进程、buildx 与代理可达性。返回可记录的摘要。
 
     Raises:
@@ -40,7 +40,15 @@ def verify_build_environment(proxy: str | None, runner) -> dict:
             f"Docker buildx 不可用：{detail}。二阶段构建固定使用默认 builder，"
             "请安装 buildx 插件后重试。")
 
-    probe_proxy(proxy)
+    # A listening port alone was insufficient: an unusable upstream passed
+    # preflight and then spent the full build budget downloading dependencies.
+    dependency_source = {
+        "python": "https://pypi.org/simple/",
+        "javascript": "https://registry.npmjs.org/",
+        "typescript": "https://registry.npmjs.org/",
+        "go": "https://proxy.golang.org/",
+    }.get(language.lower() if isinstance(language, str) else "")
+    probe_proxy(proxy, target=dependency_source)
     return {
         "server_version": out.strip(),
         "proxy": proxy or "",

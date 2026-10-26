@@ -8,6 +8,7 @@ which the Go CLI streams to the terminal in real-time.
 import sys
 import threading
 import time
+from core import ui_events
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -69,6 +70,7 @@ class ProgressReporter:
         # Units restored from a checkpoint: they consumed no session time, so
         # they must be excluded from the per-unit rate (#218).
         self._initial_completed = completed
+        self._ui_units = set()
         self._lock = threading.Lock()
         _start_cost = self._get_cost()
         self._last_cost = _start_cost  # snapshot for per-unit delta
@@ -92,6 +94,10 @@ class ProgressReporter:
         else:
             ten_pct = max(1, total // 10)
             self._summary_interval = min(50, ten_pct)
+        stage = {"detect": "analyze"}.get(step_name.lower(), step_name.lower())
+        ui_events.emit("progress.updated", stage=stage, processed=completed,
+                       total=total, unit="复核项" if stage == "verify" else "函数",
+                       elapsed_seconds=0, message="处理队列已建立")
 
     def _get_cost(self) -> float:
         """Get current cumulative cost from the tracker."""
@@ -169,6 +175,7 @@ class ProgressReporter:
         with self._lock:
             self.completed = count
             self._initial_completed = count
+            self._ui_units.clear()
 
     def _session_done(self) -> int:
         """Units processed in THIS session (excludes checkpoint-restored units).
@@ -213,6 +220,15 @@ class ProgressReporter:
             unit_elapsed: How long this specific unit took, in seconds.
         """
         with self._lock:
+            self._ui_units.add(unit_label)
+            stage = {"detect": "analyze", "verify": "verify", "enhance": "enhance"}.get(self.step_name.lower(), self.step_name.lower())
+            unique_done = self._initial_completed + len(self._ui_units)
+            ui_elapsed = time.monotonic() - self.start_time
+            ui_events.emit("progress.updated", stage=stage, processed=unique_done,
+                           total=self.total, unit="函数" if stage != "verify" else "复核项",
+                           elapsed_seconds=round(ui_elapsed, 2),
+                           eta_seconds=round(ui_elapsed / len(self._ui_units) * max(0, self.total - unique_done), 2),
+                           message=unit_label, details=detail, duration_seconds=unit_elapsed)
             self.completed += 1
             elapsed = time.monotonic() - self.start_time
             eta = self._estimate_remaining(elapsed)

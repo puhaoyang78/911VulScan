@@ -225,7 +225,7 @@ def test_summary_template_states_stage2_scope():
         "findings_input": 4, "units_analyzed_total": 120,
         "downgraded": 1, "upgraded": 0}}
     block = _summary_statistics_block(stats)
-    assert "第 2 阶段已判定：4/120 个已分析代码单元" in block
+    assert "第 2 阶段已复核：4/120 个已分析函数" in block
     assert "1 个降级，0 个升级" in block
 
 def test_same_model_caveat_rendered_server_side():

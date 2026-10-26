@@ -28,6 +28,8 @@ python -m utilities.dynamic_tester /path/to/pipeline_output.json \
 | --- | --- | --- |
 | 代理 | `docker_build/proxy.py` | 校验 `http://IP:端口`；留空即直连；回环代理经 bridge 中继，端口固定复用，避免代理地址变化让 BuildKit 缓存层失效 |
 | 工具链 | `docker_build/toolchain.py` | C/C++ 编译器预置为共享镜像 `vulscan/toolchain-c:gcc12-<内容摘要>`，一次构建、全部发现复用；镜像不带 owner/run 标签，按发现回收时不会被删除 |
+| 依赖镜像 | `docker_build/dependencies.py` | Python/Node/Go 按仓库清单构建 `vulscan/deps-<语言>:<清单摘要>`，测试镜像直接以它为基础；清单不变即复用，构建失败退回逐条安装。Node 镜像预装 node-gyp 需要的 python3/make/g++ |
+| 基础镜像 | `docker_build/images.py` | 解析 Dockerfile 的 `FROM`，只拉缺失的镜像；拉取由守护进程完成，构建参数管不到，失败按宿主问题处理 |
 | 时间预算 | `docker_build/policy.py` | 构建/执行/工具链三档预算与失败分类的唯一来源，可用 `VULSCAN_DOCKER_BUILD_TIMEOUT`、`VULSCAN_DOCKER_RUN_TIMEOUT`、`VULSCAN_DOCKER_TOOLCHAIN_TIMEOUT` 覆盖（秒，正整数） |
 | 预检 | `docker_build/preflight.py` | 在花费模型调用之前检查守护进程、buildx 与代理可达性，宿主问题只报一次 |
 

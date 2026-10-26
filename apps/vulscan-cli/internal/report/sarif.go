@@ -128,7 +128,7 @@ func BuildSARIF(data ReportData, opts SARIFOptions) map[string]any {
 		if stepReportIsFailure(sr) {
 			execOK = false
 			if sr.ErrorCount > 0 || len(sr.Errors) > 0 {
-				detail := fmt.Sprintf("步骤 %s：%d 个代码单元出错", displayLabel(sr.Step), sr.ErrorCount)
+				detail := fmt.Sprintf("步骤 %s：%d 个函数出错", displayLabel(sr.Step), sr.ErrorCount)
 				if len(sr.Errors) > 0 {
 					detail += " — " + strings.Join(sr.Errors, "; ")
 				}
@@ -210,7 +210,7 @@ func sarifRulesFor(data ReportData) ([]map[string]any, map[string]int) {
 	for v := range seen {
 		desc := descByVerdict[v]
 		if desc == "" {
-			desc = fmt.Sprintf("发现项判定：%s。", displayLabel(v))
+			desc = fmt.Sprintf("漏洞结论：%s。", displayLabel(v))
 		}
 		props := map[string]any{
 			"verdict": v,
@@ -224,7 +224,7 @@ func sarifRulesFor(data ReportData) ([]map[string]any, map[string]int) {
 			"id":   "vulscan.verdict." + v,
 			"name": "VulScanVerdict_" + strings.ReplaceAll(v, "-", "_"),
 			"shortDescription": map[string]any{
-				"text": fmt.Sprintf("911VulScan 发现项：%s", displayLabel(v)),
+				"text": fmt.Sprintf("911VulScan 漏洞：%s", displayLabel(v)),
 			},
 			"fullDescription": map[string]any{
 				"text": displayLabel(desc),

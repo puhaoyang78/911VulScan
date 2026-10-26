@@ -159,9 +159,9 @@ def run_tests(
 
     tracking.log_usage("Dynamic Test", _phase_baseline)
 
-    print(f"\n[动态测试] 结果：已确认 {confirmed} 项，"
-          f"未复现 {not_reproduced} 项，已阻止 {blocked} 项，"
-          f"无法判定 {inconclusive} 项，错误 {errors} 项", file=sys.stderr)
+    print(f"\n[动态测试] 结果：已复现 {confirmed} 项，"
+          f"未复现 {not_reproduced} 项，测试受阻 {blocked} 项，"
+          f"无法确定 {inconclusive} 项，错误 {errors} 项", file=sys.stderr)
 
     return DynamicTestStepResult(
         results_json_path=results_json_path,

@@ -196,7 +196,7 @@ def test_mocked_docker_native_staging_and_isolation(tmp_path, monkeypatch):
     generated = {"native_language": "cpp", "dockerfile": "FROM unsafe", "test_filename": "../../escape.py",
                  "test_script": '#include "target.cpp"\nint main(){return target();}'}
     seen = []
-    def mock_command(command, timeout, cwd=None):
+    def mock_command(command, timeout, cwd=None, on_output=None):
         seen.append(command)
         if command[:2] == ["docker", "info"]:
             return "fixture-daemon", "", 0, False

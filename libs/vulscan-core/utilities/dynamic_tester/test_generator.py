@@ -18,6 +18,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utilities.llm_client import TokenTracker
+from prompts.report_language import CHINESE_REPORT_INSTRUCTION
 
 
 def _clean_declared(raw: object) -> str:
@@ -89,13 +90,20 @@ RULES:
 4. Keep tests minimal and focused on the specific vulnerability.
 5. Set appropriate timeouts — tests should complete within 60 seconds.
 6. 所有自然语言说明、details、测试日志和注释均使用简体中文。JSON 键名、status 枚举、
-   代码标识符、原始诊断证据和协议值保持原样。不得翻译机器字段。
+   代码标识符、原始诊断输出和协议值保持原样。不得翻译机器字段。
 7. 对于 C/C++，必须遵循提示中的固定编译运行模板，不得通过 Python 模拟目标代码。
-8. CONFIRMED 必须附带非空且可核对的 evidence；只有状态字符串或无内容证据不能确认漏洞。
+8. CONFIRMED 必须附带非空且可核对的 evidence；只有状态字符串或空的测试输出不能确认漏洞。
 
 DEPENDENCY INSTALLATION:
 - Do NOT pin exact versions unless the vulnerability is version-specific. Use >= or no version pin.
-- For Python: put ALL dependencies in requirements.txt, use `pip install --no-cache-dir -r requirements.txt`.
+- For Python: put ALL dependencies in requirements.txt, use
+  `python -m pip install --no-cache-dir --timeout 15 --retries 1 -r requirements.txt`.
+- Dependency installation MUST fail the build on errors. Never hide failures using
+  `|| true`, `|| echo`, or chains of alternative installers. Do not delete failed
+  dependencies, substitute OS packages, or change package indexes to make a build
+  appear successful. Preserve the target's package names and version constraints.
+  Network/proxy timeouts are environment failures; report them instead of inventing
+  fallback install paths. The caller supplies build networking; do not override it.
 - For Node.js: put ALL runtime and build dependencies in package.json. Install them
   at image build time, including devDependencies needed to compile TypeScript.
 - For Go: do NOT write go.mod or go.sum yourself. Initialize the isolated module at
@@ -176,7 +184,7 @@ Return a JSON object with these keys:
 - "docker_compose": string | null — docker-compose.yml content if multi-service, null if single container
 - "needs_attacker_server": boolean — Whether the test needs the attacker capture server
 
-Return ONLY the JSON object, no markdown fences or explanations."""
+Return ONLY the JSON object, no markdown fences or explanations.""" + CHINESE_REPORT_INSTRUCTION
 
 
 def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
@@ -230,6 +238,20 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
             "",
             f"  Source file (pre-staged in Docker build context): {source_basename}",
             "  Use this exact staged path to load/include the real target; COPY . . preserves its dependencies.",
+        ])
+
+    # 依赖镜像：仓库依赖已经装好，用它当基础镜像能省掉每条发现的重复安装。
+    deps_image = repo_info.get("deps_image")
+    if isinstance(deps_image, str) and deps_image:
+        parts.extend([
+            "",
+            f"  Dependency image already built: {collapse_inline(deps_image)}",
+            "  Use it as your FROM (or as the base of your build stage): the repository's",
+            "  third-party dependencies are already installed there. Do not run the install",
+            "  command again. It contains NO application source — you must still COPY the",
+            "  target code (repository/) and your harness into the image.",
+            f"  {collapse_inline(str(repo_info.get('deps_hint') or ''))}",
+            "  Install only the extra packages the harness itself needs.",
         ])
 
     # 本机已缓存的镜像：镜像拉取由 Docker 守护进程完成，构建代理只覆盖构建步骤
@@ -298,6 +320,10 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
         parts.extend(_fenced("Repository files (at most 160 paths)", json.dumps(context["files"], ensure_ascii=False)))
         for name, content in context["manifests"].items():
             parts.extend(_fenced("Original manifest repository/" + name, content))
+        imports = context.get("module_imports", {}).get(finding_file)
+        if imports:
+            parts.extend(_fenced("Recorded Python imports in target module", json.dumps(imports)))
+            parts.append("Loading the real module imports all of these names, even when the tested function does not use them. Reconcile them with the manifests and local files. A manifest may be incomplete. Import names are not necessarily package distribution names; do not install standard-library or local modules as external packages.")
 
     # Add CWE-specific guidance
     cwe_id = finding.get("cwe_id", 0)
@@ -361,7 +387,7 @@ def _managed_guidance(template: str | None, *, repository: bool = False) -> str:
 - 设置 PYTHONDONTWRITEBYTECODE=1 和 PYTHONUNBUFFERED=1；运行时不 pip install、不写源码目录，
   临时文件用 tempfile 放到 /tmp。依赖、虚拟环境和运行所需资源必须在镜像内 /tmp 以外保留。
 - main 必须主动调用真实入口。用 json.dumps(..., ensure_ascii=False) 输出单个最终 JSON；
-  目标日志重定向到 stderr 或捕获为证据，不能让日志冒充最终结果。导入异常不能判定漏洞存在。
+  目标日志重定向到 stderr 或捕获为测试输出，不能让日志冒充最终结果。导入异常不能说明漏洞存在。
 """,
         "go": """Go 编译与模块规则：
 - 独立程序 harness 的 test_filename 使用唯一的 test_exploit.go，入口是 package main 的 func main()。

@@ -10,3 +10,5 @@ apps/vulscan-cli/internal/report/vendor/*.js -text -diff
 apps/vulscan-cli/ui/vendor/*.js -text -diff
 apps/vulscan-cli/internal/server/testdata/browser-smoke/golden_expected.html text eol=lf
 apps/vulscan-cli/internal/server/testdata/browser-smoke/golden_input.md text eol=lf
+# Pinned design and font blobs must retain their verified bytes on Windows.
+apps/vulscan-cli/ui/design/* -text

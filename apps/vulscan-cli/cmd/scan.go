@@ -61,6 +61,7 @@ var (
 	scanLLMReachability             bool
 	scanLLMReachabilityMaxCodeBytes int
 	scanLibraryMode                 bool
+	scanIncludeIntentional          bool
 	scanRepoName                    string
 	scanRepoURL                     string
 	scanCommitSHA                   string
@@ -192,6 +193,7 @@ func registerScanFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&scanCommitSHA, "commit-sha", "", "Commit SHA — stamped into reports")
 	cmd.Flags().BoolVar(&scanLLMReachability, "llm-reachability", false, "Enable the LLM reachability review stage (Opus). Surfaces entry points and external-input sites the structural pass would miss by reviewing the full codebase before the reachability filter is applied. Off by default — enabling this incurs cost proportional to total repo size, not the filtered unit count (~one Opus call per 25 units across the whole codebase).")
 	cmd.Flags().IntVar(&scanLLMReachabilityMaxCodeBytes, "llm-reachability-max-code-bytes", 1500, "Max code bytes per unit sent to the LLM reachability stage (default: 1500). Higher values (e.g. 4096, 8192) catch entry-point indicators past byte 1500 in long handlers / generated code, at proportional Opus cost increase. Only meaningful with --llm-reachability.")
+	cmd.Flags().BoolVar(&scanIncludeIntentional, "include-intentional", false, "Report the deliberately kept bugs of a practice/CTF repository instead of suppressing them as intended behaviour.")
 	cmd.Flags().BoolVar(&scanLibraryMode, "library-mode", false, "Seed the exported public API as reachability entry points, for a library whose public API is being dropped by the structural filter. Blunt: keeps most units — prefer letting fuzz/bin/route entry points seed reachability first.")
 }
 
@@ -400,6 +402,9 @@ func runScan(cmd *cobra.Command, args []string) {
 	}
 	if scanLibraryMode {
 		pyArgs = append(pyArgs, "--library-mode")
+	}
+	if scanIncludeIntentional {
+		pyArgs = append(pyArgs, "--include-intentional")
 	}
 	if scanLLMReachabilityMaxCodeBytes != 1500 {
 		pyArgs = append(pyArgs, "--llm-reachability-max-code-bytes", fmt.Sprintf("%d", scanLLMReachabilityMaxCodeBytes))

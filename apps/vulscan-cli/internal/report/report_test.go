@@ -61,8 +61,8 @@ func TestRenderOverviewIncrementalScan(t *testing.T) {
 	if !strings.Contains(out, "c9f255bb..55cc12c5") {
 		t.Errorf("expected git-style range c9f255bb..55cc12c5, got: %s", excerpt(out, "增量扫描"))
 	}
-	if !strings.Contains(out, "2/8 个代码单元") {
-		t.Errorf("expected '2/8 个代码单元', got: %s", excerpt(out, "增量扫描"))
+	if !strings.Contains(out, "2/8 个函数") {
+		t.Errorf("expected '2/8 个函数', got: %s", excerpt(out, "增量扫描"))
 	}
 }
 
@@ -88,8 +88,8 @@ func TestRenderReskinIncrementalScan(t *testing.T) {
 	if !strings.Contains(out, "c9f255bb..55cc12c5") {
 		t.Error("reskin: expected git-style range")
 	}
-	if !strings.Contains(out, "3/8 个代码单元") {
-		t.Error("reskin: expected '3/8 个代码单元'")
+	if !strings.Contains(out, "3/8 个函数") {
+		t.Error("reskin: expected '3/8 个函数'")
 	}
 }
 
