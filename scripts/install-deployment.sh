@@ -609,6 +609,9 @@ PYUNIT
     privileged systemctl daemon-reload
     privileged systemctl enable --now docker
     privileged systemctl enable vulscan
+    # An explicit deployment starts a new recovery window. Keep the unit's
+    # crash-loop limits, but do not carry exhausted old-version counters into it.
+    privileged systemctl reset-failed vulscan
     privileged systemctl restart vulscan || fail 'vulscan.service startup failed; inspect journalctl -u vulscan -n 80.'
     service_pid=$(privileged systemctl show --property=MainPID --value vulscan)
     privileged "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT" --url http://127.0.0.1:8080 --service-pid "$service_pid" --service-uid "$service_uid" || fail 'Service startup/version check failed; inspect journalctl -u vulscan -n 80.'
