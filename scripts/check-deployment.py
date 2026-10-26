@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import socket
 import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
+from html.parser import HTMLParser
 from pathlib import Path
 
 SOURCES = {
@@ -115,17 +119,93 @@ def check_url(url: str) -> None:
     raise RuntimeError("网页服务未就绪：" + error)
 
 
+def check_idle(url: str) -> None:
+    # The shipped 2c94b52 workbench already exposes this count. Read the exact
+    # field rather than infer running work from saved (possibly stale) files.
+    class RunningCount(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.reading = False
+            self.values = []
+
+        def handle_starttag(self, tag, attrs):
+            if dict(attrs).get("id") == "stat-running":
+                self.reading = True
+
+        def handle_data(self, data):
+            if self.reading:
+                self.values.append(data.strip())
+
+        def handle_endtag(self, tag):
+            self.reading = False
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(url, timeout=5) as response:
+        parser = RunningCount()
+        parser.feed(response.read().decode("utf-8"))
+    if len(parser.values) != 1 or not parser.values[0].isdigit():
+        raise RuntimeError("无法确认现有服务的活动任务，未停止服务或更新程序。")
+    if int(parser.values[0]):
+        raise RuntimeError("仍有运行、排队或取消中的扫描，请等待任务结束后重新部署；现有服务与扫描未改变。")
+    print("现有服务没有活动扫描，可以更新。", flush=True)
+
+
+def check_service(root: Path, pid: int, uid: int, url: str, proc: Path = Path("/proc")) -> None:
+    if pid <= 0:
+        raise RuntimeError("systemd 没有报告有效的 MainPID。")
+    process = proc / str(pid)
+    if process.stat().st_uid != uid:
+        raise RuntimeError("运行进程的用户与配置的服务账号不一致。")
+    def digest(path):
+        value = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                value.update(block)
+        return value.hexdigest()
+    expected = digest(root / "bin/vulscan-cli")
+    if digest(process / "exe") != expected:
+        raise RuntimeError("运行进程仍是旧程序，部署未通过版本校验。")
+    # A service can fall back to a different port when 8080 is occupied. Prove
+    # that the HTTP listener belongs to this MainPID, not an unrelated old UI.
+    parsed = urllib.parse.urlsplit(url)
+    address = socket.inet_aton(parsed.hostname)[::-1].hex().upper()
+    local = f"{address}:{parsed.port:04X}"
+    sockets = set()
+    for entry in (process / "fd").iterdir():
+        try:
+            sockets.add(os.readlink(entry))
+        except FileNotFoundError:
+            continue  # A different request can close a descriptor during inspection.
+    listeners = [line.split() for line in (process / "net/tcp").read_text().splitlines()[1:]]
+    if not any(row[1] == local and row[3] == "0A" and f"socket:[{row[9]}]" in sockets for row in listeners):
+        raise RuntimeError("网页端口不属于 systemd 服务进程，可能被旧服务占用。")
+    print(f"实际运行程序：PID={pid} UID={uid} SHA-256={expected}，与安装程序一致。", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--docker", action="store_true")
     mode.add_argument("--url")
+    mode.add_argument("--idle-url")
+    parser.add_argument("--service-pid", type=int)
+    parser.add_argument("--service-uid", type=int)
     args = parser.parse_args()
     root = args.root.resolve()
     os.environ["PATH"] = os.pathsep.join(str(root / ".tools" / tool / "bin") for tool in ("git", "go", "node")) + os.pathsep + os.environ["PATH"]
     if args.url:
         check_url(args.url)
+        if args.service_pid is not None:
+            if args.service_uid is None:
+                parser.error("--service-pid requires --service-uid")
+            check_service(root, args.service_pid, args.service_uid, args.url)
+    elif args.idle_url:
+        if args.service_pid is not None:
+            if args.service_uid is None:
+                parser.error("--service-pid requires --service-uid")
+            check_service(root, args.service_pid, args.service_uid, args.idle_url)
+        check_idle(args.idle_url)
     elif args.docker:
         check_docker()
     else:

@@ -24,7 +24,7 @@ def run(*args: str, **kwargs) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--installer", action="store_true", help="Also exercise the complete installer (requires dependency network)")
+    parser.add_argument("--installer", action="store_true", help="Exercise application installation; --deploy/systemd acceptance runs separately in scripts/tests/deploy_vm.py")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="vulscan-deployment-") as tmp:
         base = Path(tmp)

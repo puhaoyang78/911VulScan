@@ -14,7 +14,11 @@ sh scripts/install-deployment.sh --deploy
 
 该命令补齐 Python、Git、Go、Node/npm、编译工具、Docker Engine、Compose 和 Buildx，安装 Python 与 JavaScript 依赖，并构建 CLI。它用本地样例实际检查全部已启用语言的解析器，再由服务启动检查 Docker 构建、Compose 执行和测试资源清理；这些检查不调用模型。只有服务处于运行状态且网页响应正常，才显示部署完成。
 
-服务通过 **vulscan.service** 开机自启，使用安装用户及 Docker 补充组运行，不修改用户组、系统 Python、Docker daemon 配置或已有凭据。默认地址为 `http://127.0.0.1:8080`。从另一台电脑访问时，先建立 SSH 转发：
+服务通过 **vulscan.service** 开机自启，以非 root 账号及 Docker 补充组运行，不修改用户的 Docker 组成员关系、socket 权限、系统 Python、daemon 配置或已有凭据。普通用户部署使用当前账号；通过 sudo 部署使用调用 sudo 的账号；直接以 root 部署时创建无登录权限的 `vulscan` 系统账号，主目录为 `/var/lib/vulscan`。也可用 `--service-user 用户名` 指定已有非 root 账号。重复部署保留原有非 root 服务账号。
+
+安装目录必须能被服务账号读取和进入。直接以 root 部署时，将源码解压到 `/opt/911VulScan` 等共享程序目录，避免放在其他用户无法进入的 `/root` 下。已有 root 服务的数据不会被自动移动或改权限；切换账号前需停止旧服务，将其 `~/.vulscan` 迁移到新账号主目录并设置所有权，安装器发现未迁移的数据会停止更新。
+
+默认地址为 `http://127.0.0.1:8080`。从另一台电脑访问时，先建立 SSH 转发：
 
 ```sh
 ssh -N -L 8080:127.0.0.1:8080 用户名@服务器地址
@@ -29,6 +33,16 @@ journalctl -u vulscan -f
 # 只查看完整计划，不安装、不启动：
 sh scripts/install-deployment.sh --deploy --dry-run
 ```
+
+重复执行同一部署命令即可更新。安装器先读取现有网页中的活动任务数量；有运行、排队或取消中的扫描时拒绝更新，请等待任务结束后重试。旧服务先按正常关闭流程停止，再更新应用环境、启用并显式重启服务；停止失败时不会继续安装。启动后核对 systemd 主进程的用户、实际加载的程序文件和网页监听端口，确认运行的是本次安装的程序。更新阶段失败时服务保持停止，可修复原因后重新执行同一命令；扫描结果与用户配置保留。
+
+首次部署的 `DOCKER_CONFIG` 默认使用服务账号的 `~/.docker`，也可显式指定可被该账号访问的绝对路径。重复部署保留原服务的 `HOME` 与 `DOCKER_CONFIG`，显式传入新配置时才更换 Docker 配置路径。插件检测、缺失插件安装、部署检查和 systemd 服务使用同一个路径；不复制或重写已有 `config.json`，不放宽其权限。例如：
+
+```sh
+sudo env DOCKER_CONFIG=/home/用户名/.docker sh scripts/install-deployment.sh --deploy
+```
+
+Python 源码安装中断后，重新运行原命令即可续装到同一 `.tools/python`。安装器识别自己的未完成标记和旧版 CPython 3.12 目录，补齐标准库与 venv 后移除标记，不删除目录中的其他文件。未知或符号链接指向的工具目录仍会报错，避免覆盖自定义环境。
 
 一键模式会在需要时启用官方 Ubuntu `universe` 组件。20.04 自带的 Git 2.25 不满足扫描所需的隔离选项，安装器将校验并编译已测试的 Git 2.56.x 维护分支到 `.tools/git`（使用上游支持的 `NO_RUST` 纯 C 构建）；20.04/22.04 使用本地 Python 3.12.16，均保留系统版本。工具下载遇到连接重置、超时、限流或临时服务错误时最多尝试 3 次，404、证书错误与校验失败直接报错。虚拟环境内的 pip 升级至 25.3+，依赖下载采用 60 秒读取时限和最多 3 次续传重试。
 

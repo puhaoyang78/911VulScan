@@ -8,6 +8,8 @@ usage() {
 Usage: scripts/install-deployment.sh [options]
   --deploy          Ubuntu one-command install, verify and start vulscan.service.
                     Includes Docker startup and frozen Docker on Ubuntu 20.04.
+  --service-user USER  Account for --deploy (default: sudo caller/current user;
+                    root-only installation creates the non-login vulscan user).
   (no options)       Install the application using existing dependencies, no sudo.
   --install-deps     Bootstrap missing dependencies on Ubuntu 20.04/22.04/24.04/26.04.
   --deps-only        With --install-deps, skip application installation.
@@ -23,20 +25,25 @@ for application installation. --install-deps includes missing Docker components.
 Docker package scripts may start/enable services; fresh installation therefore
 requires --start-docker as well as plan approval. Missing CLI plugins on an
 existing Engine install are user-local only; no --start-docker or frozen-engine
-opt-in is needed. No group/daemon/credential edits.
+opt-in is needed. No Docker group membership, socket, daemon or credential edits.
 EOF
 }
 BOOTSTRAP=0; DEPS_ONLY=0; CHECK=0; DRY=0; YES=0; START_DOCKER=0; ALLOW_OLD_DOCKER=0; DEPLOY=0
-for arg in "$@"; do
+SERVICE_USER_OPTION=''
+while [ "$#" -gt 0 ]; do
+    arg=$1; shift
     case "$arg" in
         --deploy) DEPLOY=1; BOOTSTRAP=1; YES=1; START_DOCKER=1; ALLOW_OLD_DOCKER=1;;
         --install-deps) BOOTSTRAP=1;; --deps-only) DEPS_ONLY=1;;
         --check) CHECK=1;; --dry-run) DRY=1;; --yes) YES=1;;
         --allow-unsupported-docker) ALLOW_OLD_DOCKER=1;;
         --start-docker) START_DOCKER=1;; --help|-h) usage; exit 0;;
+        --service-user) [ "$#" -gt 0 ] || fail '--service-user requires an account name'; SERVICE_USER_OPTION=$1; shift;;
         *) fail "Unknown option: $arg (see --help)";;
     esac
 done
+[ -z "$SERVICE_USER_OPTION" ] || [ "$DEPLOY" = 1 ] || fail '--service-user requires --deploy'
+[ "$SERVICE_USER_OPTION" != root ] || fail '--service-user must name a non-root account'
 [ "$DEPLOY" = 0 ] || [ "$DEPS_ONLY$CHECK" = 00 ] || fail '--deploy cannot be combined with --deps-only or --check'
 [ "$DEPS_ONLY" = 0 ] || [ "$BOOTSTRAP" = 1 ] || fail '--deps-only requires --install-deps'
 [ "$START_DOCKER" = 0 ] || [ "$BOOTSTRAP" = 1 ] || fail '--start-docker requires --install-deps'
@@ -46,6 +53,75 @@ done
 # App-local tools never replace /usr/bin or /usr/local binaries.
 PATH="$ROOT/.tools/git/bin:$ROOT/.tools/go/bin:$ROOT/.tools/node/bin:$PATH"
 export PATH
+privileged() {
+    if [ "$(id -u)" = 0 ]; then "$@"; else sudo -- "$@"; fi
+}
+service_run() {
+    if [ "$DEPLOY" = 1 ] && [ "$(id -u)" != "$service_uid" ]; then
+        privileged runuser -u "$service_user" -- env HOME="$service_home" DOCKER_CONFIG="$DOCKER_CONFIG" PATH="$PATH" "$@"
+    elif [ "$DEPLOY" = 1 ]; then
+        env HOME="$service_home" DOCKER_CONFIG="$DOCKER_CONFIG" "$@"
+    else
+        "$@"
+    fi
+}
+CREATE_SERVICE_USER=0
+if [ "$DEPLOY" = 1 ]; then
+    SYSTEMD_DIR=${VULSCAN_SYSTEMD_DIR:-/etc/systemd/system}
+    unit="$SYSTEMD_DIR/vulscan.service"
+    if [ -L "$unit" ] || { [ -e "$unit" ] && ! grep -q '^# Managed by 911VulScan installer$' "$unit"; }; then
+        fail "Existing $unit is not managed by this installer; it was not overwritten."
+    fi
+    previous_user=''
+    previous_home=''; previous_docker_config=''
+    if [ -f "$unit" ]; then
+        previous_user=$(sed -n 's/^User=//p' "$unit")
+        previous_env=$(python3 - "$unit" <<'PYENV'
+import shlex, sys
+from pathlib import Path
+values = {}
+for line in Path(sys.argv[1]).read_text().splitlines():
+    if line.startswith("Environment="):
+        for entry in shlex.split(line[len("Environment="):]):
+            name, _, value = entry.partition("=")
+            values[name] = value.replace("%%", "%")
+print(values.get("HOME", ""))
+print(values.get("DOCKER_CONFIG", ""))
+PYENV
+        )
+        previous_home=$(printf '%s\n' "$previous_env" | sed -n '1p')
+        previous_docker_config=$(printf '%s\n' "$previous_env" | sed -n '2p')
+        [ -n "$previous_user" ] && [ -n "$previous_home" ] || fail 'Managed service is missing User/HOME; inspect the existing unit before updating.'
+    fi
+    service_user=$SERVICE_USER_OPTION
+    if [ -z "$service_user" ]; then
+        if [ -n "$previous_user" ] && [ "$previous_user" != root ]; then service_user=$previous_user
+        elif [ "$(id -u)" = 0 ]; then service_user=${SUDO_USER:-vulscan}
+        else service_user=$(id -un); fi
+    fi
+    [ "$service_user" != root ] || service_user=vulscan
+    case "$service_user" in ''|*[!a-zA-Z0-9_-]*) fail 'Invalid service account name';; esac
+    if getent passwd "$service_user" >/dev/null; then
+        service_uid=$(id -u "$service_user")
+        service_group=$(id -gn "$service_user")
+        service_home=$(getent passwd "$service_user" | cut -d: -f6)
+        if [ "$previous_user" = "$service_user" ]; then service_home=$previous_home; fi
+        [ "$service_uid" != 0 ] || fail 'The service account must not have UID 0.'
+    elif [ "$service_user" = vulscan ] && [ -z "$SERVICE_USER_OPTION" ] && [ "$(id -u)" = 0 ]; then
+        CREATE_SERVICE_USER=1; service_uid=''; service_group=vulscan; service_home=/var/lib/vulscan
+    else
+        fail "Service account $service_user does not exist; create it or choose an existing non-root account with --service-user."
+    fi
+    case "$service_home" in /*) :;; *) fail 'The service account needs an absolute home directory.';; esac
+    if [ "$previous_user" = "$service_user" ]; then
+        DOCKER_CONFIG=${DOCKER_CONFIG:-${previous_docker_config:-$service_home/.docker}}
+    else
+        DOCKER_CONFIG=${DOCKER_CONFIG:-$service_home/.docker}
+    fi
+    case "$DOCKER_CONFIG" in /*) :;; *) DOCKER_CONFIG="$PWD/$DOCKER_CONFIG";; esac
+    export DOCKER_CONFIG
+    printf 'Service account: %s; HOME=%s; DOCKER_CONFIG=%s\n' "$service_user" "$service_home" "$DOCKER_CONFIG"
+fi
 PYTHON=${PYTHON:-python3}
 if [ -x "$ROOT/.tools/python/bin/python3.12" ] && [ "$PYTHON" = python3 ]; then PYTHON="$ROOT/.tools/python/bin/python3.12"; fi
 version_at_least() {
@@ -53,7 +129,20 @@ version_at_least() {
       /^[0-9]+\.[0-9]+(\.[0-9]+)?$/ {exit !(($1>maj)||($1==maj && $2>=min))}
       !/^[0-9]+\.[0-9]+(\.[0-9]+)?$/ {exit 1}'
 }
-python_ok() { "$PYTHON" -c 'import sys, venv, ensurepip; sys.exit(sys.version_info < (3,11))' >/dev/null 2>&1; }
+python_ok() {
+    "$PYTHON" -c '
+import sys, ssl, sqlite3, bz2, lzma, ctypes, readline, venv, ensurepip, zipfile
+from pathlib import Path
+if sys.version_info < (3,11):
+    sys.exit(1)
+if Path(sys.prefix).resolve() == Path(sys.argv[1]).resolve():
+    # A legacy interrupted altinstall may import ensurepip while its bundled
+    # wheel is missing. System/Ubuntu Python uses distribution wheels instead.
+    wheels = list((Path(ensurepip.__file__).parent / "_bundled").glob("pip-*.whl"))
+    if not wheels or any(not zipfile.is_zipfile(p) for p in wheels):
+        sys.exit(1)
+' "$ROOT/.tools/python" >/dev/null 2>&1
+}
 go_ok() {
     gv=$(GOTOOLCHAIN=local go version 2>/dev/null | awk '{sub(/^go/, "", $3); print $3}') || return 1
     [ -n "$gv" ] && version_at_least "$gv" 1 26
@@ -73,6 +162,7 @@ package_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^
 NEED_PY=0; NEED_GO=0; NEED_NODE=0; NEED_DOCKER=0; NEED_GIT=0
 NEED_ENGINE=0; NEED_COMPOSE=0; NEED_BUILDX=0; LOCAL_PLUGINS=0
 python_ok || NEED_PY=1
+if [ "$PYTHON" = "$ROOT/.tools/python/bin/python3.12" ] && [ -f "$ROOT/.tools/python/.911vulscan-installing" ]; then NEED_PY=1; fi
 go_ok || NEED_GO=1
 git_ok || NEED_GIT=1
 if ! node_ok || ! npm_ok; then NEED_NODE=1; fi
@@ -173,8 +263,9 @@ if [ "$BOOTSTRAP" = 1 ]; then
     [ "$START_DOCKER" = 0 ] || printf '  Start existing/local docker.service using systemctl (no explicit enable or daemon changes).\n'
     printf '  No system Python replacement, Docker group changes, daemon configuration or credential changes.\n'
     if [ "$DEPLOY" = 1 ]; then
-        printf '  Deployment also enables official Ubuntu universe if required, validates all parsers and Docker build/run, and enables/starts vulscan.service at http://127.0.0.1:8080.\n'
-        printf '  The service runs as the installing user with the Docker supplementary group. API credentials are entered in the web UI or configured separately.\n'
+        [ "$CREATE_SERVICE_USER" = 0 ] || printf '  Create non-login service account %s with home %s.\n' "$service_user" "$service_home"
+        printf '  Deployment also enables official Ubuntu universe if required, validates all parsers and Docker build/run, and enables/restarts vulscan.service at http://127.0.0.1:8080.\n'
+        printf '  Active scans block updates. The service runs as %s with the Docker supplementary group; no socket permissions are changed.\n' "$service_user"
     fi
 fi
 if [ "$DEPS_ONLY" = 0 ]; then printf 'Application plan: create .venv, pip install core, npm ci parser lock, build bin/vulscan-cli and launcher.\n'; fi
@@ -183,17 +274,12 @@ if [ "$DEPS_ONLY" = 0 ]; then printf 'Application plan: create .venv, pip instal
 if [ "$BOOTSTRAP" = 1 ]; then
     for tool in python go node git; do
         case "$tool" in python) needed=$BUILD_PY;; go) needed=$NEED_GO;; node) needed=$NEED_NODE;; git) needed=$BUILD_GIT;; esac
-        if [ "$needed" = 1 ] && { [ -e "$ROOT/.tools/$tool" ] || [ -L "$ROOT/.tools/$tool" ]; }; then
+        if [ "$needed" = 1 ] && [ "$tool" = python ] && [ -d "$ROOT/.tools/python" ] && [ ! -L "$ROOT/.tools/python" ] && { [ -f "$ROOT/.tools/python/.911vulscan-installing" ] || [ -f "$ROOT/.tools/python/bin/python3.12" ] || [ -d "$ROOT/.tools/python/lib/python3.12" ]; }; then
+            printf '  Resume incomplete local Python installation; existing configuration and other files are retained.\n'
+        elif [ "$needed" = 1 ] && { [ -e "$ROOT/.tools/$tool" ] || [ -L "$ROOT/.tools/$tool" ]; }; then
             fail "Existing .tools/$tool is incompatible; move it aside manually before retrying (not replaced automatically)."
         fi
     done
-fi
-if [ "$DEPLOY" = 1 ]; then
-    SYSTEMD_DIR=${VULSCAN_SYSTEMD_DIR:-/etc/systemd/system}
-    unit="$SYSTEMD_DIR/vulscan.service"
-    if [ -L "$unit" ] || { [ -e "$unit" ] && ! grep -q '^# Managed by 911VulScan installer$' "$unit"; }; then
-        fail "Existing $unit is not managed by this installer; it was not overwritten."
-    fi
 fi
 [ "$DRY" = 0 ] || exit 0
 if [ "$BOOTSTRAP" = 1 ]; then
@@ -209,11 +295,43 @@ if [ "$BOOTSTRAP" = 1 ]; then
         read -r answer
         case "$answer" in y|Y|yes|YES) :;; *) fail 'Cancelled; nothing was installed.';; esac
     fi
-    privileged() {
-        if [ "$(id -u)" = 0 ]; then "$@"; else sudo -- "$@"; fi
-    }
     if [ "$DEPLOY" = 1 ]; then
         command -v systemctl >/dev/null 2>&1 && privileged systemctl show-environment >/dev/null || fail '--deploy requires Ubuntu booted with systemd; use application-only installation in containers.'
+        if [ "$CREATE_SERVICE_USER" = 1 ]; then
+            privileged useradd --system --user-group --create-home --home-dir "$service_home" --shell /usr/sbin/nologin "$service_user"
+            service_uid=$(id -u "$service_user")
+        fi
+        service_run test -r "$ROOT/libs/vulscan-core/requirements.txt" || fail 'Service account cannot read this installation. Extract it into a traversable directory such as /opt/911VulScan; do not loosen private home-directory permissions.'
+        service_run mkdir -p "$DOCKER_CONFIG"
+        service_run test -r "$DOCKER_CONFIG" && service_run test -x "$DOCKER_CONFIG" || fail 'DOCKER_CONFIG is not accessible to the service account.'
+        if [ -f "$DOCKER_CONFIG/config.json" ]; then
+            service_run test -r "$DOCKER_CONFIG/config.json" || fail 'Docker config.json is not readable by the service account; existing credentials and permissions were not changed.'
+        fi
+        if [ -n "$previous_user" ] && [ "$previous_user" != "$service_user" ]; then
+            [ ! -e "$previous_home/.vulscan" ] || fail "Existing scan data belongs to $previous_user at $previous_home/.vulscan. Stop the old service and migrate this directory to $service_home with ownership $service_user:$service_group before changing the service account; no data was moved or removed."
+        fi
+        if [ -e "$service_home/.vulscan" ]; then
+            service_run test -r "$service_home/.vulscan" && service_run test -w "$service_home/.vulscan" && service_run test -x "$service_home/.vulscan" || fail 'Existing scan data is not accessible to the service account; ownership and data were not changed.'
+        fi
+        stop_service=0
+        if privileged systemctl is-active --quiet vulscan; then
+            old_pid=$(privileged systemctl show --property=MainPID --value vulscan)
+            old_uid=$(id -u "${previous_user:-$service_user}")
+            privileged python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --idle-url http://127.0.0.1:8080 --service-pid "$old_pid" --service-uid "$old_uid" || fail 'Update stopped before changing application files; wait for active scans or inspect the existing service.'
+            stop_service=1
+        elif [ -f "$unit" ]; then
+            state=$(privileged systemctl show --property=ActiveState --value vulscan)
+            case "$state" in
+                inactive|failed) stop_service=1;;
+                *) fail 'Existing service is starting/stopping or has an unknown state; wait for it to settle before deploying. Application files were not changed.';;
+            esac
+        fi
+        if [ "$stop_service" = 1 ]; then
+            printf 'Stopping the old service before updating application dependencies; scan results and settings are retained.\n'
+            privileged systemctl stop vulscan || fail 'Old service did not stop cleanly; application files were not changed. Inspect journalctl -u vulscan.'
+            state=$(privileged systemctl show --property=ActiveState --value vulscan)
+            [ "$state" = inactive ] || fail 'Old service is not inactive; application files were not changed.'
+        fi
     fi
     if [ -n "$PACKAGES" ]; then
         privileged apt-get update || fail 'APT update failed; check network and trusted Ubuntu repository configuration.'
@@ -235,7 +353,7 @@ if [ "$BOOTSTRAP" = 1 ]; then
     if [ "$NEED_GO" = 1 ] || [ "$NEED_NODE" = 1 ] || [ "$BUILD_PY" = 1 ] || [ "$BUILD_GIT" = 1 ] || [ "$FOCAL_DOCKER" = 1 ] || [ "$LOCAL_PLUGINS" = 1 ]; then
         mkdir -p "$ROOT/.tools"
         TMP=$(mktemp -d "$ROOT/.tools/.bootstrap.XXXXXXXX")
-        trap 'rm -rf -- "$TMP"; if [ -n "${PLUGIN_TMP:-}" ]; then rm -f -- "$PLUGIN_TMP"; fi' EXIT
+        trap 'rm -rf -- "$TMP"; if [ -n "${PLUGIN_TMP:-}" ]; then service_run rm -f -- "$PLUGIN_TMP"; fi' EXIT
         trap 'exit 129' HUP
         trap 'exit 130' INT
         trap 'exit 143' TERM
@@ -260,7 +378,9 @@ if [ "$BOOTSTRAP" = 1 ]; then
             done
         }
         if [ "$BUILD_PY" = 1 ]; then
-            [ ! -e "$ROOT/.tools/python" ] || fail 'Existing .tools/python is incompatible; move it aside manually before retrying.'
+            [ ! -L "$ROOT/.tools/python" ] || fail 'Refusing to install Python through a symlink.'
+            mkdir -p "$ROOT/.tools/python"
+            : > "$ROOT/.tools/python/.911vulscan-installing"
             file=Python-3.12.16.tar.xz
             fetch "https://www.python.org/ftp/python/3.12.16/$file" "$TMP/$file"
             (cd "$TMP"; printf '%s  %s\n' b5796915dc45ff745cfb4e990a7e7c93d6f546328a102ce31448d69ebc37575c "$file" | sha256sum --check --status) || fail 'Python checksum mismatch; source not extracted.'
@@ -269,6 +389,7 @@ if [ "$BOOTSTRAP" = 1 ]; then
             PYTHON="$ROOT/.tools/python/bin/python3.12"
             "$PYTHON" -c 'import ssl, sqlite3, bz2, lzma, ctypes, readline, venv, ensurepip' || fail 'Built Python lacks required standard-library modules.'
             "$PYTHON" -m venv "$TMP/python-venv-check" && "$TMP/python-venv-check/bin/python" -m pip --version || fail 'Built Python could not create a working venv with pip.'
+            rm -f "$ROOT/.tools/python/.911vulscan-installing"
         fi
         python_ok || fail 'Python >=3.11 with venv/ensurepip is still unavailable; check python3-venv or set PYTHON.'
         if [ "$BUILD_GIT" = 1 ]; then
@@ -350,17 +471,19 @@ PYDOCKER
                 [ "${#sha}" = 64 ] && printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{64}$' || fail "Missing or invalid $plugin SHA-256 in official release manifest."
                 fetch "$base/$file" "$TMP/$file"
                 (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail "$plugin checksum mismatch; plugin not installed."
-                mkdir -p "$PLUGIN_DIR"
+                service_run mkdir -p "$PLUGIN_DIR"
                 # Stage in the same filesystem; hard-link publication refuses replacement
                 # even if another process created the destination after our preflight.
-                PLUGIN_TMP=$(mktemp "$PLUGIN_DIR/.$plugin.XXXXXXXX")
-                cp "$TMP/$file" "$PLUGIN_TMP"
-                chmod 755 "$PLUGIN_TMP"
-                if ! ln -T "$PLUGIN_TMP" "$PLUGIN_DIR/docker-$plugin"; then
-                    rm -f "$PLUGIN_TMP"
+                PLUGIN_TMP=$(service_run mktemp "$PLUGIN_DIR/.$plugin.XXXXXXXX")
+                # The bootstrap directory is private to the installer; publish
+                # only the verified executable to the service-owned temporary.
+                service_run tee "$PLUGIN_TMP" < "$TMP/$file" >/dev/null
+                service_run chmod 755 "$PLUGIN_TMP"
+                if ! service_run ln -T "$PLUGIN_TMP" "$PLUGIN_DIR/docker-$plugin"; then
+                    service_run rm -f "$PLUGIN_TMP"
                     fail "Could not install $PLUGIN_DIR/docker-$plugin without replacement."
                 fi
-                rm -f "$PLUGIN_TMP"
+                service_run rm -f "$PLUGIN_TMP"
                 docker "$plugin" version >/dev/null 2>&1 || fail "Installed plugin $PLUGIN_DIR/docker-$plugin failed Docker CLI validation; inspect its platform compatibility and Docker plugin discovery. No Engine or working plugin was replaced."
             done
         fi
@@ -427,18 +550,27 @@ git_ok || fail 'Git >=2.32 is required to scan remote repositories; use --instal
 python_ok || fail 'Python >=3.11 with venv/ensurepip required; use --install-deps or set PYTHON.'
 go_ok || fail 'Go >=1.26 required; use --install-deps or install Go manually.'
 node_ok && npm_ok || fail 'Node 20 or >=22 and npm >=7 required by parser lock; use --install-deps.'
-"$PYTHON" -m venv "$ROOT/.venv"
+if [ "$DEPLOY" = 1 ]; then
+    for directory in .venv bin; do
+        [ ! -L "$ROOT/$directory" ] || fail "Refusing to change ownership through $directory symlink."
+        privileged install -d -o "$service_user" -g "$service_group" -m 0755 "$ROOT/$directory"
+        # These contain only managed application files, never ~/.vulscan data
+        # or the Docker credential directory. Repair earlier sudo installations.
+        privileged chown -hR "$service_user:$service_group" "$ROOT/$directory"
+    done
+fi
+service_run "$PYTHON" -m venv "$ROOT/.venv"
 # Ubuntu's ensurepip can predate resumable downloads. Upgrade only this venv;
 # bound transient network retries instead of retrying the entire installation.
-"$ROOT/.venv/bin/python" -m pip install --timeout 60 --retries 3 --upgrade 'pip>=25.3'
-"$ROOT/.venv/bin/python" -m pip install --timeout 60 --retries 3 --resume-retries 3 -r "$ROOT/libs/vulscan-core/requirements.txt"
-"$ROOT/.venv/bin/python" -m pip install --timeout 60 --retries 3 --resume-retries 3 --no-deps "$ROOT/libs/vulscan-core"
-"$ROOT/.venv/bin/python" -m pip check
+service_run "$ROOT/.venv/bin/python" -m pip install --timeout 60 --retries 3 --upgrade 'pip>=25.3'
+service_run "$ROOT/.venv/bin/python" -m pip install --timeout 60 --retries 3 --resume-retries 3 -r "$ROOT/libs/vulscan-core/requirements.txt"
+service_run "$ROOT/.venv/bin/python" -m pip install --timeout 60 --retries 3 --resume-retries 3 --no-deps "$ROOT/libs/vulscan-core"
+service_run "$ROOT/.venv/bin/python" -m pip check
 JS_PARSER_DIR=$("$ROOT/.venv/bin/python" -I -c 'from pathlib import Path; import core; print(Path(core.__file__).resolve().parent.parent / "parsers" / "javascript")')
 [ -n "$JS_PARSER_DIR" ] && [ -f "$JS_PARSER_DIR/package-lock.json" ] || fail 'Installed JavaScript parser lockfile is missing.'
-(cd "$JS_PARSER_DIR" && npm ci --engine-strict --no-audit --no-fund)
+(cd "$JS_PARSER_DIR" && service_run npm ci --engine-strict --no-audit --no-fund)
 mkdir -p "$ROOT/bin"
-(cd "$ROOT/apps/vulscan-cli" && GOTOOLCHAIN=local go build -buildvcs=false -trimpath -o "$ROOT/bin/vulscan-cli" ./main.go)
+(cd "$ROOT/apps/vulscan-cli" && service_run env GOTOOLCHAIN=local go build -buildvcs=false -trimpath -o "$ROOT/bin/vulscan-cli" ./main.go)
 cat > "$ROOT/bin/vulscan" <<'EOF'
 #!/bin/sh
 set -eu
@@ -451,14 +583,12 @@ EOF
 chmod 755 "$ROOT/bin/vulscan"
 printf '\nInstalled: %s/bin/vulscan\n' "$ROOT"
 if [ "$DEPLOY" = 1 ]; then
-    "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT"
-    service_user=$(id -un)
-    service_home=${HOME:?HOME is required for deployment}
+    service_run "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT"
     unit_tmp=$(mktemp "$ROOT/.vulscan-service.XXXXXXXX")
     trap 'rm -f -- "$unit_tmp"' EXIT
-    "$ROOT/.venv/bin/python" - "$ROOT" "$service_user" "$service_home" > "$unit_tmp" <<'PYUNIT'
+    "$ROOT/.venv/bin/python" - "$ROOT" "$service_user" "$service_home" "$DOCKER_CONFIG" > "$unit_tmp" <<'PYUNIT'
 import sys
-root, user, home = sys.argv[1:]
+root, user, home, docker_config = sys.argv[1:]
 def q(value):
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
 def command(*args):
@@ -467,18 +597,21 @@ print('# Managed by 911VulScan installer\n[Unit]\nDescription=911VulScan securit
 print('User=' + user + '\nSupplementaryGroups=docker')
 print('WorkingDirectory=' + root.replace('%', '%%'))
 print('Environment=' + q('HOME=' + home))
+print('Environment=' + q('DOCKER_CONFIG=' + docker_config))
 print('Environment=' + q('PATH=' + root + '/.tools/git/bin:' + root + '/.tools/go/bin:' + root + '/.tools/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'))
 print('ExecStartPre=' + command(root + '/.venv/bin/python', root + '/scripts/check-deployment.py', '--root', root, '--docker'))
 print('ExecStart=' + command(root + '/bin/vulscan', 'serve', '--addr', '127.0.0.1:8080'))
-print('Restart=on-failure\nRestartSec=3\nTimeoutStopSec=120\nKillMode=mixed\nUMask=0027\n\n[Install]\nWantedBy=multi-user.target')
+print('Restart=on-failure\nRestartSec=3\nTimeoutStartSec=300\nTimeoutStopSec=120\nKillMode=mixed\nUMask=0027\n\n[Install]\nWantedBy=multi-user.target')
 PYUNIT
     privileged install -d -m 0755 "$SYSTEMD_DIR"
     privileged install -m 0644 "$unit_tmp" "$unit"
     rm -f "$unit_tmp"; trap - EXIT
     privileged systemctl daemon-reload
     privileged systemctl enable --now docker
-    privileged systemctl enable --now vulscan || fail 'vulscan.service startup failed; inspect journalctl -u vulscan -n 80.'
-    "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT" --url http://127.0.0.1:8080 || fail 'Service startup check failed; inspect journalctl -u vulscan -n 80.'
+    privileged systemctl enable vulscan
+    privileged systemctl restart vulscan || fail 'vulscan.service startup failed; inspect journalctl -u vulscan -n 80.'
+    service_pid=$(privileged systemctl show --property=MainPID --value vulscan)
+    privileged "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT" --url http://127.0.0.1:8080 --service-pid "$service_pid" --service-uid "$service_uid" || fail 'Service startup/version check failed; inspect journalctl -u vulscan -n 80.'
     privileged systemctl is-active --quiet vulscan || fail 'vulscan.service is not running; inspect journalctl -u vulscan -n 80.'
     printf '\n911VulScan ready: http://127.0.0.1:8080\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nConfigure a model API key in the web form before scanning.\n'
 fi

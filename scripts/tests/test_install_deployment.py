@@ -24,8 +24,10 @@ class InstallerTest(unittest.TestCase):
         self.bin.mkdir()
         (self.root / 'runtime-parser').mkdir()
         (self.root / 'runtime-parser/package-lock.json').write_text('{"lockfileVersion":3}')
+        (self.root / 'libs/vulscan-core').mkdir(parents=True)
+        (self.root / 'libs/vulscan-core/requirements.txt').write_text('')
         # Closed PATH: only these non-mutating/core file tools can reach real binaries.
-        for name in ['dirname', 'sed', 'tr', 'awk', 'grep', 'mkdir', 'mktemp', 'rm', 'mv', 'chmod', 'sha256sum', 'cat', 'cp', 'ln', 'env', 'install']:
+        for name in ['dirname', 'sed', 'tr', 'awk', 'grep', 'mkdir', 'mktemp', 'rm', 'mv', 'chmod', 'sha256sum', 'cat', 'cp', 'ln', 'env', 'install', 'cut', 'test', 'tee']:
             (self.bin / name).symlink_to(shutil.which(name))
         self.env = dict(os.environ, PATH=str(self.bin), TEST_ROOT=str(self.root), REAL_PYTHON=sys.executable,
                         VULSCAN_OS_RELEASE=str(self.root / 'os-release'), ARCH='x86_64', NODE_VERSION='v22.15.0',
@@ -33,14 +35,40 @@ class InstallerTest(unittest.TestCase):
                         VULSCAN_SYSTEMD_DIR=str(self.root / 'systemd'))
         self.env['HOME'] = str(self.root / 'home')
         self.env.pop('DOCKER_CONFIG', None)
+        self.env.pop('SUDO_USER', None)
         self.os('24.04')
         self.mock('uname', 'echo "$ARCH"')
-        self.mock('id', 'case "$1" in -un) echo fixtureuser;; *) echo 1000;; esac')
+        self.mock('id', 'case "$1" in -un) echo fixtureuser;; -gn) echo fixturegroup;; -u) if [ "$#" = 1 ]; then echo "${INSTALLER_UID:-1000}"; elif [ "$2" = root ]; then echo 0; else echo 1000; fi;; esac')
+        self.mock('getent', 'printf "%s:x:1000:1000::%s/home:/bin/sh\\n" "$2" "$TEST_ROOT"')
+        self.mock('chown', 'echo "ownership $*" >> "$TEST_ROOT/actions"')
+        self.mock('install', '''
+"$REAL_PYTHON" - "$@" <<'PY'
+import subprocess, sys
+args = iter(sys.argv[1:])
+selected = []
+for arg in args:
+    if arg in ('-o', '-g'):
+        next(args)
+    else:
+        selected.append(arg)
+subprocess.run(['/usr/bin/install', *selected], check=True)
+PY
+''')
+        self.mock('runuser', 'echo "account $2" >> "$TEST_ROOT/actions"; shift 3; exec "$@"')
         self.mock('sudo', 'echo "sudo $*" >> "$TEST_ROOT/actions"; shift; exec "$@"')
         self.mock('apt-get', 'echo "apt $*" >> "$TEST_ROOT/actions"; exit "${APT_EXIT:-0}"')
         self.mock('apt-cache', 'echo "  Candidate: ${CANDIDATE:-1.0}"')
         self.mock('dpkg-query', '[ "${CONFLICT:-}" = "$3" ] && printf "install ok installed"')
-        self.mock('systemctl', 'echo "service $*" >> "$TEST_ROOT/actions"; exit "${SERVICE_EXIT:-0}"')
+        self.mock('systemctl', '''
+echo "service $*" >> "$TEST_ROOT/actions"
+[ "${SERVICE_EXIT:-0}" = 0 ] || exit "$SERVICE_EXIT"
+case "$1" in
+  is-active) [ -f "$TEST_ROOT/service-running" ];;
+  stop) rm -f "$TEST_ROOT/service-running";;
+  restart) : > "$TEST_ROOT/service-running";;
+  show) case "$2" in --property=ActiveState) if [ -f "$TEST_ROOT/service-running" ]; then echo active; else echo inactive; fi;; --property=MainPID) echo 1234;; esac;;
+esac
+''')
         self.mock('sleep', 'echo "retry-wait $*" >> "$TEST_ROOT/actions"')
         self.mock('python3', '''
 if [ "$1" = -c ]; then [ "$PYTHON_READY" = 1 ]; exit; fi
@@ -51,6 +79,11 @@ if [ "$1" = -m ]; then
   chmod +x "$3/bin/python"
   exit
 fi
+case "$1" in *check-deployment.py)
+  echo "check $*" >> "$TEST_ROOT/actions"
+  case "$*" in *--idle-url*) [ "${ACTIVE_SCANS:-0}" = 0 ] || exit 2;; esac
+  exit 0;;
+esac
 exec "$REAL_PYTHON" "$@"
 ''')
         self.mock('go', 'if [ "$1" = version ]; then echo "go version go$GO_VERSION linux/amd64"; else echo "go $*" >> "$TEST_ROOT/actions"; fi')
@@ -255,11 +288,173 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertIn('TimeoutStopSec=120', unit)
         self.assertIn('KillMode=mixed', unit)
         actions = self.actions()
-        self.assertLess(actions.index('check-deployment.py'), actions.index('service enable --now vulscan'))
+        self.assertLess(actions.index('check-deployment.py'), actions.index('service restart vulscan'))
+        self.assertLess(actions.index('service enable vulscan'), actions.index('service restart vulscan'))
+        self.assertNotIn('enable --now vulscan', actions)
         self.assertIn('--url http://127.0.0.1:8080', actions)
+        self.assertIn('--service-pid 1234 --service-uid 1000', actions)
         self.assertIn('service is-active --quiet vulscan', actions)
         self.assertNotIn('usermod', actions)
         self.assertFalse(list(self.root.glob('.vulscan-service.*')))
+
+    def prepare_application(self):
+        (self.root / 'apps/vulscan-cli').mkdir(parents=True, exist_ok=True)
+
+    def test_repeat_deploy_stops_before_mutating_and_restarts(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        (self.root / 'actions').write_text('')
+        self.run_script('--deploy')
+        actions = self.actions()
+        self.assertLess(actions.index('--idle-url'), actions.index('service stop vulscan'))
+        self.assertLess(actions.index('service stop vulscan'), actions.index('python -m venv'))
+        self.assertLess(actions.index('service restart vulscan'), actions.rindex('--service-pid'))
+
+    def test_active_scans_refuse_update_without_stopping_or_installing(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        (self.root / 'actions').write_text('')
+        self.env['ACTIVE_SCANS'] = '1'
+        self.assertIn('before changing application files', self.run_script('--deploy', success=False))
+        self.assertNotIn('service stop', self.actions())
+        self.assertNotIn('pip ', self.actions())
+        self.assertNotIn('apt ', self.actions())
+        self.assertTrue((self.root / 'service-running').exists())
+
+    def test_stop_failure_never_updates_application(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        (self.root / 'actions').write_text('')
+        previous = (self.bin / 'systemctl').read_text().split('\n', 1)[1]
+        self.mock('systemctl', 'if [ "$1" = stop ]; then echo "stop refused" >> "$TEST_ROOT/actions"; exit 1; fi\n' + previous)
+        self.assertIn('did not stop cleanly', self.run_script('--deploy', success=False))
+        self.assertNotIn('pip ', self.actions())
+        self.assertNotIn('apt ', self.actions())
+        self.assertTrue((self.root / 'service-running').exists())
+
+    def test_transitioning_service_blocks_update(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        (self.root / 'service-running').unlink()
+        previous = (self.bin / 'systemctl').read_text().split('\n', 1)[1]
+        self.mock('systemctl', 'if [ "$1 $2" = "show --property=ActiveState" ]; then echo activating; exit; fi\n' + previous)
+        (self.root / 'actions').write_text('')
+        self.assertIn('starting/stopping', self.run_script('--deploy', success=False))
+        self.assertNotIn('pip ', self.actions())
+        self.assertNotIn('apt ', self.actions())
+
+    def test_stopped_managed_service_is_stopped_again_to_clear_pending_restart(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        (self.root / 'service-running').unlink()
+        (self.root / 'actions').write_text('')
+        self.run_script('--deploy')
+        self.assertLess(self.actions().index('service stop vulscan'), self.actions().index('python -m venv'))
+
+    def test_sudo_uses_calling_user_and_same_docker_config(self):
+        self.prepare_application()
+        self.env.update(INSTALLER_UID='0', SUDO_USER='fixtureuser', DOCKER_CONFIG=str(self.root / 'docker-client'))
+        self.run_script('--deploy')
+        unit = (self.root / 'systemd/vulscan.service').read_text()
+        self.assertIn('User=fixtureuser', unit)
+        self.assertIn('HOME=' + str(self.root / 'home'), unit)
+        self.assertIn('DOCKER_CONFIG=' + str(self.root / 'docker-client'), unit)
+        self.assertIn('account fixtureuser', self.actions())
+        self.assertNotIn('User=root', unit)
+        self.assertNotIn('chmod 666', self.actions())
+
+    def test_root_default_uses_non_root_service_account(self):
+        self.prepare_application()
+        self.env['INSTALLER_UID'] = '0'
+        self.run_script('--deploy')
+        self.assertIn('User=vulscan', (self.root / 'systemd/vulscan.service').read_text())
+        self.assertIn('account vulscan', self.actions())
+
+    def test_service_user_options(self):
+        self.run_script('--service-user', success=False)
+        self.run_script('--service-user', 'fixtureuser', success=False)
+        self.run_script('--deploy', '--service-user', 'root', success=False)
+        self.assertEqual(self.actions(), '')
+
+    def test_service_keeps_account_when_redeployed_with_sudo(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        self.env.update(INSTALLER_UID='0', SUDO_USER='anotheruser')
+        self.run_script('--deploy')
+        self.assertIn('User=fixtureuser', (self.root / 'systemd/vulscan.service').read_text())
+
+    def test_switching_account_never_silently_orphans_existing_data(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        target = self.root / 'systemd/vulscan.service'
+        original = target.read_text().replace('User=fixtureuser', 'User=root').replace('HOME=' + str(self.root / 'home'), 'HOME=' + str(self.root / 'root-home'))
+        target.write_text(original)
+        data = self.root / 'root-home/.vulscan'
+        data.mkdir(parents=True)
+        (data / 'config.json').write_text('retained settings')
+        self.mock('getent', 'if [ "$2" = root ]; then printf "root:x:0:0::%s/root-home:/bin/sh\\n" "$TEST_ROOT"; else printf "%s:x:1000:1000::%s/home:/bin/sh\\n" "$2" "$TEST_ROOT"; fi')
+        self.env.update(INSTALLER_UID='0', SUDO_USER='fixtureuser')
+        (self.root / 'actions').write_text('')
+        self.assertIn('migrate this directory', self.run_script('--deploy', success=False))
+        self.assertEqual(target.read_text(), original)
+        self.assertEqual((data / 'config.json').read_text(), 'retained settings')
+        self.assertNotIn('service stop', self.actions())
+        self.assertNotIn('pip ', self.actions())
+
+    def test_repeat_preserves_stored_home_and_docker_config_without_env(self):
+        self.prepare_application()
+        self.env['DOCKER_CONFIG'] = str(self.root / 'private-docker')
+        self.run_script('--deploy')
+        target = self.root / 'systemd/vulscan.service'
+        target.write_text(target.read_text().replace('HOME=' + str(self.root / 'home'), 'HOME=' + str(self.root / 'service-home')))
+        self.env.pop('DOCKER_CONFIG')
+        self.run_script('--deploy')
+        unit = target.read_text()
+        self.assertIn('HOME=' + str(self.root / 'service-home'), unit)
+        self.assertIn('DOCKER_CONFIG=' + str(self.root / 'private-docker'), unit)
+
+    def test_interrupted_python_retry_preserves_unrelated_data(self):
+        self.os('20.04')
+        self.full_download_fixtures()
+        self.env['PYTHON_READY'] = '0'
+        original = (self.bin / 'make').read_text().split('\n', 1)[1]
+        self.mock('make', 'if [ "$1" = altinstall ] && [ ! -e "$TEST_ROOT/failed-once" ]; then : > "$TEST_ROOT/failed-once"; mkdir -p "$TEST_ROOT/.tools/python/lib/python3.12"; exit 1; fi\n' + original)
+        args = ('--install-deps', '--deps-only', '--yes', '--start-docker', '--allow-unsupported-docker')
+        self.run_script(*args, success=False)
+        prefix = self.root / '.tools/python'
+        self.assertTrue((prefix / '.911vulscan-installing').exists())
+        (prefix / 'configuration').write_text('keep me')
+        self.run_script(*args)
+        self.assertEqual((prefix / 'configuration').read_text(), 'keep me')
+        self.assertFalse((prefix / '.911vulscan-installing').exists())
+        self.assertTrue((prefix / 'bin/python3.12').exists())
+
+    def test_legacy_unmarked_python_can_resume_but_unknown_directory_is_preserved(self):
+        self.os('20.04')
+        self.full_download_fixtures()
+        self.env['PYTHON_READY'] = '0'
+        prefix = self.root / '.tools/python'
+        prefix.mkdir(parents=True)
+        (prefix / 'custom-config').write_text('preserved')
+        args = ('--install-deps', '--deps-only', '--yes', '--start-docker', '--allow-unsupported-docker')
+        self.assertIn('incompatible', self.run_script(*args, success=False))
+        self.assertEqual((prefix / 'custom-config').read_text(), 'preserved')
+        (prefix / 'lib/python3.12').mkdir(parents=True)
+        self.run_script(*args)
+        self.assertEqual((prefix / 'custom-config').read_text(), 'preserved')
+        self.assertFalse((prefix / '.911vulscan-installing').exists())
+
+    def test_deploy_installs_plugins_into_service_docker_config(self):
+        self.prepare_application()
+        self.plugin_fixtures()
+        directory = self.root / 'service-docker'
+        directory.mkdir()
+        (directory / 'config.json').write_text('{"auths":{}}')
+        self.env.update(INSTALLER_UID='0', SUDO_USER='fixtureuser', DOCKER_CONFIG=str(directory))
+        self.run_script('--deploy')
+        self.assertTrue((directory / 'cli-plugins/docker-buildx').is_file())
+        self.assertEqual((directory / 'config.json').read_text(), '{"auths":{}}')
+        self.assertIn('DOCKER_CONFIG=' + str(directory), (self.root / 'systemd/vulscan.service').read_text())
 
     def test_deploy_does_not_replace_unmanaged_service(self):
         target = self.root / 'systemd/vulscan.service'

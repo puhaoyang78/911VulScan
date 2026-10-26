@@ -138,6 +138,10 @@ jobs:
         working-directory: apps/vulscan-cli
         run: go vet ./...
 
+      - name: Install Python dependencies
+        working-directory: libs/vulscan-core
+        run: python -m pip install -r requirements.txt && python -m pip install ".[dev]"
+
       - name: Run Go unit tests
         working-directory: apps/vulscan-cli
         run: go test ./... -v
@@ -162,10 +166,6 @@ jobs:
             echo "ERROR: Binary not found" && exit 1
           fi
 
-      - name: Install Python dependencies
-        working-directory: libs/vulscan-core
-        run: pip install -r requirements.txt && pip install ".[dev]"
-
       - name: Cache JS parser node_modules
         id: cache-node-modules
         uses: actions/cache@v6
@@ -188,6 +188,34 @@ jobs:
       - name: Run Go CLI integration tests
         working-directory: libs/vulscan-core
         run: python -m pytest tests/test_go_cli.py -v --tb=short
+
+  deployment:
+    name: Clean deployment (Ubuntu ${{ matrix.ubuntu }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["20.04", "22.04", "24.04"]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install isolated VM tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils openssh-client curl
+      - name: Build source deployment archive
+        run: python3 scripts/package-deployment.py --output "$RUNNER_TEMP/source.tar.gz"
+      - name: Run deploy, interrupted retry, redeploy, restart and reboot in a clean guest
+        run: |
+          sudo python3 scripts/tests/deploy_vm.py --ubuntu '${{ matrix.ubuntu }}' \
+            --archive "$RUNNER_TEMP/source.tar.gz" --image-dir "$RUNNER_TEMP/cloud-images" \
+            --output-dir "$RUNNER_TEMP/deploy-results"
+      - name: Keep actual deployment and boot logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: deployment-ubuntu-${{ matrix.ubuntu }}
+          path: ${{ runner.temp }}/deploy-results/*.log
 
   report-css:
     name: Report CSS reproducibility
@@ -250,4 +278,6 @@ jobs:
         working-directory: apps/vulscan-cli
         env:
           VULSCAN_BROWSER_TESTS: "1"
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         run: go test ./internal/server/ -run TestBrowserSmoke -v -count=1

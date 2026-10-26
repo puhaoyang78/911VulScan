@@ -695,7 +695,9 @@ let summaryHTML = '';
   if(await page.locator('.notice-toast[data-tone=info]').filter({hasText:'报告列表已更新。'}).count()!==1)throw Error('report refresh has no completion feedback');
   const expected=await(await context.request.get(baseURL+'/report/f0000007')).text();
   const [reportDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#download-report').click()]);
-  if(reportDownload.suggestedFilename()!=='扫描报告-f0000007.html'||readFileSync(await reportDownload.path(),'utf8')!==expected)throw Error('HTML download is incomplete or named incorrectly');
+  if(reportDownload.suggestedFilename()!=='扫描报告-f0000007.html')throw Error('HTML download filename: '+JSON.stringify(reportDownload.suggestedFilename()));
+  const downloaded=readFileSync(await reportDownload.path(),'utf8');
+  if(downloaded!==expected){let first=0;while(first<Math.min(expected.length,downloaded.length)&&expected[first]===downloaded[first])first++;throw Error(`HTML download differs: expected ${expected.length} characters, got ${downloaded.length}, first difference ${first}`);}
   if(!expected.includes('data:font/woff2;base64,')||!expected.includes('VulscanReader'))throw Error('HTML download lost offline resources');
   await page.goto(baseURL+'/scan/f0000002',{waitUntil:'domcontentloaded'});await page.locator('#tab-terminal').click();
   const logs=await(await context.request.get(baseURL+'/scan/f0000002/logs.txt')).text();
@@ -916,7 +918,9 @@ if(screenshotDir){
  writeFileSync(join(extension,'zoom.js'),'chrome.runtime.onInstalled.addListener(()=>{});');
  let zoomContext;
  try{
-  zoomContext=await chromium.launchPersistentContext(join(root,'profile'),{...launchOpts,ignoreDefaultArgs:['--disable-extensions'],args:['--headless=new','--disable-extensions-except='+extension,'--load-extension='+extension],viewport:{width:1440,height:1000},reducedMotion:'reduce'});
+  // The default headless shell cannot load extensions. Use the bundled full
+  // Chromium channel for real chrome.tabs.setZoom, including on CI.
+  zoomContext=await chromium.launchPersistentContext(join(root,'profile'),{channel:'chromium',...launchOpts,ignoreDefaultArgs:['--disable-extensions'],args:['--disable-extensions-except='+extension,'--load-extension='+extension],viewport:{width:1440,height:1000},reducedMotion:'reduce'});
   zoomContext.on('request',request=>{const u=new URL(request.url());if(['http:','https:'].includes(u.protocol)&&u.origin!==origin)note('zoom','unexpected external request '+u.href);});
   await zoomContext.addInitScript(()=>{Date.now=()=>new Date('2026-10-25T08:10:00Z').getTime();window.__violations=[];addEventListener('securitypolicyviolation',e=>window.__violations.push(`${e.violatedDirective} blocked=${e.blockedURI} at ${e.sourceFile||''}:${e.lineNumber}`));});
   const worker=zoomContext.serviceWorkers()[0]||await zoomContext.waitForEvent('serviceworker');
