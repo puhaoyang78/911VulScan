@@ -449,10 +449,10 @@ def test_the_summary_renders_the_inconclusive_identities():
     assert "srv:handleACME" in md, (
         f"the identity does not render in the summary: {md!r}")
     assert "CWE-918" in md and "client" in md, md
-    assert "manual review recommended" in md, md
+    assert "### 需要复核的疑似漏洞" in md, md
     # present-only: a clean run renders no section
     md_clean = _summary_tables_block({"results": {"vulnerable": 1}})
-    assert "Inconclusive rows" not in md_clean, md_clean
+    assert "### 需要复核的疑似漏洞" not in md_clean, md_clean
 
 
 # ---------------------------------------------------------------------------

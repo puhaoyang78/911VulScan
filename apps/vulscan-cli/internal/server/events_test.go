@@ -60,6 +60,64 @@ func eventLine(id string, seq uint64, kind string, update func(*uiEvent)) string
 	return uiEventPrefix + string(data)
 }
 
+func TestHumanLogsCannotBeAcceptedAsEventFrames(t *testing.T) {
+	for _, wrap := range []func(string) string{
+		func(frame string) string { return "[build] example output: " + frame },
+		func(frame string) string { return frame + " trailing output" },
+	} {
+		j := &Job{ID: "frame-test", Status: StatusRunning}
+		j.addLog(wrap(eventLine(j.ID, 1, "discovery.started", nil)))
+		if j.Snapshot != nil && (j.Snapshot.Seq != 0 || j.Snapshot.DiscoveryKnown) {
+			t.Fatal("ordinary log text changed structured scan state")
+		}
+	}
+}
+
+func TestFinalCoverageReconcilesRecoveredErrors(t *testing.T) {
+	j := &Job{ID: "retry-test", Status: StatusRunning}
+	j.addLog(eventLine(j.ID, 1, "error", func(e *uiEvent) { e.Stage = "analyze" }))
+	j.addLog(eventLine(j.ID, 2, "stage.changed", func(e *uiEvent) { e.Stage = "analyze"; e.Status = "success" }))
+	j.addLog(eventLine(j.ID, 3, "coverage.updated", func(e *uiEvent) { e.Status = "reported" }))
+	if j.snapshotLocked().Partial {
+		t.Fatal("recovered retry still presented as incomplete")
+	}
+	j.addLog(eventLine(j.ID, 4, "stage.changed", func(e *uiEvent) { e.Stage = "enhance"; e.Status = "partial" }))
+	j.addLog(eventLine(j.ID, 5, "coverage.updated", func(e *uiEvent) { e.Status = "reported" }))
+	if !j.snapshotLocked().Partial {
+		t.Fatal("an actual partial stage was hidden by coverage reconciliation")
+	}
+	j.Snapshot.Coverage = "event_gap"
+	j.addLog(eventLine(j.ID, 6, "coverage.updated", func(e *uiEvent) { e.Status = "reported" }))
+	if j.snapshotLocked().Coverage != "event_gap" || !j.Snapshot.Partial {
+		t.Fatal("transport gap was hidden by coverage reconciliation")
+	}
+}
+
+func TestTerminalSnapshotHasNoPendingWorkAndPreservesResults(t *testing.T) {
+	for _, status := range []string{StatusDone, StatusError, StatusTimeout, StatusCancelled} {
+		t.Run(status, func(t *testing.T) {
+			j := &Job{ID: "terminal-test", Status: status}
+			j.Snapshot = newJobSnapshot(j, false)
+			j.Snapshot.DiscoveryKnown = true
+			j.Snapshot.Stages["queue"] = &uiStage{Status: "queued"}
+			j.Snapshot.Stages["initialize"] = &uiStage{Status: "running"}
+			j.Snapshot.Findings["pending"] = &uiFinding{ID: "pending", ModelReview: "pending", Dynamic: "pending"}
+			j.Snapshot.Findings["running"] = &uiFinding{ID: "running", ModelReview: "retained", Dynamic: "running", Attempt: 2}
+			j.Snapshot.Findings["finished"] = &uiFinding{ID: "finished", ModelReview: "retained", Dynamic: "reproduced", DynamicDetails: "saved result"}
+			s := j.snapshotLocked()
+			if s.Stages["queue"].Status != "interrupted" || s.Stages["initialize"].Status != "interrupted" || !s.Partial {
+				t.Fatal("terminal snapshot retained an active stage")
+			}
+			if s.Findings["pending"].ModelReview != "interrupted" || s.Findings["pending"].Dynamic != "skipped" || s.Findings["running"].Dynamic != "interrupted" {
+				t.Fatal("terminal finding still waiting or executing")
+			}
+			if *s.Counts["pending"] != 0 || *s.Counts["reproduced"] != 1 || s.Findings["finished"].DynamicDetails != "saved result" {
+				t.Fatal("terminal projection erased a completed result or miscounted pending work")
+			}
+		})
+	}
+}
+
 func TestSnapshotCountsIdentityOrderingAndIsolation(t *testing.T) {
 	j := &Job{ID: "aabbccdd", Status: StatusRunning, StartedAt: time.Now(), outDir: t.TempDir()}
 	j.Snapshot = newJobSnapshot(j, false)

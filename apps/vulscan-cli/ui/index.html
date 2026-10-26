@@ -22,10 +22,10 @@
         <input type="hidden" name="csrf" value="{{.CSRF}}">
         <fieldset><legend><span class="section-no">01</span>扫描目标</legend>
           <label for="repo">仓库地址或本机项目路径</label><input type="text" id="repo" name="repo" required placeholder="https://github.com/org/repo 或 /path/to/project" autocomplete="off" aria-describedby="repo-hint">
-          <div class="two-col"><div><label for="ref">版本 / 标签（可选）</label><input type="text" id="ref" name="ref" list="ref-options" placeholder="留空扫描默认分支，如 v1.0.3" autocomplete="off" aria-describedby="ref-hint"></div><div style="display:flex;align-items:flex-end"><button type="button" class="btn" id="load-refs" aria-describedby="ref-hint">获取版本列表</button></div></div>
+          <label for="ref">分支、标签或提交（可选）</label>
+          <div class="ref-control"><input type="text" id="ref" name="ref" list="ref-options" placeholder="默认分支，如需指定版本可填 v1.0.3" autocomplete="off" aria-describedby="ref-hint"><button type="button" class="btn" id="load-refs">获取版本列表</button></div>
           <datalist id="ref-options"></datalist>
-          <p class="hint" id="ref-hint">用于扫描历史版本：填写远端标签（如 <code>v1.2.0</code>）、分支或提交号，程序会在克隆后检出该版本再分析，报告会记录实际提交。留空则使用默认分支。</p>
-          <p class="feedback" id="ref-feedback" role="status"></p>
+          <p class="hint" id="ref-hint">留空使用默认分支。获取列表后，可输入关键词筛选标签和分支。</p>
           <p class="hint" id="repo-hint">仅扫描你有权测试的项目。私有仓库请使用本机 Git 凭据，不要把密码或令牌放进地址。</p>
           <label id="language-label">扫描语言</label><div class="language-grid" role="group" aria-labelledby="language-label">
             <label><input type="checkbox" name="languages" value="c"> C / C++</label><label><input type="checkbox" name="languages" value="python"> Python</label><label><input type="checkbox" name="languages" value="javascript"> JavaScript</label><label><input type="checkbox" name="languages" value="go"> Go</label>
@@ -38,24 +38,25 @@
           <div id="configured-settings" hidden><label for="llm_config">已有配置</label><select name="llm_config" id="llm_config" disabled><option value="">沿用配置文件中的默认值</option>{{range .LLMConfigs}}<option value="{{.}}">{{.}}</option>{{end}}</select><p class="hint">按已有配置选择各阶段的服务商、模型和凭据；此模式不使用上方 DeepSeek 密钥。未显式设置默认值时兼容已有配置；全新配置默认 deepseek-default。</p></div>
         </fieldset>
         <fieldset><legend><span class="section-no">03</span>验证与扫描范围</legend>
-          <div class="checkrow"><input type="checkbox" id="verify" name="verify" checked><label for="verify">模型复核（攻击者模拟）<span class="hint">对候选问题进行第二阶段模型复核；结果与动态复现分别展示。</span></label></div>
-          <div class="checkrow"><input type="checkbox" id="dynamic_test" name="dynamic_test"><label for="dynamic_test">Docker 隔离动态测试<span class="hint">执行候选验证用例，包括 C / C++ 测试模板；需要本机 Docker 可用，耗时与资源开销更高。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="verify" name="verify" checked><label for="verify">模型复核<span class="hint">从攻击者角度检查候选问题的可利用性。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="dynamic_test" name="dynamic_test"><label for="dynamic_test">动态测试（Docker）<span class="hint">在隔离容器中构建并运行测试，需要本机 Docker。</span></label></div>
           <div class="two-col"><div><label for="docker-proxy-ip">Docker 构建代理 IP（可选）</label><input type="text" id="docker-proxy-ip" name="docker_proxy_ip" placeholder="127.0.0.1" autocomplete="off" aria-describedby="docker-proxy-hint"></div><div><label for="docker-proxy-port">代理端口（可选）</label><input type="text" id="docker-proxy-port" name="docker_proxy_port" inputmode="numeric" placeholder="7890" autocomplete="off" aria-describedby="docker-proxy-hint"></div></div>
           <p class="hint" id="docker-proxy-hint">用于 Docker 构建时下载依赖，支持 HTTP / mixed 代理端口。IP 和端口全部留空时使用 Docker 现有网络配置；本机 mihomo 可填写 127.0.0.1 和对应端口。</p>
           <div class="checkrow"><input type="checkbox" id="library_mode" name="library_mode"><label for="library_mode">库项目模式<span class="hint">以公开 API 作为分析入口。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="include_intentional" name="include_intentional"><label for="include_intentional">按靶场扫描<span class="hint">保留刻意设置的教学漏洞。</span></label></div>
         </fieldset>
         <fieldset><legend><span class="section-no">04</span>扫描时间上限</legend>
           <label for="scan-timeout">本次扫描最长运行时间</label>
           <select id="scan-timeout" name="scan_timeout" aria-describedby="scan-timeout-hint"><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="2h" selected>2 小时（默认）</option><option value="4h">4 小时</option><option value="8h">8 小时</option><option value="24h">24 小时</option></select>
-          <p class="hint" id="scan-timeout-hint">主扫描总预算；超时后保留已有结果。</p><details class="task-settings"><summary>时间范围</summary><p class="hint">总时间预算不是每个阶段的预计耗时。不含排队、克隆、补充报告和清理；辅助调用使用独立时间上限。</p></details>
+          <p class="hint" id="scan-timeout-hint">扫描累计用时的上限，超时后保留已有结果。</p><details class="task-settings"><summary>计时范围</summary><p class="hint">各阶段预计耗时见扫描详情。不含排队、克隆、补充报告和清理；辅助调用单独计时。</p></details>
         </fieldset>
         <p class="privacy">数据提示：界面仅在本机提供服务。扫描会将相关源代码发送给所选模型服务商，并产生相应 API 费用；启用动态测试还会在本机 Docker 中运行测试代码。</p>
-        <button type="submit" class="btn-primary" id="start-button">开始安全扫描 →</button><p class="feedback" id="form-feedback" role="alert"></p>
+        <button type="submit" class="btn-primary" id="start-button">开始安全扫描 →</button><p class="feedback" id="form-feedback"></p>
       </form>
     </section>
 
   <section class="scans-section"><div class="section-heading"><h2>最近扫描</h2><p>UTC+8</p></div>
-    <div class="table-tools"><label for="job-query">查找任务</label><input id="job-query" type="search" placeholder="搜索项目路径、任务编号"><label for="job-status">任务状态</label><select id="job-status"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">运行中</option><option value="cancelling">取消中</option><option value="cancelled">已取消</option><option value="done">完成</option><option value="timeout">超时</option><option value="error">失败</option></select><span id="job-count" class="table-count"></span></div><div class="scans-table" id="scans-list">{{if .Jobs}}{{range .Jobs}}<div class="scan-row" id="row-{{.ID}}" data-status="{{.Status}}"><div><div class="scan-repo-wrap"><span class="scan-repo" title="{{.Repo}}">{{.Repo}}</span><button class="copy-btn" type="button" title="复制仓库地址或路径" aria-label="复制仓库地址或路径" data-repo="{{.Repo}}">复制</button></div><div class="scan-meta">{{.StartedAt}} · {{.ID}}</div></div><span class="badge badge-{{.Status}}">{{if eq .Status "queued"}}排队中{{else if eq .Status "running"}}运行中{{else if eq .Status "cancelling"}}正在取消{{else if eq .Status "cancelled"}}已取消{{else if eq .Status "done"}}已完成{{else if eq .Status "timeout"}}已超时{{else}}失败{{end}}</span><div class="scan-actions"><a class="link-btn" href="/scan/{{.ID}}">查看详情</a>{{if .HasSummary}}<a class="link-btn" href="/summary/{{.ID}}" target="_blank" rel="noopener">摘要</a>{{end}}{{if .HasReport}}<a class="link-btn" href="/report/{{.ID}}" target="_blank" rel="noopener">报告</a>{{end}}<button class="delete-btn" type="button" title="删除扫描与产物" data-id="{{.ID}}">删除</button></div></div>{{end}}{{else}}<div class="empty-state" id="empty-state"><strong>还没有扫描任务</strong>填写上方项目地址，开始第一次安全分析。</div>{{end}}</div><p class="feedback" id="list-feedback" role="status" aria-live="polite"></p>
+    <div class="table-tools"><label for="job-query">查找任务</label><input id="job-query" type="search" placeholder="搜索项目路径、任务编号"><label for="job-status">任务状态</label><select id="job-status"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">运行中</option><option value="cancelling">取消中</option><option value="cancelled">已取消</option><option value="done">完成</option><option value="timeout">超时</option><option value="error">失败</option></select><button class="btn" type="button" id="clear-jobs" disabled>清除筛选</button><span id="job-count" class="table-count" role="status"></span></div><div class="scans-table" id="scans-list">{{if .Jobs}}{{range .Jobs}}<div class="scan-row" id="row-{{.ID}}" data-status="{{.Status}}"><div><div class="scan-repo-wrap"><span class="scan-repo" title="{{.Repo}}">{{.Repo}}</span><button class="copy-btn" type="button" title="复制仓库地址或路径" aria-label="复制仓库地址或路径" data-repo="{{.Repo}}">复制</button></div><div class="scan-meta">{{.StartedAt}} · {{.ID}}</div></div><div class="scan-state"><span class="badge badge-{{.Status}}">{{if eq .Status "queued"}}排队中{{else if eq .Status "running"}}运行中{{else if eq .Status "cancelling"}}正在取消{{else if eq .Status "cancelled"}}已取消{{else if eq .Status "done"}}已完成{{else if eq .Status "timeout"}}已超时{{else}}失败{{end}}</span>{{if and (eq .Status "done") .Partial}}<span class="scan-meta">结果不完整</span>{{end}}</div><div class="scan-actions"><a class="link-btn" href="/scan/{{.ID}}">查看详情</a>{{if .HasSummary}}<a class="link-btn" href="/summary/{{.ID}}" target="_blank" rel="noopener">摘要</a>{{end}}{{if .HasReport}}<a class="link-btn" href="/report/{{.ID}}" target="_blank" rel="noopener">报告</a>{{end}}<button class="delete-btn" type="button" title="删除扫描及结果" data-id="{{.ID}}">删除</button></div></div>{{end}}{{else}}<div class="empty-state" id="empty-state"><strong>还没有扫描任务</strong>填写上方项目地址，开始第一次安全分析。</div>{{end}}</div><p class="empty-state" id="job-empty" hidden>没有匹配的任务，请调整或清除筛选。</p><p class="feedback" id="list-feedback" role="status" aria-live="polite"></p>
   </section>
   </div>
 
@@ -64,7 +65,7 @@
 <dialog class="dialog" id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-message">
   <div class="dialog-inner">
     <div class="dialog-heading"><div class="dialog-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6m4-6v6"/></svg></div><h2 id="delete-title">删除扫描任务？</h2></div>
-    <p id="delete-message">将删除本次任务的日志、报告与材料。此操作无法撤销。</p>
+    <p id="delete-message">将删除本次任务的日志和报告。此操作无法撤销。</p>
     <div class="dialog-target"><strong id="delete-target"></strong><code id="delete-job-id"></code></div>
     <p class="dialog-feedback" id="delete-feedback" role="alert"></p>
     <div class="dialog-actions">
@@ -85,32 +86,71 @@ function updateProvider() {
   document.getElementById('model').disabled = configured;
 }
 provider.addEventListener('change', updateProvider);
-const refFeedback = document.getElementById('ref-feedback');
-document.getElementById('load-refs').addEventListener('click', async function() {
-  const repo = document.getElementById('repo').value.trim();
-  const options = document.getElementById('ref-options');
-  refFeedback.textContent = '';
-  if (!repo) { refFeedback.textContent = '请先填写仓库地址。'; return; }
-  if (!/^(https?:\/\/|git@)/.test(repo)) { refFeedback.textContent = '本机路径没有远端标签，请直接填写分支名或提交号。'; return; }
-  this.disabled = true; this.setAttribute('aria-busy','true');
+const repoInput = document.getElementById('repo');
+const refInput = document.getElementById('ref');
+const refOptions = document.getElementById('ref-options');
+const refsButton = document.getElementById('load-refs');
+let refsRequest = null;
+let refsRepo = repoInput.value.trim();
+function setRefsBusy(busy) {
+  refsButton.disabled = busy;
+  refsButton.setAttribute('aria-busy', String(busy));
+  refsButton.textContent = busy ? '正在获取…' : '获取版本列表';
+}
+repoInput.addEventListener('input', () => {
+  const repo = repoInput.value.trim();
+  if (repo === refsRepo) return;
+  refsRepo = repo;
+  refsRequest?.abort();
+  refsRequest = null;
+  refOptions.replaceChildren();
+  setRefsBusy(false);
+});
+refInput.addEventListener('change', () => {
+  const ref = refInput.value.trim();
+  VulscanUI.notify(ref ? '扫描版本已设为 ' + ref + '。' : '已恢复扫描默认分支。',
+    {tone:'info',button:refInput,id:'repository-refs'});
+});
+refsButton.addEventListener('click', async function() {
+  if (refsRequest) return;
+  const repo = repoInput.value.trim();
+  if (!repo) {
+    VulscanUI.notify('请先填写仓库地址。',{tone:'error',button:this,id:'repository-refs'});
+    repoInput.focus();
+    return;
+  }
+  if (!/^(https?:\/\/|git@)/.test(repo)) {
+    VulscanUI.notify('本机项目请直接填写分支、标签或提交号。',{tone:'info',button:this,id:'repository-refs'});
+    return;
+  }
+  const request = new AbortController();
+  refsRequest = request;
+  setRefsBusy(true);
   try {
-    const response = await fetch('/refs?repo=' + encodeURIComponent(repo));
+    const response = await fetch('/refs?repo=' + encodeURIComponent(repo), {signal:request.signal});
     if (!response.ok) throw new Error((await response.text()).trim() || '无法读取版本列表。');
-    const refs = (await response.json()).refs || [];
-    options.innerHTML = '';
+    const payload = await response.json();
+    const refs = payload?.refs === null ? [] : payload?.refs;
+    if (refsRequest !== request || repoInput.value.trim() !== repo) return;
+    if (!Array.isArray(refs) || refs.some(item => !item || typeof item.name !== 'string' || !['tag','branch'].includes(item.kind))) {
+      throw new Error('版本列表格式异常，请重试。');
+    }
+    refOptions.replaceChildren();
     for (const item of refs) {
       const option = document.createElement('option');
       option.value = item.name;
-      option.label = item.kind === 'tag' ? '标签' : '分支';
-      options.appendChild(option);
+      option.label = item.name + ' · ' + (item.kind === 'tag' ? '标签' : '分支');
+      option.textContent = option.label;
+      refOptions.appendChild(option);
     }
-    refFeedback.textContent = refs.length
-      ? '已获取 ' + refs.length + ' 个版本，可在输入框中输入筛选。'
-      : '远端没有可列出的标签或分支，请确认地址与访问权限。';
+    VulscanUI.notify(refs.length ? '已获取 ' + refs.length + ' 个可选版本。' : '此仓库没有可列出的标签或分支。',
+      {tone:refs.length ? 'success' : 'info',button:this,id:'repository-refs'});
   } catch (error) {
-    refFeedback.textContent = error instanceof TypeError ? '连接中断，请稍后重试。' : error.message;
+    if (refsRequest !== request || request.signal.aborted || repoInput.value.trim() !== repo) return;
+    VulscanUI.notify(error instanceof TypeError ? '版本列表获取失败，请检查连接后重试。' : error instanceof SyntaxError ? '版本列表格式异常，请重试。' : error.message,
+      {tone:'error',button:this,id:'repository-refs'});
   } finally {
-    this.disabled = false; this.setAttribute('aria-busy','false');
+    if (refsRequest === request) { refsRequest = null; setRefsBusy(false); }
   }
 });
 updateProvider();
@@ -132,6 +172,7 @@ document.getElementById('scan-form').addEventListener('submit', async function(e
     location.assign(destination.href);
   } catch (error) {
     feedback.textContent = error instanceof TypeError ? '连接中断，任务可能已创建。请先刷新查看最近扫描，再决定是否重试。' : error.message;
+    VulscanUI.notify(feedback.textContent,{tone:'error',button,id:'scan-form'});
     button.disabled = false; button.setAttribute('aria-busy','false'); button.textContent = '开始安全扫描 →'; submitting = false;
   }
 });
@@ -176,8 +217,8 @@ function requestDelete(id, button) {
   document.getElementById('delete-target').textContent = row.querySelector('.scan-repo')?.textContent || id;
   document.getElementById('delete-job-id').textContent = id;
   document.getElementById('delete-message').textContent = ['queued','running','cancelling'].includes(row.dataset.status)
-    ? '将停止扫描，并删除本次任务的日志、报告与材料。此操作无法撤销。'
-    : '将删除本次任务的日志、报告与材料。此操作无法撤销。';
+    ? '将停止扫描，并删除本次任务的日志和报告。此操作无法撤销。'
+    : '将删除本次任务的日志和报告。此操作无法撤销。';
   document.getElementById('delete-feedback').textContent = '';
   document.getElementById('delete-confirm').textContent = '确认删除';
   deleteDialog.showModal();
@@ -232,7 +273,12 @@ function filterJobs() {
  const rows=[...document.querySelectorAll('.scan-row')];
  let count=0; rows.forEach(row=>{row.hidden=!!((status&&row.dataset.status!==status)||(query&&!row.textContent.toLocaleLowerCase().includes(query)));if(!row.hidden)count++;});
  document.getElementById('job-count').textContent=rows.length ? '显示 '+count+' / '+rows.length+' 个任务' : '';
+ const noMatches=rows.length>0&&count===0;
+ document.getElementById('scans-list').hidden=noMatches;
+ document.getElementById('job-empty').hidden=!noMatches;
+ document.getElementById('clear-jobs').disabled=!document.getElementById('job-query').value&&!status;
 }
+document.getElementById('clear-jobs').addEventListener('click',()=>{document.getElementById('job-query').value='';document.getElementById('job-status').value='';filterJobs();});
 ['job-query','job-status'].forEach(id=>document.getElementById(id).addEventListener('input',filterJobs));filterJobs();
 </script>
 </body>

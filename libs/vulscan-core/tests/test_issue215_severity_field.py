@@ -381,7 +381,7 @@ def test_summary_template_row_has_severity_cell():
     block = _summary_tables_block({"findings": findings})
     assert block.count(
         "| # | 漏洞 | 位置 | CWE | 严重程度 | 验证方式 |") == 1
-    assert "| 1 | XSS | a.py:handler | CWE-79 | 高危 | 第 2 阶段已验证 |" in block
+    assert "| 1 | XSS | a.py:handler | CWE-79 | 高危 | 模型复核：保留 |" in block
 
 
 def test_max_iterations_downgrade_strips_severity():

@@ -162,7 +162,7 @@ def test_console_phase_line_excludes_the_restored_checkpoints(tmp_path, monkeypa
         "repository": {"name": "t", "language": "python"},
         "application_type": "unknown",
         "findings": [{
-            "id": "f1", "name": "X", "short_name": "x", "location": "a.py:1",
+            "id": "f1", "identity_key": "stable-f1", "name": "X", "short_name": "x", "location": "a.py:1",
             "cwe_id": 79, "stage2_verdict": "confirmed",
             "vulnerable_code": "eval(x)", "attack_vector": "a",
             "steps_to_reproduce": "s", "impact": "i", "suggested_fix": "f",
@@ -180,7 +180,7 @@ def test_console_phase_line_excludes_the_restored_checkpoints(tmp_path, monkeypa
     # monkeypatch spends $0.03 on the retry).
     import json as _json
     (cp / "f1.json").write_text(_json.dumps({
-        "id": "f1", "status": "ERROR",
+        "id": "f1", "identity_key": "stable-f1", "status": "ERROR",
         "generation_cost_usd": 0.60,
         "generation_input_tokens": 1000, "generation_output_tokens": 500,
     }))

@@ -21,5 +21,10 @@
  document.getElementById('finding-expand').addEventListener('click',()=>section.querySelectorAll('details:not([hidden])').forEach(d=>{d.open=true;}));
  document.getElementById('finding-collapse').addEventListener('click',()=>section.querySelectorAll('details').forEach(d=>{d.open=false;}));
  filter();
- if(location.hash.startsWith('#finding-'))reveal(document.getElementById(location.hash.slice(1)));
+ function followHash(){
+  const row=rows.find(row=>'#'+row.id===location.hash);if(!row)return;
+  if(row.hidden){query.value='';filter();}
+  reveal(row);links.forEach(link=>link.setAttribute('aria-current',String(link.dataset.finding===row.id)));
+ }
+ window.addEventListener('hashchange',followHash);followHash();
 })();

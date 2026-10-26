@@ -76,6 +76,7 @@ assert not (root / "openant").exists()
             assert refusal.returncode != 0 and "portable" in refusal.stderr.lower()
             assert (source / "bin/vulscan-cli").is_file()
             env = install_env
+        run(sys.executable, str(source / "scripts/check-deployment.py"), "--root", str(source), env=env)
         # A real local HTTP response verifies embedded UI assets survived packaging.
         with (base / "serve.log").open("w+") as log:
             server = subprocess.Popen([str(binary), "serve", "--addr", "127.0.0.1:0"], cwd=base, env=env, stdout=log, stderr=log)
@@ -86,7 +87,8 @@ assert not (root / "openant").exists()
                     output = log.read()
                     match = re.search(r"http://127\.0\.0\.1:\d+", output)
                     if match:
-                        with urllib.request.urlopen(match.group(), timeout=5) as response:
+                        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                        with opener.open(match.group(), timeout=5) as response:
                             assert response.status == 200
                             assert "911VulScan" in response.read().decode()
                         # Check exact packaged font/highlighter/theme bytes,
@@ -95,8 +97,9 @@ assert not (root / "openant").exists()
                                              ("highlight-11.11.1.min.js", "design"),
                                              ("inter-latin-wght-5.2.5.woff2", "design"),
                                              ("jetbrains-mono-latin-400-5.2.5.woff2", "design"),
-                                             ("workbench.css", "static"), ("shell.js", "static"), ("scan.js", "static")):
-                            with urllib.request.urlopen(match.group() + "/assets/" + name, timeout=5) as asset:
+                                             ("workbench.css", "static"), ("shell.js", "static"), ("scan.js", "static"),
+                                             ("documents.js", "static"), ("reader.js", "static"), ("report.js", "static")):
+                            with opener.open(match.group() + "/assets/" + name, timeout=5) as asset:
                                 assert asset.read() == (source / "apps/vulscan-cli/ui" / folder / name).read_bytes(), name
                         break
                     if server.poll() is not None:

@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 
 from utilities.dynamic_tester.models import DynamicTestResult
-from report.localization import display_label
+from report.localization import dynamic_label
 from report.reproduction import render_reproduction
 
 
@@ -75,7 +75,7 @@ def generate_report(
             continue
 
         lines.extend([
-            f"## {display_label(status)} ({len(status_results)})",
+            f"## {dynamic_label(status)} ({len(status_results)})",
             "",
         ])
 
@@ -83,7 +83,7 @@ def generate_report(
             lines.extend([
                 f"### {r.finding_id}",
                 "",
-                f"**状态：** {display_label(r.status)}",
+                f"**状态：** {dynamic_label(r.status)}",
                 f"**详情：** {r.details}",
                 f"**耗时：** {r.elapsed_seconds:.1f} 秒",
                 f"**生成预估费用：** ${r.generation_cost_usd:.4f}"

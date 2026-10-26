@@ -147,10 +147,10 @@ class TestGeneratorBlocks:
             units_analyzed=120, total_units=120, stage1_errors=0,
             findings_input=4, units_analyzed_total=120,
             downgraded=1, upgraded=0))
-        assert "已解析：5389 个函数" in block
-        assert "可达性筛选后范围内的函数：2343/5389" in block
-        assert "第 1 阶段已分析：120 个函数" in block
-        assert "第 2 阶段已复核：4/120 个已分析函数" in block
+        assert "已解析：5389 项分析对象" in block
+        assert "可达性筛选后范围内的分析对象：2343/5389" in block
+        assert "第 1 阶段已分析：120 项分析对象" in block
+        assert "第 2 阶段已复核：4/120 项已分析对象" in block
         assert "1 个降级，0 个升级" in block
 
     def test_present_only_no_fabricated_zeros(self):
@@ -172,13 +172,17 @@ class TestGeneratorBlocks:
              "cwe_id": 2, "severity": "medium", "stage2_verdict": "agreed"},
             {"name": "C", "location": {"file": "e", "function": "f"},
              "cwe_id": 3, "stage2_verdict": "unverified"},
+            {"name": "D", "location": {"file": "g", "function": "h"},
+             "cwe_id": 4, "stage1_verdict": "vulnerable", "stage2_verdict": "bypassable"},
         ]
         block = _summary_tables_block({"findings": findings})
-        conf = block.split("## 未确认的漏洞")[0]
+        conf = block.split("## 其他疑似漏洞")[0]
         assert "| 1 | A |" in conf and "| 2 | B |" in conf
+        assert "| 3 | D |" in conf and "模型复核：保留" in conf
+        assert "已复现" not in conf
         assert "| C |" not in conf  # THE receipt: unverified in Confirmed
-        nc = block.split("## 未确认的漏洞")[1]
-        assert "| C |" in nc and "未经复核" in nc
+        nc = block.split("## 其他疑似漏洞")[1]
+        assert "| C |" in nc and "复核未完成" in nc
 
     def test_no_findings_no_placeholder_tables(self):
         block = _summary_tables_block({"findings": []})

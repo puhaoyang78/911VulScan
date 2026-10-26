@@ -22,6 +22,11 @@ func TestEnvelopeErrors(t *testing.T) {
 			want:   []string{"boom", "and again"},
 		},
 		{
+			name:   "Python pretty printed error envelope",
+			stdout: "{\n  \"status\": \"error\",\n  \"data\": null,\n  \"errors\": [\n    \"余额不足，请检查账户\"\n  ]\n}\n",
+			want:   []string{"余额不足，请检查账户"},
+		},
+		{
 			name:   "success envelope carries no errors",
 			stdout: `{"status":"success","data":{"x":1}}`,
 			want:   nil,

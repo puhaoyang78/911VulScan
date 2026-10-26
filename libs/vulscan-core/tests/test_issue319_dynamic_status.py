@@ -118,7 +118,7 @@ def test_disclosure_header_stamps_the_dynamic_dimension():
                  "dynamic_testing": {"status": "CONFIRMED"},
                  "stage1_verdict": "vulnerable"}
     h = _disclosure_verdict_header(confirmed)
-    assert "动态测试" in h and "已通过动态测试确认" in h
+    assert "动态测试" in h and "已复现" in h
 
     failed = {"stage2_verdict": "confirmed",
              "dynamic_testing_attempted": {"status": "ERROR"},
@@ -130,7 +130,7 @@ def test_disclosure_header_stamps_the_dynamic_dimension():
     # the dynamic-failure line — the #210/#283 regression (an early-return
     # dropped the Stage-2 confirmation from a harness-errored finding) must
     # be pinned by assertion, not just by the compose code being correct.
-    assert "已通过第 2 阶段攻击者模拟确认" in h2 or "已由第 2 阶段攻击者模拟判定" in h2, (
+    assert "复核保留" in h2 and "已复现" not in h2, (
         "the Stage-2 confirmation stamp must be retained alongside the "
         "NOT-confirmed dynamic line: " + h2)
 

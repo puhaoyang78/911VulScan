@@ -987,6 +987,7 @@ def _response_to_unified(
             # F-A1: the DETAIL fields travel with it (see the no-choices
             # sibling above) — #626's cache accounting lives only here.
             usage_details=_extract_usage_details_chat(_usage),
+            stop_reason="max_tokens" if raw_finish == "length" else None,
         )
 
     if raw_finish not in _OPENAI_FINISH_REASONS:

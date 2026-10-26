@@ -29,7 +29,7 @@ def test_consistency_prompt_also_requires_chinese():
     assert CHINESE_REPORT_INSTRUCTION in verification_prompts.get_consistency_check_prompt([], {})
 
 
-@pytest.mark.parametrize("verdict,label", [("CONFIRMED", "已确认"), ("ERROR", "错误"), ("NOT_REPRODUCED", "未复现"), ("critical", "严重"), ("unknown", "未知")])
+@pytest.mark.parametrize("verdict,label", [("CONFIRMED", "复核保留"), ("ERROR", "错误"), ("NOT_REPRODUCED", "未复现"), ("critical", "严重"), ("unknown", "未知")])
 def test_display_enum_mapping(verdict, label):
     assert display_label(verdict) == label
     assert display_label("CWE-79") == "CWE-79"
@@ -39,11 +39,12 @@ def test_summary_tables_and_verification_dimensions_are_chinese():
     data = {"pipeline_stats": {"parsed_units": 12, "durations": {"verify": 10.22}, "costs": {"verify": {"actual": 0.0}}}, "results": {"vulnerable": 1, "errors": 0}, "findings": [{"name": "路径穿越", "location": {"file": "src/main.c", "function": "load"}, "cwe_id": 22, "severity": "high", "stage1_verdict": "vulnerable", "stage2_verdict": "confirmed", "dynamic_testing_attempted": {"status": "ERROR"}}]}
     before = deepcopy(data)
     text = generator._summary_statistics_block(data) + generator._summary_tables_block(data)
-    for expected in ("已解析：12", "模型复核", "10.2s", "$0.00", "已确认的漏洞", "高危", "动态测试：错误", "src/main.c:load", "CWE-22"):
+    for expected in ("已解析：12", "模型复核", "10.2s", "$0.00", "复核保留的漏洞", "高危", "动态测试：测试错误", "src/main.c:load", "CWE-22"):
         assert expected in text
     header = generator._disclosure_verdict_header(data["findings"][0])
-    assert "已通过第 2 阶段攻击者模拟确认" in header
-    assert "动态测试：错误" in header
+    assert "复核保留" in header
+    assert "测试错误" in header
+    assert "已复现" not in header
     for english in ("## Pipeline Statistics", "## Results", "## Confirmed Vulnerabilities", "| Severity |", "**Verification:**", "dynamic test failed"):
         assert english not in text + header
     assert data == before
@@ -65,7 +66,7 @@ def test_dynamic_report_translates_labels_preserving_evidence_and_machine_status
     result = DynamicTestResult("VULN-001", "CONFIRMED", "已读取测试文件。", evidence=[Evidence("file_read", "/tmp/fixture.txt")], test_code="print('CONFIRMED')")
     before = result.to_dict()
     text = generate_report([result], repo_name="fixture")
-    for expected in ("动态测试结果", "已确认", "文件读取", "/tmp/fixture.txt", "print('CONFIRMED')", "VULN-001"):
+    for expected in ("动态测试结果", "已复现", "文件读取", "/tmp/fixture.txt", "print('CONFIRMED')", "VULN-001"):
         assert expected in text
     for english in ("# Dynamic Test Results", "## Summary", "**Status:**", "**Evidence:**", "Generated Test Code"):
         assert english not in text
@@ -91,6 +92,8 @@ def test_generated_reports_explicitly_request_chinese(monkeypatch):
     for call in adapter.calls:
         assert "Simplified Chinese" in call["system"]
         assert "Preserve code" in call["system"]
+        assert CHINESE_REPORT_INSTRUCTION in call["system"]
+        assert "不要在每节重复" in call["system"]
     assert "## 覆盖范围" in adapter.calls[0]["messages"][0].content[0].text
     assert "## 复现步骤" in adapter.calls[1]["messages"][0].content[0].text
 
@@ -114,7 +117,8 @@ def test_report_data_chinese_fallback_preserves_json_contract(tmp_path, capsys):
     assert payload["status"] == "success"
     data = payload["data"]
     assert data["title"] == "安全分析报告"
-    assert "未发现漏洞或安全问题" in data["remediation_html"]
+    assert "没有可直接生成修复建议的漏洞" in data["remediation_html"]
+    assert "所有函数均安全" not in data["remediation_html"]
     assert "代码存在可利用的安全漏洞" in data["categories"][0]["description"]
     assert data["findings"][0]["verdict"] == "safe"
     assert data["unit_chart"]["labels"] == ["safe"]
@@ -130,3 +134,27 @@ def test_empty_and_warning_report_fallbacks_have_chinese_headings():
     assert "安全模型来自仓库控制的文件" in warning
     for english in ("## Methodology", "No findings to report", "Attacker model:", "Security model supplied"):
         assert english not in fallback + warning
+
+
+def test_report_prompts_do_not_reintroduce_obsolete_verification_wording():
+    summary = generator.load_prompt("summary")
+    disclosure = generator.load_prompt("disclosure")
+    assert "Stage 2 attacker simulation passed" not in summary
+    assert '"verified" if stage2_verdict' not in summary
+    assert "model agreement as successful dynamic reproduction" in summary
+    assert "最近一次分析结论" in summary
+    assert "验证方式：{" not in disclosure
+    assert "without a confirmed dynamic result" in disclosure.lower()
+    assert "建议复现步骤（未测试）" in disclosure
+
+
+@pytest.mark.parametrize("findings,expected", [
+    ([], "当前结果没有可直接生成修复建议的漏洞"),
+    ([{"verdict": "safe"}], "当前结果没有可直接生成修复建议的漏洞"),
+    ([{"verdict": "error"}], "1 项分析未完成"),
+])
+def test_legacy_html_empty_remediation_does_not_claim_everything_is_safe(findings, expected):
+    from report.html_report import generate_remediation_guidance
+    text = generate_remediation_guidance(findings)
+    assert expected in text
+    assert "均安全" not in text and "已确认" not in text

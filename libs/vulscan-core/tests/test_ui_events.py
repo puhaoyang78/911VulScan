@@ -73,6 +73,21 @@ def test_disabled_outside_web_runner(monkeypatch, capsys):
     assert records(capsys) == []
 
 
+def test_build_activity_tolerates_blank_pipe_chunks_without_hiding_raw_output(monkeypatch, capsys):
+    monkeypatch.setenv("VULSCAN_JOB_ID", "fixture")
+    ui_events.start(verify=True, dynamic=True)
+    records(capsys)
+    observe = ui_events.command_output("build")
+    observe("\r\n  \n")
+    observe("dependencies ready\n")
+    output = capsys.readouterr().err
+    events = [json.loads(line[len(ui_events.PREFIX):]) for line in output.splitlines()
+              if line.startswith(ui_events.PREFIX)]
+    assert len(events) == 1
+    assert events[0]["message"] == "dependencies ready"
+    assert "[dynamic-test] [build]   " in output
+
+
 def test_actual_review_semantics():
     assert model_review_status(dict(finding="vulnerable", verification={"agree": False})) == "retained"
     assert model_review_status(dict(finding="safe", verification={"agree": False})) == "excluded"
@@ -101,6 +116,38 @@ def test_partial_failure_or_output_rebuild_cannot_erase_a_real_reproduction(monk
     assert states == ["pending", "reproduced"]
     assert "dynamic" not in events[-1]["finding"]
     assert next(e for e in events if e.get("status") == "reproduced")["finding"]["failure_phase"] == ""
+
+
+def test_failed_dynamic_preparation_closes_only_queued_tests(monkeypatch, capsys):
+    monkeypatch.setenv("VULSCAN_JOB_ID", "fixture")
+    ui_events.start(verify=True, dynamic=True)
+    for name in ("excluded", "running"):
+        ui_events.finding(dict(route_key=f"a.c:{name}", finding="vulnerable"))
+    queued = dict(id="VULN-001", location=dict(file="a.c", function="queued"))
+    running = dict(id="VULN-002", location=dict(file="a.c", function="running"))
+    ui_events.pipeline_findings([queued, running])
+    ui_events.dynamic(running, status="RUNNING", attempt=1)
+    records(capsys)
+    ui_events.skipped("dynamic-test", "failed")
+    events = records(capsys)
+    assert events[0]["status"] == "error"
+    updates = [e for e in events if e["type"] == "validation.updated"]
+    assert [e["finding_id"] for e in updates] == ["a.c:queued"]
+    assert updates[0]["finding"]["dynamic"] == "skipped"
+    assert "测试未执行" in updates[0]["details"]
+
+
+def test_final_coverage_includes_optional_phase_failure(monkeypatch, capsys, tmp_path):
+    from core.scanner import _write_scan_report
+    from core.schemas import ScanResult
+
+    monkeypatch.setenv("VULSCAN_JOB_ID", "fixture")
+    ui_events.start(verify=True, dynamic=True)
+    result = ScanResult(output_dir=str(tmp_path))
+    result.skipped_step_reasons["dynamic-test"] = "failed"
+    _write_scan_report(str(tmp_path), result, [], repo_path=str(tmp_path))
+    events = records(capsys)
+    assert next(e for e in events if e["type"] == "coverage.updated")["status"] == "incomplete"
 
 
 def test_command_output_keeps_finding_identity_across_pipe_threads(monkeypatch, capsys):

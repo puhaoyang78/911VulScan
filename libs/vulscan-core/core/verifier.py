@@ -344,6 +344,8 @@ def run_verification(
         verify_binding, _verify_texts,
         extra_key={
             "analyze_fingerprint": experiment.get("analyze_fingerprint"),
+            **({"include_intentional": True}
+               if getattr(app_context, "deliberately_vulnerable", False) is True else {}),
             # #546: the context's deterministic-derivation identity — a
             # standalone verify can be given a different --app-context than
             # analyze used; the fold keeps the family's keys consistent.
@@ -427,11 +429,10 @@ def run_verification(
     needs_review = _counts["needs_review"]
     error_count = _counts["error_count"]
 
-    print(f"\n[Verify] Results: {agreed} agreed, {disagreed} disagreed to safe "
-          f"({_counts['disagreed_inconclusive']} to inconclusive, "
-          f"{_counts['disagreed_protected']} to protected), "
-          f"{needs_review} need manual review, "
-          f"{confirmed_vulnerabilities} confirmed vulnerabilities", file=sys.stderr)
+    print(f"\n[Verify] 模型复核结果：结论一致 {agreed} 项，复核排除 {disagreed} 项，"
+          f"改为无法确定 {_counts['disagreed_inconclusive']} 项，"
+          f"改为已有防护 {_counts['disagreed_protected']} 项，"
+          f"复核未完成 {needs_review} 项，复核保留 {confirmed_vulnerabilities} 个漏洞", file=sys.stderr)
     if error_count:
         print(f"[Verify] Errors: {error_count}", file=sys.stderr)
     # #212: adjudication COVERAGE headline — the denominator was invisible

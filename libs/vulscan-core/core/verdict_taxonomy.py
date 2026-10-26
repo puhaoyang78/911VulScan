@@ -157,13 +157,14 @@ DISCLOSURE_DROPPED = frozenset({
 
 # --- Dynamic-testing filter --------------------------------------------------
 # Findings handed to the (Docker-backed) dynamic tester. Intentionally NARROWER
-# than DISCLOSURE_ELIGIBLE: only findings asserted vulnerable are worth an
-# active reproduction attempt. Behaviour-preserving relative to the previous
-# inlined tuple in ``core/dynamic_tester.py``.
+# than DISCLOSURE_ELIGIBLE: retained and unresolved vulnerability candidates
+# get active reproduction attempts. An incomplete model review does not
+# establish that the candidate is safe.
 DYNAMIC_TESTABLE = frozenset({
     "confirmed",
     "agreed",
     "vulnerable",
+    "unverified",
 })
 
 # --- Patch-eligibility filter -------------------------------------------------

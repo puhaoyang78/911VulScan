@@ -45,8 +45,11 @@ func initPRTestEnv(t *testing.T) (repoDir string, binDir string, first string, h
 	}
 
 	origin := t.TempDir()
-	if out, err := exec.Command("git", "init", "--bare", "-q", "-b", "main", origin).CombinedOutput(); err != nil {
+	if out, err := exec.Command("git", "init", "--bare", "-q", origin).CombinedOutput(); err != nil {
 		t.Fatalf("git init --bare: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", origin, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("set bare default branch: %v: %s", err, out)
 	}
 	repoDir = t.TempDir()
 	run := func(args ...string) {
@@ -57,7 +60,8 @@ func initPRTestEnv(t *testing.T) (repoDir string, binDir string, first string, h
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run("init", "-q", "-b", "main")
+	run("init", "-q")
+	run("symbolic-ref", "HEAD", "refs/heads/main")
 	run("config", "user.email", "test@example.com")
 	run("config", "user.name", "Test")
 	run("config", "commit.gpgsign", "false")

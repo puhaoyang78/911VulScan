@@ -130,6 +130,11 @@ class TestWorktreeCleanSemantics:
     def test_clean(self, tmp_path):
         assert rm.is_worktree_clean(_commit_repo(tmp_path)) is True
 
+    def test_relative_checkout_path(self, tmp_path, monkeypatch):
+        repo = _commit_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert rm.is_worktree_clean(Path(repo.name)) is True
+
     def test_modified_tracked_file(self, tmp_path):
         repo = _commit_repo(tmp_path)
         (repo / "app.py").write_text("def f(x):\n    return -x\n")
@@ -144,6 +149,13 @@ class TestWorktreeCleanSemantics:
     def test_untracked_file(self, tmp_path):
         repo = _commit_repo(tmp_path)
         (repo / "extra_handler.py").write_text("y = 1\n")
+        assert rm.is_worktree_clean(repo) is False
+
+    def test_untracked_nested_directory_is_dirty(self, tmp_path):
+        repo = _commit_repo(tmp_path)
+        nested = repo / "generated" / "nested"
+        nested.mkdir(parents=True)
+        (nested / "artifact.py").write_text("x = 1\n")
         assert rm.is_worktree_clean(repo) is False
 
     def test_untracked_file_hidden_by_repository_config(self, tmp_path):

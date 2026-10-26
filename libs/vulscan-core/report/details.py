@@ -45,18 +45,18 @@ def finding_fields(result: dict, source_code="") -> dict:
         return report_text(result.get(key) or vuln.get(key) or fallback)
 
     if verification.get("incomplete"):
-        status = "第 2 阶段复核未完成，结论待定；需要人工复核。"
+        status = "模型复核未完成。"
     elif verification.get("agree") is True:
-        status = "第 2 阶段模型复核同意；不等于 PoC 已执行或崩溃已复现。"
+        status = "模型复核：结论一致。"
     elif verification:
-        status = "第 2 阶段模型复核已改判；以最终结论与说明为准，不等于动态测试。"
+        status = "模型复核：结论已更正。"
     else:
-        status = "未记录第 2 阶段复核；当前是静态分析结果，不等于动态验证。"
+        status = "未记录模型复核。"
     explanation = report_text(verification.get("explanation"))
     if explanation:
         status += "\n" + explanation
     if result.get("consistency_update"):
-        status += "\n复核后更正（上方说明可能早于此更正）：\n" + report_text(result["consistency_update"])
+        status += "\n后续更正（以上为更正前的说明）：\n" + report_text(result["consistency_update"])
     return {
         "description": value("description", result.get("reasoning")),
         "cwe_id": value("cwe_id"),

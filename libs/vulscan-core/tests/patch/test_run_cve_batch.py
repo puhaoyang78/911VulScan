@@ -198,7 +198,8 @@ class Env:
         self.github = tmp_path / "github"
         self.github.mkdir()
         self.batch_root = tmp_path / "batches"
-        gitconfig = tmp_path / "gitconfig"
+        gitconfig = tmp_path / "xdg" / "git" / "config"
+        gitconfig.parent.mkdir(parents=True)
         gitconfig.write_text(
             f'[url "file://{self.github}/"]\n\tinsteadOf = https://github.com/\n'
             "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n"

@@ -67,6 +67,15 @@ def _truncate_stderr(stderr: str) -> str:
     return result
 
 
+def require_git_config_isolation() -> None:
+    """Git 2.32 introduced GIT_CONFIG_GLOBAL; older Git silently ignores it."""
+    result = subprocess.run(["git", "--version"], capture_output=True, timeout=_TIMEOUT_SECONDS)
+    version = result.stdout.decode("utf-8", errors="replace").strip()
+    match = re.search(r"\bgit version (\d+)\.(\d+)", version)
+    if result.returncode != 0 or not match or tuple(map(int, match.groups())) < (2, 32):
+        raise RuntimeError(f"补丁检查与阶段重放需要 Git 2.32 或更新版本以隔离配置；当前：{version or '未知'}。")
+
+
 def _isolated_git_env(scratch: Path) -> "dict[str, str]":
     """An environment in which git reads no configuration the analyzed
     repository (or the inherited environment) controls: every inherited
@@ -78,6 +87,7 @@ def _isolated_git_env(scratch: Path) -> "dict[str, str]":
     and ``.git/info/attributes`` are never read. An in-tree
     ``.gitattributes`` can still name a filter driver, but no configuration
     defines one, so git passes the content through unchanged."""
+    require_git_config_isolation()
     empty_config = scratch / "empty.gitconfig"
     empty_config.write_bytes(b"")
     env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}

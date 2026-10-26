@@ -422,7 +422,7 @@ class TestSite4AnalyzeResumeSeed:
 
         monkeypatch.setattr(analyzer, "_run_detection", fake_run_detection)
         monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                            lambda binding, ctx_sha=None: {
+                            lambda binding, ctx_sha=None, *, intentional=False: {
                                 "key_digest": "sha256:test"})
         analyzer.run_analysis(str(dataset_path), str(output_dir),
                               registry=_FakeRegistry(), workers=1)

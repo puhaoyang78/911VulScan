@@ -184,11 +184,39 @@ def test_invalid_tool_arguments_are_not_executed(args):
 
 
 def test_reasoning_only_truncation_remains_failure_with_billed_usage():
-    a, _ = adapter(response(None, "private reasoning", finish="length", prompt_cache_hit_tokens=5))
+    a, _ = adapter(response(None, "private reasoning", finish="length",
+                            completion_tokens=4096, prompt_cache_hit_tokens=5))
     with pytest.raises(LLMResponseError) as caught:
         complete(a)
     assert caught.value.input_tokens == 20
+    assert caught.value.output_tokens == 4096
     assert caught.value.usage_details == {"cached_tokens": 5}
+    assert caught.value.stop_reason == "max_tokens"
+    assert "private reasoning" not in str(caught.value)
+
+    from utilities.context_enhancer import _build_error_info
+    from utilities.rate_limiter import is_budget_exhausted_error, is_retryable_error
+    info = _build_error_info(caught.value)
+    assert info["type"] == "empty_completion"
+    assert info["stop_reason"] == "max_tokens"
+    assert is_budget_exhausted_error(info)
+    assert is_retryable_error(info)
+
+
+@pytest.mark.parametrize("finish,error_type", [
+    ("stop", LLMResponseError), ("content_filter", LLMRefusalError),
+])
+def test_other_empty_replies_are_not_output_limit_errors(finish, error_type):
+    from utilities.context_enhancer import _build_error_info
+    from utilities.rate_limiter import is_budget_exhausted_error, is_retryable_error
+
+    a, _ = adapter(response(None, None, finish=finish))
+    with pytest.raises(error_type) as caught:
+        complete(a)
+    info = _build_error_info(caught.value)
+    assert not is_budget_exhausted_error(info)
+    if error_type is LLMRefusalError:
+        assert not is_retryable_error(info)
 
 
 def test_config_new_and_legacy_selection(monkeypatch):

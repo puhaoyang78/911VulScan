@@ -167,13 +167,15 @@ def _real_transport_adapter():
                          base_url="http://127.0.0.1:9", max_retries=0)
 
 
-def test_real_transport_connection_refused_maps_typed():
+def test_real_transport_connection_refused_maps_typed(monkeypatch):
     """The conn-refused class through the SDK's DEFAULT transport (the #576
     probe shape, made permanent): a real genai.Client raises whatever its
     real transport raises; the adapter must map it to LLMConnectionError.
     RED on a transport flip (the error no longer matches the httpx clauses)."""
     from utilities.llm import Message, TextBlock
     from utilities.llm.adapter import LLMConnectionError
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     adapter = _real_transport_adapter()
     with pytest.raises(LLMConnectionError):
         adapter.complete(model="gemini-2.5-pro", system=None,
@@ -182,15 +184,17 @@ def test_real_transport_connection_refused_maps_typed():
                          max_tokens=8)
 
 
-def test_real_transport_validate_maps_typed():
+def test_real_transport_validate_maps_typed(monkeypatch):
     """The same guard on the validate() path (its own except ladder)."""
     from utilities.llm.adapter import LLMConnectionError
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     adapter = _real_transport_adapter()
     with pytest.raises(LLMConnectionError):
         adapter.validate(model="gemini-2.5-pro")
 
 
-def test_real_transport_half_open_connection_maps_typed():
+def test_real_transport_half_open_connection_maps_typed(monkeypatch):
     """The accept-then-close case (the #576 review's second shape): a
     listener that accepts and immediately closes. If the SDK's default
     transport raises a class the adapter's catch list MISSES (e.g.
@@ -199,6 +203,8 @@ def test_real_transport_half_open_connection_maps_typed():
     clause. Today's conn-refused-only list is asserted live, not assumed."""
     import socket
     import threading
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     from utilities.llm import Message, TextBlock
     from utilities.llm.adapter import LLMError
 

@@ -9,6 +9,8 @@ a deterministic cause. Choice (c): the retry attacks the cause (the cap).
 """
 from __future__ import annotations
 
+import pytest
+
 from utilities.rate_limiter import (
     is_budget_exhausted_error,
     is_retryable_error,
@@ -22,6 +24,8 @@ MSG_LENGTH = ("OpenAIAdapter returned an empty completion (no text or tool "
 MSG_STOP = ("OpenAIAdapter returned an empty completion (no text or tool "
             "calls; finish_reason='stop'); the request may have been "
             "filtered or the response was malformed")
+MSG_DEEPSEEK_LENGTH = (
+    "DeepSeek 输出已达到 max_tokens 上限，未返回可用文本或工具调用；分析未完成")
 
 
 class TestBudgetDiscriminator:
@@ -72,7 +76,17 @@ class TestCapThreaded:
         assert budget_retry_cap(1, {0, 2}) is None  # the #292 same-cap path
         assert budget_retry_cap(2, {0, 2}) == BUDGET_RETRY_MAX_TOKENS
 
-    def test_retry_loop_drives_the_split(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("budget_error", [
+        {"error": MSG_LENGTH},
+        {"error": MSG_DEEPSEEK_LENGTH, "error_info": {
+            "type": "api_status", "message": MSG_DEEPSEEK_LENGTH}},
+        {"error": "任意语言的错误说明", "error_info": {
+            "type": "empty_completion", "stop_reason": "max_tokens",
+            "message": "任意语言的错误说明"}},
+    ])
+    @pytest.mark.parametrize("retry_succeeds", [True, False])
+    def test_retry_loop_drives_the_split(
+            self, tmp_path, monkeypatch, budget_error, retry_succeeds):
         """End-to-end through the REAL run_analysis retry pass: a
         length-empty unit's retry call carries the raised cap; a
         stop-empty unit's carries None. Drives the production wiring
@@ -95,7 +109,7 @@ class TestCapThreaded:
                                workers, checkpoint=None,
                                summary_callback=None):
             # Two failed units: one budget-class, one stop-class.
-            return ([{"unit_id": "a:f1", "error": MSG_LENGTH},
+            return ([{"unit_id": "a:f1", **budget_error},
                      {"unit_id": "b:f2", "error": MSG_STOP}],
                     {u["id"]: "" for u in units})
 
@@ -103,6 +117,11 @@ class TestCapThreaded:
 
         def fake_process(binding, unit, i, jc, ac, max_tokens=None):
             calls.append((unit["id"], max_tokens))
+            if not retry_succeeds:
+                return {"result": {"unit_id": unit["id"], "finding": "error",
+                                   "verdict": "ERROR", **budget_error},
+                        "route_key": unit["id"], "code_for_route": "",
+                        "finding": "error", "usage": {}}
             return {"result": {"unit_id": unit["id"], "finding": "safe",
                                "verdict": "SAFE", "confidence": 90,
                                "vulnerabilities": [], "reasoning": "r"},
@@ -111,7 +130,7 @@ class TestCapThreaded:
 
         monkeypatch.setattr(analyzer, "_run_detection", fake_run_detection)
         monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                            lambda binding, ctx_sha=None: {
+                            lambda binding, ctx_sha=None, *, intentional=False: {
                                 "key_digest": "sha256:test"})
         monkeypatch.setattr(analyzer, "_process_unit", fake_process)
 
@@ -194,6 +213,7 @@ class TestPerModelCeiling:
         assert budget_retry_cap(0, {0}, self._Binding("openai", "gpt-4.1")) == 32768
         # gemini-2.5-pro carries 65536: the 2x-default term binds.
         assert budget_retry_cap(0, {0}, self._Binding("google", "gemini-2.5-pro")) == DEFAULT_MAX_TOKENS * 2
+        assert budget_retry_cap(0, {0}, self._Binding("deepseek", "deepseek-flash")) == DEFAULT_MAX_TOKENS * 2
 
     def test_alias_spelling_resolves_to_the_record(self):
         from core.analyzer import budget_retry_cap

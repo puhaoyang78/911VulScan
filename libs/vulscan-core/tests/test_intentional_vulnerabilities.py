@@ -1,6 +1,7 @@
 """靶场/教学仓库：自动识别、上下文标记与两个阶段提示词的行为。"""
 
 from pathlib import Path
+import pytest
 
 from context.application_context import (
     ApplicationContext,
@@ -33,6 +34,63 @@ def test_repository_name_signal_is_detected(tmp_path):
 def test_ordinary_project_is_not_flagged(tmp_path):
     root = _repo(tmp_path, "# Payments API\n\nWe follow OWASP ASVS and review every release.\n")
     assert detect_intentional_vulnerabilities(root) == (False, [])
+
+
+@pytest.mark.parametrize("value", ["false", 0, None, []])
+def test_teaching_scope_rejects_non_boolean_values(value):
+    with pytest.raises(ValueError, match="deliberately_vulnerable"):
+        ApplicationContext(application_type="web_app", purpose="app", deliberately_vulnerable=value)
+
+
+def test_teaching_detection_does_not_follow_readme_symlinks(tmp_path):
+    root = tmp_path / "app"
+    root.mkdir()
+    external = tmp_path / "outside.md"
+    external.write_text("deliberately vulnerable")
+    (root / "README.md").symlink_to(external)
+    assert detect_intentional_vulnerabilities(root) == (False, [])
+
+
+def test_teaching_policy_change_does_not_reuse_the_previous_analysis():
+    from types import SimpleNamespace
+    from core.analyzer import _analyze_fingerprint
+
+    binding = SimpleNamespace(phase="analyze", model="fixture", provider_name="fixture",
+                              adapter=SimpleNamespace(name="fixture"))
+    normal = _analyze_fingerprint(binding)
+    assert normal["key_digest"] == _analyze_fingerprint(binding, intentional=False)["key_digest"]
+    assert normal["key_digest"] != _analyze_fingerprint(binding, intentional=True)["key_digest"]
+
+
+def test_educational_use_alone_does_not_disable_normal_security_scope(tmp_path):
+    root = _repo(tmp_path, "An ordinary tutorial application for educational purposes.\n")
+    assert detect_intentional_vulnerabilities(root) == (False, [])
+
+
+def test_all_prompt_paths_keep_demo_behaviors_reportable():
+    from context.application_context import format_context_for_prompt
+    from prompts.vulnerability_analysis import format_app_context_for_prompt
+    from prompts.verification_prompts import format_app_context_for_verification
+
+    context = ApplicationContext(application_type="web_app", purpose="practice",
+        deliberately_vulnerable=True, intended_behaviors=["SQL injection teaching feature"],
+        not_a_vulnerability=["SQL injection is intentional"])
+    for render in (format_context_for_prompt, format_app_context_for_prompt,
+                   format_app_context_for_verification):
+        prompt = render(context)
+        assert "SQL injection teaching feature" in prompt
+        assert "FEATURES, not vulnerabilities" not in prompt
+        assert "Do NOT flag" not in prompt
+
+
+def test_manual_context_still_applies_operator_teaching_flag(tmp_path, monkeypatch):
+    import context.application_context as app
+    root = _repo(tmp_path, "An ordinary app without classification signals.\n")
+    manual = ApplicationContext(application_type="web_app", purpose="app", source="manual")
+    monkeypatch.setattr(app, "check_manual_override", lambda path: manual)
+    result = app.generate_application_context(root, object(), include_intentional=True)
+    assert result.deliberately_vulnerable is True
+    assert "--include-intentional" in result.intent_note()
 
 
 def test_stamp_marks_context_and_keeps_evidence(tmp_path):

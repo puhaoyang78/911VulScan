@@ -28,6 +28,7 @@ from core.verdict_taxonomy import (SEVERITIES, SEVERITY_FINDING_VERDICTS,
                                    severity_display_verdict)
 from utilities.child_interp import child_interpreter_env
 from utilities.file_io import normalize_results, open_utf8, read_json, write_json
+from utilities.llm import LLMResponseError
 from report.details import finding_fields
 
 # Root of vulscan-core
@@ -1127,7 +1128,13 @@ def generate_summary_report(
         registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
         probe_registry_or_raise(registry)
     report_binding = registry.get("report")
-    report_text, usage = _generate_summary(pipeline_data, report_binding)
+    try:
+        report_text, usage = _generate_summary(pipeline_data, report_binding)
+    except LLMResponseError as exc:
+        _record_usage_in_tracker(exc, report_binding)
+        raise
+    # The call has already consumed tokens even if writing the file fails.
+    _record_usage_in_tracker(usage, report_binding)
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     with open_utf8(output_path, "w") as f:
@@ -1137,9 +1144,6 @@ def generate_summary_report(
     from core.tracking import cost_marker
     print(f"  预估费用： ${usage['cost_usd']:.4f} ({usage['total_tokens']:,} tokens)"
           f"{cost_marker(usage)}", file=sys.stderr)
-
-    # Record in global tracker so step_context picks it up
-    _record_usage_in_tracker(usage, report_binding)
 
     return ReportResult(output_path=output_path, format="summary", usage=_usage_to_info(usage))
 
@@ -1196,7 +1200,7 @@ def generate_disclosure_docs(
         resolve_llm_config,
     )
 
-    print("[报告] 正在调用大语言模型生成披露文档…", file=sys.stderr)
+    print("[报告] 正在调用模型生成漏洞报告…", file=sys.stderr)
 
     pipeline_data = read_json(results_path)
     # fa18 TRUST BOUNDARY: normalize model `findings` to dicts-only at load,
@@ -1243,14 +1247,19 @@ def generate_disclosure_docs(
     ]
 
     if not confirmed:
-        print("  没有可生成披露文档的已确认漏洞。", file=sys.stderr)
+        print("  没有符合漏洞报告生成条件的结果。", file=sys.stderr)
     else:
-        print(f"  正在并行生成 {len(confirmed)} 份披露文档（8 个任务）…",
+        print(f"  正在生成 {len(confirmed)} 份漏洞报告…",
               file=sys.stderr)
 
         def _one(args):
             i, finding = args
-            disclosure_text, usage = _generate_disclosure(finding, product_name, report_binding)
+            try:
+                disclosure_text, usage = _generate_disclosure(finding, product_name, report_binding)
+            except LLMResponseError as exc:
+                _record_usage_in_tracker(exc, report_binding)
+                raise
+            _record_usage_in_tracker(usage, report_binding)
             filename = f"DISCLOSURE_{i:02d}_{safe_disclosure_filename(finding['short_name'])}.md"
             filepath = os.path.join(output_dir, filename)
             with open_utf8(filepath, "w") as f:
@@ -1258,35 +1267,37 @@ def generate_disclosure_docs(
             return finding["short_name"], filepath, usage
 
         executor = ThreadPoolExecutor(max_workers=8)
-        futures = {executor.submit(_one, item): item for item in confirmed}
         try:
+            futures = {executor.submit(_one, item): item for item in confirmed}
             for future in as_completed(futures):
                 name, filepath, usage = future.result()
                 all_usages.append(usage)
                 count += 1
                 print(f"  [{count}/{len(confirmed)}] {name} -> {filepath}",
                       file=sys.stderr)
-        except KeyboardInterrupt:
-            print("\n[报告] 已中断，正在取消待生成的披露文档…",
-                  file=sys.stderr, flush=True)
-            executor.shutdown(wait=False, cancel_futures=True)
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                print("\n[报告] 已中断，正在取消待生成的漏洞报告…",
+                      file=sys.stderr, flush=True)
+            # Finish accounting for already-started calls before the step
+            # writes its final usage; queued calls must not incur new spend.
+            executor.shutdown(wait=True, cancel_futures=True)
             raise
-        executor.shutdown(wait=False)
+        executor.shutdown(wait=True)
 
-    merged_usage = _merge_usage(all_usages) if all_usages else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+    merged_usage = _merge_usage(all_usages) if all_usages else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0, "completions": 0}
 
-    print(f"  披露文档：{count} 个文件，目录 {output_dir}", file=sys.stderr)
+    print(f"  漏洞报告：{count} 个文件，目录 {output_dir}", file=sys.stderr)
     from core.tracking import cost_marker
     print(f"  预估费用： ${merged_usage['cost_usd']:.4f} ({merged_usage['total_tokens']:,} tokens)"
           f"{cost_marker(merged_usage)}", file=sys.stderr)
 
-    # Record in global tracker so step_context picks it up
-    _record_usage_in_tracker(merged_usage, report_binding)
+    usage_info = _usage_to_info(merged_usage)
+    usage_info.total_calls = count  # Each completed document was recorded separately.
+    return ReportResult(output_path=output_dir, format="disclosure", usage=usage_info)
 
-    return ReportResult(output_path=output_dir, format="disclosure", usage=_usage_to_info(merged_usage))
 
-
-def _record_usage_in_tracker(usage: dict, binding):
+def _record_usage_in_tracker(usage: dict | LLMResponseError, binding):
     """Record usage in the global TokenTracker so step_context captures it.
 
     The ``binding`` is the report-phase :class:`PhaseBinding` that
@@ -1296,10 +1307,14 @@ def _record_usage_in_tracker(usage: dict, binding):
     """
     try:
         from utilities.llm import lookup_pricing
-        from utilities.llm_client import get_global_tracker
+        from utilities.llm_client import get_global_tracker, normalize_cache_usage
         tracker = get_global_tracker()
-        # Record as a single aggregated call
-        if usage.get("total_tokens", 0) > 0:
+        if isinstance(usage, LLMResponseError):
+            usage = dict(input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+                         total_tokens=usage.input_tokens + usage.output_tokens,
+                         usage_details=usage.usage_details)
+        # A rejected response can consist entirely of billed cache reads.
+        if usage.get("total_tokens", 0) > 0 or normalize_cache_usage(usage.get("usage_details")).any:
             tracker.record_call(
                 model=binding.model,
                 input_tokens=usage["input_tokens"],
@@ -1314,7 +1329,7 @@ def _record_usage_in_tracker(usage: dict, binding):
             )
     except Exception as exc:
         # #605: the drop is COUNTED and NAMED, never silent — the report
-        # generation continues (the artifact is already written), but the
+        # generation continues, but the
         # accounting failure surfaces in the step/scan artifacts (the
         # module-level counter) and on stderr with the exception class.
         # The counter import is GUARDED separately: the swallowed exception

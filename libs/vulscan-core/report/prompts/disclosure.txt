@@ -6,7 +6,7 @@ INPUT DATA:
 
 OUTPUT FORMAT:
 
-# 安全漏洞披露： {short_title}
+# 漏洞报告： {short_title}
 
 **产品：** {product_name}
 **类型：** CWE-{cwe_id} ({cwe_name})
@@ -36,9 +36,7 @@ OUTPUT FORMAT:
 
 ## 影响
 
-- {impact point 1}
-- {impact point 2}
-- {impact point 3}
+{bullet list of impacts supported by the supplied data}
 
 ## 修复建议
 
@@ -48,12 +46,6 @@ OUTPUT FORMAT:
 {fixed_code_snippet}
 ```
 
----
-
-验证方式：{"动态测试" if dynamic_testing else "动态测试未确认（状态：" + dynamic_testing_attempted.status + "），不能据此确认漏洞" if dynamic_testing_attempted else "攻击者模拟（第 2 阶段）" if stage2_verdict in ("confirmed", "agreed") else "静态分析"}.
-
----
-
 INSTRUCTIONS:
 - Keep summary under 50 words
 - If the vulnerability data includes a "verification_explanation" field, the
@@ -62,13 +54,15 @@ INSTRUCTIONS:
   names instead.
 - Do NOT include a "## 漏洞代码" section — it is added automatically after your output is generated. Do NOT emit code fences with the vulnerable source code. If you need to reference the vulnerable code, refer to the function name and describe the issue in prose.
 - Other code snippets (Suggested Fix): show only the minimal change needed, not entire files
-- Steps to Reproduce: if dynamic_testing data exists, use those steps; if only dynamic_testing_attempted exists (the test ran but did not confirm), still write "[需要动态测试]" — the attempted evidence is diagnostic, not a reproduction; otherwise write "[需要动态测试]" for each step
-- Impact: 3-5 bullet points, no sub-bullets
+- The application adds model review and dynamic test status separately. Do not add a verification footer or infer successful execution from stage2_verdict.
+- `dynamic_testing` contains recorded CONFIRMED tests. `dynamic_testing_attempted` records tests that did not reproduce the issue, failed, were skipped or could not reach a conclusion; do not describe these as reproduced or safe.
+- Steps to Reproduce: use recorded steps from dynamic_testing when available. Without a confirmed dynamic result, label supplied steps "建议复现步骤（未测试）". If no steps were supplied, write "未记录复现步骤"; do not invent commands.
+- Impact: list only supported impacts, no sub-bullets or fixed bullet count
 - Suggested Fix: show minimal code change, use comments to indicate what was added
 - Use the supplied description, impact, remediation and suggested_fix fields.
   Never manufacture missing impacts, affected versions, test environment, commands,
   expected output, observed logs or successful execution. For absent data write
-  "未记录，需要补充"; do not pad impacts to meet a bullet count.
+  "未记录"; do not pad impacts to meet a bullet count.
 - Clearly label suggested_fix as "建议修复示例（未验证）". It is a proposal,
   not an applied or tested patch. If no fix is supported by the supplied context,
   explain the remediation and missing context instead of inventing code.

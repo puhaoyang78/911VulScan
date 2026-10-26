@@ -1,5 +1,6 @@
 Generate a security analysis summary report from the provided pipeline data.
 Write every human-readable heading, table label, explanation and status description in Simplified Chinese. Preserve identifiers, paths, source code and required machine values.
+Interpret `stage2_verdict` as 模型复核状态 only. Dynamic reproduction requires an actual `dynamic_testing.status` of `CONFIRMED`; model review, missing records, skipped tests and execution errors never establish dynamic reproduction. Do not repeat these definitions in every section.
 
 INPUT DATA:
 {pipeline_data}
@@ -34,17 +35,17 @@ INSTRUCTIONS:
 - Fill in all {placeholders} from the input data
 - If a count is zero, still show "0" in the table
 - Keep "Reason" column under 15 words
-- "Verified" column, in priority order: "dynamic" if dynamic_testing exists for that finding (a CONFIRMED Docker test); "dynamic test failed (<status>)" if dynamic_testing_attempted exists (the test ran but did not confirm — NEVER render this as verified); "verified" if stage2_verdict is "confirmed" or "agreed" (Stage 2 attacker simulation passed); else "static"
-- "Severity" column: the finding's `severity` field from the input data (critical / high / medium / low); if absent, write the empty cell
+- Model review and dynamic test results are separate. The application renders their tables and status labels; do not add a "Verified" column or describe model agreement as successful dynamic reproduction.
+- `dynamic_testing` contains recorded CONFIRMED tests. `dynamic_testing_attempted` records tests that did not reproduce the issue, failed, were skipped or could not reach a conclusion; do not describe these as reproduced or safe.
 - Language comes from repository.language
 - Commit SHA comes from repository.commit_sha; if null or missing, write "未提供"
 - Repository link comes from repository.url; if missing, write "未提供"
 - Scan Mode is derived from the top-level `diff` field on the input data:
   - If `diff` is missing or `diff.mode != "incremental"`, write: `全量扫描`
   - If `diff.mode == "incremental"`, write:
-    `增量扫描（{diff.base_sha[:8]}..{diff.head_sha[:8]}，范围={diff.scope}，{diff.units_in_diff}/{diff.units_total_parsed} 个函数）`
+    `增量扫描（{diff.base_sha[:8]}..{diff.head_sha[:8]}，范围={diff.scope}，{diff.units_in_diff}/{diff.units_total_parsed} 项分析对象）`
   - When the scan was incremental, ALSO add a paragraph immediately after the metadata block:
-    `> 本次为增量扫描，仅分析 {diff.base_sha[:8]} 与 {diff.head_sha[:8]} 之间变更涉及的 {diff.units_in_diff}/{diff.units_total_parsed} 个函数。未变更单元沿用最近一次判定，本次未重新检查。`
+    `> 本次为增量扫描，仅分析 {diff.base_sha[:8]} 与 {diff.head_sha[:8]} 之间变更涉及的 {diff.units_in_diff}/{diff.units_total_parsed} 项分析对象。未变更的代码沿用最近一次分析结论，本次未重新检查。`
 - Processing Level comes from pipeline_stats.processing_level; if null or missing, write "未提供"
 - Reachable units comes from pipeline_stats.reachable_units; total units from pipeline_stats.total_units. When pipeline_stats.reachability_filter_applied is true, append " ({pipeline_stats.reachable_units} of {pipeline_stats.original_units} parsed, {pipeline_stats.reachability_reduction_percentage}% pruned by the reachability filter)" to the Reachable units line so the pruning is visible; when false, append " (reachability filtering not applied/recorded)"
 - Reachability warnings: iterate pipeline_stats.reachability_warnings; if non-empty, render each entry as its own bullet under the Reachable units line; if empty, OMIT the "Reachability warnings" line entirely

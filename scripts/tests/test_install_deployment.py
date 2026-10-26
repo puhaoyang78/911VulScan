@@ -1,14 +1,14 @@
 """Hermetic installer tests: no sudo, apt, downloads, builds or services run."""
-from pathlib import Path
-import json
 import gzip
 import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'install-deployment.sh'
 
@@ -22,36 +22,41 @@ class InstallerTest(unittest.TestCase):
         shutil.copy(SCRIPT, self.root / 'scripts/install-deployment.sh')
         self.bin = self.root / 'mockbin'
         self.bin.mkdir()
+        (self.root / 'runtime-parser').mkdir()
+        (self.root / 'runtime-parser/package-lock.json').write_text('{"lockfileVersion":3}')
         # Closed PATH: only these non-mutating/core file tools can reach real binaries.
-        for name in ['dirname', 'sed', 'tr', 'awk', 'grep', 'mkdir', 'mktemp', 'rm', 'mv', 'chmod', 'sha256sum', 'cat', 'cp', 'ln']:
+        for name in ['dirname', 'sed', 'tr', 'awk', 'grep', 'mkdir', 'mktemp', 'rm', 'mv', 'chmod', 'sha256sum', 'cat', 'cp', 'ln', 'env', 'install']:
             (self.bin / name).symlink_to(shutil.which(name))
         self.env = dict(os.environ, PATH=str(self.bin), TEST_ROOT=str(self.root), REAL_PYTHON=sys.executable,
                         VULSCAN_OS_RELEASE=str(self.root / 'os-release'), ARCH='x86_64', NODE_VERSION='v22.15.0',
-                        GO_VERSION='1.26.1', NPM_VERSION='10.9.0', PYTHON_READY='1', DOCKER_READY='1')
+                        GO_VERSION='1.26.1', NPM_VERSION='10.9.0', GIT_VERSION='2.51.0', PYTHON_READY='1', DOCKER_READY='1',
+                        VULSCAN_SYSTEMD_DIR=str(self.root / 'systemd'))
         self.env['HOME'] = str(self.root / 'home')
         self.env.pop('DOCKER_CONFIG', None)
         self.os('24.04')
         self.mock('uname', 'echo "$ARCH"')
-        self.mock('id', 'echo 1000')
+        self.mock('id', 'case "$1" in -un) echo fixtureuser;; *) echo 1000;; esac')
         self.mock('sudo', 'echo "sudo $*" >> "$TEST_ROOT/actions"; shift; exec "$@"')
         self.mock('apt-get', 'echo "apt $*" >> "$TEST_ROOT/actions"; exit "${APT_EXIT:-0}"')
         self.mock('apt-cache', 'echo "  Candidate: ${CANDIDATE:-1.0}"')
         self.mock('dpkg-query', '[ "${CONFLICT:-}" = "$3" ] && printf "install ok installed"')
         self.mock('systemctl', 'echo "service $*" >> "$TEST_ROOT/actions"; exit "${SERVICE_EXIT:-0}"')
+        self.mock('sleep', 'echo "retry-wait $*" >> "$TEST_ROOT/actions"')
         self.mock('python3', '''
 if [ "$1" = -c ]; then [ "$PYTHON_READY" = 1 ]; exit; fi
 if [ "$1" = -m ]; then
   echo "python $*" >> "$TEST_ROOT/actions"
   mkdir -p "$3/bin"
-  printf '#!/bin/sh\\necho "pip $*" >> "$TEST_ROOT/actions"\\n' > "$3/bin/python"
+  printf '#!/bin/sh\\nif [ "$1" = - ]; then exec "$REAL_PYTHON" "$@"; fi\\nif [ "$1" = -I ]; then echo "$TEST_ROOT/runtime-parser"; exit; fi\\necho "pip $*" >> "$TEST_ROOT/actions"\\n' > "$3/bin/python"
   chmod +x "$3/bin/python"
   exit
 fi
 exec "$REAL_PYTHON" "$@"
 ''')
         self.mock('go', 'if [ "$1" = version ]; then echo "go version go$GO_VERSION linux/amd64"; else echo "go $*" >> "$TEST_ROOT/actions"; fi')
+        self.mock('git', 'echo "git version $GIT_VERSION"')
         self.mock('node', 'echo "$NODE_VERSION"')
-        self.mock('npm', 'if [ "$1" = --version ]; then echo "$NPM_VERSION"; else echo "npm $*" >> "$TEST_ROOT/actions"; fi')
+        self.mock('npm', 'if [ "$1" = --version ]; then echo "$NPM_VERSION"; else echo "npm $* cwd=$PWD" >> "$TEST_ROOT/actions"; fi')
         self.mock('dockerd', '[ "$DOCKER_READY" = 1 ] && echo Docker-version-28.1.1')
         self.mock('docker', '''
 [ "$DOCKER_READY" = 1 ] || exit 1
@@ -82,7 +87,7 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
 
     def run_script(self, *args, success=True):
         result = subprocess.run(['/bin/sh', str(self.root / 'scripts/install-deployment.sh'), *args],
-                                env=self.env, text=True, capture_output=True)
+                                env=self.env, text=True, capture_output=True, check=False)
         if success:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else:
@@ -98,9 +103,18 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertEqual(self.actions(), '')
         self.assertFalse((self.root / '.tools').exists())
 
+    def test_missing_git_is_detected_and_planned_for_bootstrap(self):
+        self.mock('git', 'exit 127')
+        out = self.run_script('--check', success=False)
+        self.assertIn('Git=1', out)
+        out = self.run_script('--install-deps', '--dry-run')
+        self.assertIn('--no-remove: git', out)
+        self.assertEqual(self.actions(), '')
+
     def test_version_branches(self):
         for key, versions in [('GO_VERSION', ['1.25.9', 'devel', '1.26rc1']),
-                              ('NODE_VERSION', ['v18.20.0', 'v21.7.0']), ('NPM_VERSION', ['6.14.0'])]:
+                              ('NODE_VERSION', ['v18.20.0', 'v21.7.0']), ('NPM_VERSION', ['6.14.0']),
+                              ('GIT_VERSION', ['2.25.1', '2.31.9'])]:
             old = self.env[key]
             for v in versions:
                 with self.subTest(key=key, version=v):
@@ -173,6 +187,27 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertIn('APT update failed', self.run_script('--install-deps', '--deps-only', '--yes', success=False))
         self.assertNotIn('download ', self.actions())
 
+    def test_transient_download_resets_are_bounded(self):
+        self.env['GO_VERSION'] = '1.25.0'
+        self.mock('curl', 'echo "download attempt" >> "$TEST_ROOT/actions"; exit 56')
+        out = self.run_script('--install-deps', '--deps-only', '--yes', success=False)
+        self.assertIn('after 3 attempts', out)
+        self.assertEqual(self.actions().count('download attempt'), 3)
+        self.assertEqual(self.actions().count('retry-wait'), 2)
+        self.assertNotIn('EXTRACT', self.actions())
+
+    def test_transient_download_reset_can_recover(self):
+        self.env['GO_VERSION'] = '1.25.0'
+        original = (self.bin / 'curl').read_text().split('\n', 1)[1]
+        self.mock('curl', 'if [ ! -f "$TEST_ROOT/reset-once" ]; then : > "$TEST_ROOT/reset-once"; echo "reset" >> "$TEST_ROOT/actions"; exit 56; fi\n' + original)
+        out = self.run_script('--install-deps', '--deps-only', '--yes', success=False)
+        self.assertIn('retry 1/3', out)
+        # The retry reads the metadata, then the deliberately invalid archive
+        # still fails integrity verification; no checksum assertion is bypassed.
+        self.assertIn('checksum mismatch', out)
+        self.assertEqual(self.actions().count('reset\n'), 1)
+        self.assertNotIn('EXTRACT', self.actions())
+
     def test_missing_candidate(self):
         self.env.update(GO_VERSION='1.25.0', CANDIDATE='(none)')
         self.assertIn('No APT candidate', self.run_script('--install-deps', '--deps-only', '--yes', success=False))
@@ -185,11 +220,76 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertNotIn('sudo', self.actions())
         self.assertNotIn('apt ', self.actions())
         self.assertIn('npm ci --engine-strict', self.actions())
+        self.assertIn('cwd=' + str(self.root / 'runtime-parser'), self.actions())
         self.assertIn('.tools/node/bin', (self.root / 'bin/vulscan').read_text())
 
     def test_invalid_arguments(self):
         for args in [('--unknown',), ('--deps-only',), ('--yes',), ('--start-docker',), ('--check', '--dry-run')]:
             self.run_script(*args, success=False)
+        self.assertEqual(self.actions(), '')
+
+    def test_deploy_plan_all_ubuntu_versions_is_readonly(self):
+        self.env.update(PYTHON_READY='0', GO_VERSION='1.20.0', NODE_VERSION='v18.0.0', GIT_VERSION='2.25.1', DOCKER_READY='0')
+        (self.bin / 'docker').unlink()
+        for version in ['20.04', '22.04', '24.04']:
+            with self.subTest(ubuntu=version):
+                self.os(version)
+                plan = self.run_script('--deploy', '--dry-run')
+                self.assertIn('vulscan.service', plan)
+                self.assertIn('validates all parsers and Docker build/run', plan)
+                if version == '20.04':
+                    self.assertIn('.tools/git', plan)
+                    self.assertIn('Python 3.12.16', plan)
+        self.assertEqual(self.actions(), '')
+        self.assertFalse((self.root / '.tools').exists())
+
+    def test_deploy_service_and_validation_order(self):
+        for name in ['libs/vulscan-core/parsers/javascript', 'apps/vulscan-cli']:
+            (self.root / name).mkdir(parents=True)
+        self.run_script('--deploy')
+        unit = (self.root / 'systemd/vulscan.service').read_text()
+        self.assertIn('User=fixtureuser', unit)
+        self.assertIn('SupplementaryGroups=docker', unit)
+        self.assertIn('--docker', unit)
+        self.assertIn('127.0.0.1:8080', unit)
+        self.assertIn('TimeoutStopSec=120', unit)
+        self.assertIn('KillMode=mixed', unit)
+        actions = self.actions()
+        self.assertLess(actions.index('check-deployment.py'), actions.index('service enable --now vulscan'))
+        self.assertIn('--url http://127.0.0.1:8080', actions)
+        self.assertIn('service is-active --quiet vulscan', actions)
+        self.assertNotIn('usermod', actions)
+        self.assertFalse(list(self.root.glob('.vulscan-service.*')))
+
+    def test_deploy_does_not_replace_unmanaged_service(self):
+        target = self.root / 'systemd/vulscan.service'
+        target.parent.mkdir()
+        target.write_text('custom service\n')
+        for name in ['libs/vulscan-core/parsers/javascript', 'apps/vulscan-cli']:
+            (self.root / name).mkdir(parents=True)
+        self.assertIn('not managed', self.run_script('--deploy', success=False))
+        self.assertEqual(target.read_text(), 'custom service\n')
+        self.assertNotIn('service enable --now vulscan', self.actions())
+        self.assertEqual(self.actions(), '')
+
+    def test_deploy_requires_systemd(self):
+        self.env['SERVICE_EXIT'] = '1'
+        self.assertIn('requires Ubuntu booted with systemd', self.run_script('--deploy', success=False))
+        self.assertNotIn('apt ', self.actions())
+
+    def test_deploy_enables_missing_universe_component(self):
+        for name in ['libs/vulscan-core/parsers/javascript', 'apps/vulscan-cli']:
+            (self.root / name).mkdir(parents=True)
+        self.mock('apt-cache', 'if [ "$2" = pkg-config ] && [ ! -e "$TEST_ROOT/universe" ]; then echo "  Candidate: (none)"; else echo "  Candidate: 1.0"; fi')
+        self.mock('add-apt-repository', 'echo "repository $*" >> "$TEST_ROOT/actions"; : > "$TEST_ROOT/universe"')
+        self.run_script('--deploy')
+        self.assertIn('repository --yes universe', self.actions())
+        self.assertEqual(sum(line.startswith('repository ') for line in self.actions().splitlines()), 1)
+        self.assertNotIn('ppa:', self.actions())
+
+    def test_deploy_rejects_inconsistent_options(self):
+        for option in ('--deps-only', '--check'):
+            self.run_script('--deploy', option, success=False)
         self.assertEqual(self.actions(), '')
 
     def full_download_fixtures(self, malicious=False):
@@ -205,6 +305,7 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
             blocks.append(f'Package: {name}\nVersion: {version}\nArchitecture: amd64\nFilename: {filename}\nSHA256: {"0" * 64}\n')
         (self.root / 'docker.gz').write_bytes(gzip.compress('\n'.join(blocks).encode()))
         (self.root / 'node.json').write_text('[{"version":"v22.15.0","lts":"Jod"}]')
+        (self.root / 'git-checksums').write_text('0' * 64 + '  git-2.56.0.tar.xz\n')
         self.mock('sha256sum', 'echo "checksum $*" >> "$TEST_ROOT/actions"; exit 0')
         self.mock('curl', r"""
 echo "download $*" >> "$TEST_ROOT/actions"
@@ -215,6 +316,7 @@ case "$url" in
   *Packages.gz) cat "$TEST_ROOT/docker.gz" > "$out";;
   *index.json) cat "$TEST_ROOT/node.json" > "$out";;
   *SHASUMS256.txt) printf '%064d  node-v22.15.0-linux-x64.tar.gz\n' 0 > "$out";;
+  *git/sha256sums.asc) cat "$TEST_ROOT/git-checksums" > "$out";;
   *) printf fixture > "$out";;
 esac
 """)
@@ -224,7 +326,8 @@ archive=$2
 while [ "$1" != -C ]; do shift; done
 out=$2
 case "$archive" in
-  *Python-*) mkdir -p "$out/Python-3.12.15"; printf '#!/bin/sh\nexit 0\n' > "$out/Python-3.12.15/configure"; chmod +x "$out/Python-3.12.15/configure";;
+  *Python-*) mkdir -p "$out/Python-3.12.16"; printf '#!/bin/sh\nexit 0\n' > "$out/Python-3.12.16/configure"; chmod +x "$out/Python-3.12.16/configure";;
+  *git-*) mkdir -p "$out/git-2.56.0";;
   *go1*) mkdir -p "$out/go/bin"; printf '#!/bin/sh\necho "go version go1.26.1 linux/amd64"\n' > "$out/go/bin/go"; chmod +x "$out/go/bin/go";;
   *node-*) mkdir -p "$out/bin"; printf '#!/bin/sh\necho v22.15.0\n' > "$out/bin/node"; printf '#!/bin/sh\necho 10.9.0\n' > "$out/bin/npm"; chmod +x "$out/bin/node" "$out/bin/npm";;
 esac
@@ -236,6 +339,11 @@ if [ "$1" = altinstall ]; then
   printf '#!/bin/sh\nexport PYTHON_READY=1\nexec "$TEST_ROOT/mockbin/python3" "$@"\n' > "$TEST_ROOT/.tools/python/bin/python3.12"
   chmod +x "$TEST_ROOT/.tools/python/bin/python3.12"
 fi
+case "$*" in *prefix=*.tools/git*install*)
+  mkdir -p "$TEST_ROOT/.tools/git/bin"
+  printf '#!/bin/sh\necho "git version 2.56.0"\n' > "$TEST_ROOT/.tools/git/bin/git"
+  chmod +x "$TEST_ROOT/.tools/git/bin/git";;
+esac
 """)
         self.mock('apt-get', r"""
 echo "apt $*" >> "$TEST_ROOT/actions"
@@ -270,6 +378,38 @@ exit 0
         self.assertIn('Invalid filename/checksum', self.run_script('--install-deps', '--deps-only', '--yes', '--start-docker', '--allow-unsupported-docker', success=False))
         self.assertNotIn('.deb https', self.actions())
         self.assertNotIn('service ', self.actions())
+
+    def test_focal_old_git_builds_local_git(self):
+        self.os('20.04')
+        self.env['GIT_VERSION'] = '2.25.1'
+        self.full_download_fixtures()
+        self.run_script('--install-deps', '--deps-only', '--yes', '--start-docker', '--allow-unsupported-docker')
+        self.assertIn('git/sha256sums.asc', self.actions())
+        self.assertIn('NO_TCLTK=YesPlease NO_GETTEXT=YesPlease NO_RUST=YesPlease install', self.actions())
+        self.assertTrue((self.root / '.tools/git/bin/git').is_file())
+
+    def test_git_checksum_failure_no_extract(self):
+        self.os('20.04')
+        self.env['GIT_VERSION'] = '2.25.1'
+        self.full_download_fixtures()
+        self.mock('docker', (self.root / 'docker-template').read_text().split('\n', 1)[1])
+        self.mock('dockerd', 'exit 0')
+        (self.bin / 'sha256sum').unlink()
+        (self.bin / 'sha256sum').symlink_to(shutil.which('sha256sum'))
+        self.assertIn('Git checksum mismatch', self.run_script('--install-deps', '--deps-only', '--yes', success=False))
+        self.assertNotIn('EXTRACT', self.actions())
+
+    def test_git_selection_stays_on_tested_maintenance_branch(self):
+        script = SCRIPT.read_text().split("<<'PYGIT'\n", 1)[1].split('\nPYGIT', 1)[0]
+        metadata = self.root / 'git-selection-test'
+        metadata.write_text('a' * 64 + '  git-2.56.1.tar.xz\n' + 'b' * 64 + '  git-2.57.0.tar.xz\n')
+        result = subprocess.run([sys.executable, '-', str(metadata)], input=script,
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.splitlines(), ['git-2.56.1.tar.xz', 'a' * 64])
+        metadata.write_text('b' * 64 + '  git-2.57.0.tar.xz\n')
+        result = subprocess.run([sys.executable, '-', str(metadata)], input=script,
+                                capture_output=True, text=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
 
     def test_node_checksum_failure(self):
         self.full_download_fixtures()

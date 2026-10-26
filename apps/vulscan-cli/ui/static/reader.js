@@ -19,7 +19,7 @@
   root.querySelectorAll('table').forEach(table=>{const wrap=make('div',undefined,'table-wrap');table.replaceWith(wrap);wrap.append(table);});
   enhance(root);
  }
- async function copy(text,button){try{await navigator.clipboard.writeText(text);button.textContent='已复制';VulscanUI.notify('代码原文已复制。',{button});setTimeout(()=>{button.textContent='复制';},1500);}catch(_){button.textContent='复制失败，请选择原文';VulscanUI.notify('复制失败，请选择代码原文后复制。',{tone:'error',button});}}
+ async function copy(text,button){try{await navigator.clipboard.writeText(text);button.textContent='已复制';VulscanUI.notify('代码原文已复制。',{button});setTimeout(()=>{button.textContent='复制';},1500);}catch(_){button.textContent='复制';VulscanUI.notify('复制失败，请选择代码原文后复制。',{tone:'error',button});}}
  function enhance(root){
   root.querySelectorAll('pre').forEach(pre=>{
    if(pre.closest('.code-reader'))return;

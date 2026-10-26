@@ -101,7 +101,9 @@ def test_safe_row_carries_the_followable_edge(tmp_path, capsys, monkeypatch):
     # This rendering test mocks remediation, including provider construction:
     # the fork defaults to DeepSeek and must never require live credentials.
     monkeypatch.setattr(_llm, "build_phase_registry",
-                        lambda *a, **kw: {"report": None})
+                        lambda *a, **kw: {"report": _llm.PhaseBinding(
+                            phase="report", model="fixture", provider_name="fixture",
+                            adapter=types.SimpleNamespace(name="fixture"))})
     monkeypatch.setattr(_llm, "simple_text",
                         lambda binding, prompt, **kw: "<p>remediation</p>")
     from vulscan import cli
@@ -151,7 +153,9 @@ def test_safe_row_carries_both_edge_directions(tmp_path, capsys, monkeypatch):
     # This rendering test mocks remediation, including provider construction:
     # the fork defaults to DeepSeek and must never require live credentials.
     monkeypatch.setattr(_llm, "build_phase_registry",
-                        lambda *a, **kw: {"report": None})
+                        lambda *a, **kw: {"report": _llm.PhaseBinding(
+                            phase="report", model="fixture", provider_name="fixture",
+                            adapter=types.SimpleNamespace(name="fixture"))})
     monkeypatch.setattr(_llm, "simple_text",
                         lambda binding, prompt, **kw: "<p>remediation</p>")
     from vulscan import cli
@@ -194,7 +198,9 @@ def test_safe_row_without_edges_carries_the_empty_shape(tmp_path, capsys, monkey
     # This rendering test mocks remediation, including provider construction:
     # the fork defaults to DeepSeek and must never require live credentials.
     monkeypatch.setattr(_llm, "build_phase_registry",
-                        lambda *a, **kw: {"report": None})
+                        lambda *a, **kw: {"report": _llm.PhaseBinding(
+                            phase="report", model="fixture", provider_name="fixture",
+                            adapter=types.SimpleNamespace(name="fixture"))})
     monkeypatch.setattr(_llm, "simple_text",
                         lambda binding, prompt, **kw: "<p>remediation</p>")
     from vulscan import cli
@@ -224,7 +230,9 @@ def test_safe_row_with_malformed_metadata_reads_no_edge(tmp_path, capsys, monkey
     # This rendering test mocks remediation, including provider construction:
     # the fork defaults to DeepSeek and must never require live credentials.
     monkeypatch.setattr(_llm, "build_phase_registry",
-                        lambda *a, **kw: {"report": None})
+                        lambda *a, **kw: {"report": _llm.PhaseBinding(
+                            phase="report", model="fixture", provider_name="fixture",
+                            adapter=types.SimpleNamespace(name="fixture"))})
     monkeypatch.setattr(_llm, "simple_text",
                         lambda binding, prompt, **kw: "<p>remediation</p>")
     from vulscan import cli
@@ -296,7 +304,9 @@ def test_non_safe_verdicts_carry_no_deferral(tmp_path, capsys, monkeypatch):
     # This rendering test mocks remediation, including provider construction:
     # the fork defaults to DeepSeek and must never require live credentials.
     monkeypatch.setattr(_llm, "build_phase_registry",
-                        lambda *a, **kw: {"report": None})
+                        lambda *a, **kw: {"report": _llm.PhaseBinding(
+                            phase="report", model="fixture", provider_name="fixture",
+                            adapter=types.SimpleNamespace(name="fixture"))})
     monkeypatch.setattr(_llm, "simple_text",
                         lambda binding, prompt, **kw: "<p>remediation</p>")
     from vulscan import cli

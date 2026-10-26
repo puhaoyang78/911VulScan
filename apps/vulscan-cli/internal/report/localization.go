@@ -29,7 +29,7 @@ var chineseLabels = map[string]string{
 	"module_unavailable": "模块不可用", "docker_unavailable": "Docker 不可用", "no_candidates": "没有候选项", "not_requested": "未请求此步骤", "scan": "扫描", "app-context": "应用上下文", "llm-reachability": "模型可达性分析",
 	"vulnerable": "存在漏洞", "bypassable": "防护可绕过", "safe": "安全", "secure": "安全",
 	"protected": "已防护", "inconclusive": "无法确定", "insufficient_context": "信息不足",
-	"unverified": "未经复核", "confirmed": "已确认", "agreed": "复核一致", "disagreed": "复核改判",
+	"unverified": "复核未完成", "confirmed": "复核保留", "agreed": "复核一致", "disagreed": "复核后更正",
 	"not_reproduced": "未复现", "blocked": "测试受阻", "skipped": "已跳过", "error": "错误",
 	"success": "成功", "failed": "失败", "interrupted": "已中断", "partial": "部分完成", "pending": "待处理",
 	"unknown": "未知", "not tested": "未测试", "test error": "测试错误", "not reproduced": "未复现",
@@ -42,7 +42,7 @@ var chineseLabels = map[string]string{
 	"llm_reachability": "模型可达性分析", "security analysis report": "安全分析报告",
 	"code contains an exploitable security vulnerability with no effective protection. immediate remediation required.": "代码存在可利用的安全漏洞，且缺少有效防护，需要立即修复。",
 	"security controls exist but can be circumvented under certain conditions. review and strengthen protections.":      "已有安全控制可在特定条件下被绕过，需要检查并加强防护。",
-	"security posture could not be determined. manual review recommended to assess risk.":                               "无法确定安全状态，建议人工复核风险。",
+	"security posture could not be determined. manual review recommended to assess risk.":                               "分析未得出明确结论，需进一步检查。",
 	"code handles potentially dangerous operations but has effective security controls in place.":                       "代码涉及潜在危险操作，但已有有效安全控制。",
 	"code does not involve security-sensitive operations or poses no security risk.":                                    "代码不涉及安全敏感操作，或未发现安全风险。",
 }
@@ -96,18 +96,18 @@ func dynamicGroupLabel(value string) string {
 func (f Finding) ModelReviewLabel() string {
 	switch f.ModelReviewStatus {
 	case "retained":
-		return "模型复核保留"
+		return "复核保留"
 	case "excluded":
-		return "模型复核排除"
+		return "复核排除"
 	case "error":
-		return "模型复核错误"
+		return "复核错误"
 	case "inconclusive":
-		return "模型复核无法确定"
+		return "无法确定"
 	case "pending":
 		return "待复核"
 	case "unreviewed":
-		return "未记录模型复核"
+		return "未记录复核"
 	default:
-		return "未记录模型复核"
+		return "未记录复核"
 	}
 }

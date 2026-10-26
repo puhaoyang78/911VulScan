@@ -266,6 +266,8 @@ def is_retryable_error(error_info: dict | str | None) -> bool:
 
         # Retry server errors (5xx), but not client errors (4xx)
         if error_type == "api_status":
+            if is_budget_exhausted_error(error_info):
+                return True
             # #292 message backstop: an old-shape dict (type api_status, no
             # status_code) built from an empty-completion raise. Same
             # substrings + refusal guard as the string branch below.
@@ -320,7 +322,7 @@ def is_retryable_error(error_info: dict | str | None) -> bool:
     # raise now CARRIES the rejected reply's usage, so a retry is billed AND
     # recorded — the old "billed-but-unrecorded" trade note described the
     # pre-#537/#564 shape.
-    return status_hit or any(term in error_str for term in (
+    return status_hit or is_budget_exhausted_error(error_info) or any(term in error_str for term in (
         "rate_limit", "connection", "timeout",
         "overloaded",
         # A provider adapter raises LLMResponseError on an empty completion (no
@@ -363,6 +365,9 @@ def is_budget_exhausted_error(error_info) -> bool:
     other empty completions — the filtered/malformed class keeps the
     #292 same-cap retry rationale).
     """
+    if isinstance(error_info, dict):
+        if error_info.get("stop_reason") == "max_tokens":
+            return True
     error_str = error_info if isinstance(error_info, str) else str(
         (error_info or {}).get("error")
         or (error_info or {}).get("message")
@@ -376,4 +381,6 @@ def is_budget_exhausted_error(error_info) -> bool:
         "output budget was consumed",
         "consumed the token budget",
         "reasoning consumed the budget",
+        # Historical DeepSeek records predate the structured stop reason.
+        "DeepSeek 输出已达到 max_tokens 上限，未返回可用文本或工具调用",
     ))

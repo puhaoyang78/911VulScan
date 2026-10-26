@@ -16,7 +16,8 @@ import (
 // initial file so HEAD exists. Subsequent commits are made by the test.
 func initTestRepo(t *testing.T, dir string) {
 	t.Helper()
-	runCmd(t, dir, "git", "init", "-q", "-b", "main")
+	runCmd(t, dir, "git", "init", "-q")
+	runCmd(t, dir, "git", "symbolic-ref", "HEAD", "refs/heads/main")
 	runCmd(t, dir, "git", "config", "user.email", "test@example.com")
 	runCmd(t, dir, "git", "config", "user.name", "Test")
 	runCmd(t, dir, "git", "config", "commit.gpgsign", "false")

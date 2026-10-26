@@ -243,7 +243,7 @@ def attacker_model_descriptor(app_context: "ApplicationContext") -> dict:
         return {
             "kind": "threat_model",
             "attacker": (
-                "由仓库提供的威胁模型定义；验证每个发现项时应用对应的攻击者能力。"),
+                "由仓库提供的威胁模型定义；复核每条疑似漏洞时使用对应的攻击者能力。"),
         }
     if _is_untrusted_input_context(app_context):
         supply = _untrusted_supply_list(app_context)
@@ -343,7 +343,7 @@ def _format_builtin_app_context_for_verification(app_context: "ApplicationContex
     ]
 
     if app_context.intended_behaviors:
-        lines.append("**Intended Behaviors (these are FEATURES, not vulnerabilities):**")
+        lines.append(app_context.intended_behaviors_heading())
         for behavior in app_context.intended_behaviors[:5]:  # Limit for verification prompt
             lines.append(f"- {collapse_inline(behavior)}")
         lines.append("")

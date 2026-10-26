@@ -22,7 +22,7 @@ def included(name: str) -> bool:
         return False
     if p.name.endswith("_test.go") or p.name == "conftest.py":
         return False
-    if name in {"LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "README.deploy.md", "config/languages.json", "config/models.json", "scripts/install-deployment.sh"}:
+    if name in {"LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "README.deploy.md", "config/languages.json", "config/models.json", "scripts/install-deployment.sh", "scripts/check-deployment.py"}:
         return True
     if name.startswith(CLI):
         rel = name[len(CLI):]
@@ -46,7 +46,7 @@ def selected(root: Path) -> list[Path]:
     # Tracked inputs only: never sweep developer scratch files or node_modules.
     names = set(subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0"))
     # Newly introduced product files are explicit until the first commit.
-    names.update({"README.deploy.md", "THIRD_PARTY_NOTICES.md", "scripts/install-deployment.sh",
+    names.update({"README.deploy.md", "THIRD_PARTY_NOTICES.md", "scripts/install-deployment.sh", "scripts/check-deployment.py",
                   CORE + "vulscan/__init__.py", CORE + "vulscan/__main__.py",
                   CORE + "core/ui_events.py", CLI + "internal/server/events.go",
                   CLI + "internal/report/templates/document.gohtml"})
@@ -55,7 +55,7 @@ def selected(root: Path) -> list[Path]:
     for directory in (CLI + "ui/design", CLI + "ui/static"):
         names.update(p.relative_to(root).as_posix() for p in (root / directory).glob("*") if p.is_file())
     paths = sorted(root / name for name in names if name and included(name) and (root / name).is_file())
-    required = ["LICENSE", "THIRD_PARTY_NOTICES.md", "README.deploy.md", "config/languages.json", "config/models.json", CLI + "main.go", CORE + "pyproject.toml", CORE + "README.md", CORE + "vulscan/__main__.py", "scripts/install-deployment.sh"]
+    required = ["LICENSE", "THIRD_PARTY_NOTICES.md", "README.deploy.md", "config/languages.json", "config/models.json", CLI + "main.go", CORE + "pyproject.toml", CORE + "README.md", CORE + "vulscan/__main__.py", "scripts/install-deployment.sh", "scripts/check-deployment.py"]
     names = {p.relative_to(root).as_posix() for p in paths}
     for name in required:
         if name not in names:

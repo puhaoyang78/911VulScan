@@ -37,6 +37,7 @@ func localizeCommandHelp(root *cobra.Command) {
 		"llm-reachability":                "启用 LLM 可达性复核，额外费用随完整代码库规模增长",
 		"llm-reachability-max-code-bytes": "可达性复核每个单元最多发送的代码字节数；增大将增加费用",
 		"library-mode":                    "将库的公开 API 作为可达入口，可能显著扩大扫描范围",
+		"include-intentional":             "按靶场扫描，保留刻意设置的教学漏洞",
 		"format":                          "报告格式", "name": "项目名称（org/repo）", "commit": "固定扫描的提交 SHA",
 		"force": "强制重新执行该操作", "stdin": "从标准输入读取值", "max-retries": "每项发现失败后的最大重试次数",
 		"repo-path": "真实目标仓库路径", "repo-root": "目标仓库根目录", "finding-id": "待修复发现的 ID（不能与 cve 并用）",

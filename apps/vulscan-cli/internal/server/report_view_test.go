@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -13,6 +14,41 @@ import (
 
 	"github.com/puhaoyang78/911VulScan/apps/vulscan-cli/internal/report"
 )
+
+func TestGenerateHTMLUsesSavedResultsWithoutModelCalls(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"results_verified.json": "{}", "dataset_enhanced.json": "{}",
+		"response.json": `{"status":"success","data":{"repo_name":"fixture/saved-results","findings":[]}}`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := filepath.Join(dir, "python")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/args\"\ncat \"$(dirname \"$0\")/response.json\"\n"
+	if err := os.WriteFile(script, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{pythonPath: script}
+	path := filepath.Join(dir, "report.html")
+	if err := s.generateHTMLReport(context.Background(), dir, path, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(filepath.Join(dir, "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "--no-llm") || strings.Contains(string(args), "--llm-config") {
+		t.Fatalf("HTML projection unexpectedly requested model generation: %s", args)
+	}
+	for _, name := range []string{"report.html", "report-data.json"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || !strings.Contains(string(data), "fixture/saved-results") {
+			t.Fatalf("saved-results projection missing %s: %v", name, err)
+		}
+	}
+}
 
 func TestHistoricalReportUsesCurrentReaderWithoutModelOrOriginalWrites(t *testing.T) {
 	root := t.TempDir()

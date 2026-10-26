@@ -191,7 +191,7 @@ def test_the_resume_reports_the_dropped_errored_unit(tmp_path, monkeypatch):
 
     monkeypatch.setattr(analyzer, "_run_detection", fake_detection_run1)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None: {"key_digest": "sha256:t"})
+                        lambda binding, ctx_sha=None, *, intentional=False: {"key_digest": "sha256:t"})
     analyzer.run_analysis(str(run1_dataset), str(out),
                           registry=_analyze_registry(), workers=1)
 
@@ -478,7 +478,7 @@ def test_the_interrupted_resume_keeps_the_delta(tmp_path, monkeypatch):
 
     monkeypatch.setattr(analyzer, "_run_detection", fake_detection_run1)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None: {"key_digest": "sha256:t"})
+                        lambda binding, ctx_sha=None, *, intentional=False: {"key_digest": "sha256:t"})
     analyzer.run_analysis(str(ds), str(out),
                           registry=_analyze_registry(), workers=1)
 
@@ -541,7 +541,7 @@ def test_the_retry_pass_keeps_the_delta(tmp_path, monkeypatch):
 
     monkeypatch.setattr(analyzer, "_run_detection", fake_detection_run1)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None: {"key_digest": "sha256:t"})
+                        lambda binding, ctx_sha=None, *, intentional=False: {"key_digest": "sha256:t"})
     analyzer.run_analysis(str(ds), str(out),
                           registry=_analyze_registry(), workers=1)
 
@@ -666,7 +666,7 @@ def test_the_budget_retry_round_keeps_the_delta(tmp_path, monkeypatch):
 
     monkeypatch.setattr(analyzer, "_run_detection", fake_detection_run1)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None: {"key_digest": "sha256:t"})
+                        lambda binding, ctx_sha=None, *, intentional=False: {"key_digest": "sha256:t"})
     analyzer.run_analysis(str(ds), str(out),
                           registry=_analyze_registry(), workers=1)
 
@@ -877,7 +877,7 @@ def test_the_analyze_interrupt_after_a_unit_keeps_the_delta(tmp_path, monkeypatc
 
     monkeypatch.setattr(analyzer, "_run_detection", run1)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None: {"key_digest": "sha256:t"})
+                        lambda binding, ctx_sha=None, *, intentional=False: {"key_digest": "sha256:t"})
     analyzer.run_analysis(str(ds), str(out),
                           registry=_analyze_registry(), workers=1)
 
@@ -997,7 +997,7 @@ def test_the_interrupt_inside_the_retry_keeps_the_delta(tmp_path, monkeypatch):
     monkeypatch.setattr(analyzer, "_run_detection", det)
     monkeypatch.setattr(analyzer, "_process_unit", proc)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None: {"key_digest": "sha256:t"})
+                        lambda binding, ctx_sha=None, *, intentional=False: {"key_digest": "sha256:t"})
     monkeypatch.setattr(analyzer, "get_rate_limiter",
                         lambda: type("RL", (), {
                             "time_until_ready": lambda s: 0,

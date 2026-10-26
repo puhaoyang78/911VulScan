@@ -11,7 +11,10 @@
 
 import os
 import re
+import sys
 from pathlib import Path
+
+from utilities.file_io import UnsafeRepoFile, read_repo_file
 
 # (关键词, 依据说明)。英文按词边界匹配，中文按子串匹配。
 _SIGNALS: tuple[tuple[str, str], ...] = (
@@ -24,18 +27,12 @@ _SIGNALS: tuple[tuple[str, str], ...] = (
     ("deliberately insecure", "声明故意不安全"),
     ("damn vulnerable", "项目名即“故意有漏洞”"),
     ("training application", "练习用应用"),
-    ("educational purposes", "教学用途"),
-    ("for learning purposes", "教学用途"),
     ("practice your hacking", "练习用途"),
     ("capture the flag", "CTF 靶场"),
     ("ctf challenge", "CTF 靶场"),
     ("owasp webgoat", "OWASP WebGoat 靶场"),
     ("owasp juice shop", "OWASP Juice Shop 靶场"),
     ("owasp mutillidae", "OWASP Mutillidae 靶场"),
-    ("dvwa", "DVWA 靶场"),
-    ("靶场", "中文说明：靶场"),
-    ("练手", "中文说明：练手项目"),
-    ("教学演示", "中文说明：教学演示"),
     ("故意保留", "中文说明：故意保留缺陷"),
     ("刻意保留", "中文说明：刻意保留缺陷"),
     ("漏洞练习", "中文说明：漏洞练习"),
@@ -49,9 +46,9 @@ _REPO_NAME_SIGNALS = ("vulnerable", "dvwa", "dvw", "dvcp", "goat", "insecure", "
 
 def _read_head(path: Path) -> str:
     try:
-        with open(path, "rb") as handle:
-            return handle.read(_MAX_BYTES).decode("utf-8", "replace").lower()
-    except OSError:
+        return (read_repo_file(path, max_bytes=_MAX_BYTES, oversize="truncate") or "").lower()
+    except (OSError, UnsafeRepoFile) as exc:
+        print(f"教学项目识别跳过 {path.name}：{exc}", file=sys.stderr)
         return ""
 
 

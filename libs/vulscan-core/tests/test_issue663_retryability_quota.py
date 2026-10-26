@@ -308,7 +308,7 @@ def test_run_analysis_retry_pass_splits_quota_from_throttle(tmp_path, monkeypatc
 
     monkeypatch.setattr(analyzer, "_run_detection", fake_run_detection)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None: {"key_digest": "sha256:test"})
+                        lambda binding, ctx_sha=None, *, intentional=False: {"key_digest": "sha256:test"})
     monkeypatch.setattr(analyzer, "_process_unit", fake_process)
 
     from utilities.llm import PhaseBinding

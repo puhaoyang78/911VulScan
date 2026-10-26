@@ -491,7 +491,7 @@ def test_remediation_message_honest_when_unrecognized():
     """The false-clean message is suppressed when unparseable rows exist."""
     from vulscan.cli import _remediation_for_unrecognized
     # the clean case: the localized clean message
-    assert "未发现漏洞或安全问题" in _remediation_for_unrecognized([], [])
+    assert "没有可直接生成修复建议的漏洞" in _remediation_for_unrecognized([], [])
     # the off-enum case: the honest message
     msg = _remediation_for_unrecognized([], [{"verdict": "Probably Fine"}])
     assert "1 个结论无法识别" in msg and "未发现漏洞或安全问题" not in msg

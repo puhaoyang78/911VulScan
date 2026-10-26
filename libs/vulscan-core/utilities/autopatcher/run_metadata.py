@@ -124,14 +124,18 @@ def is_worktree_clean(path: Path) -> "bool | None":
     since that would run git inside each submodule with its own
     configuration; a submodule moved to another commit still counts.
     """
+    path = Path(path).resolve()
     try:
         paths = _isolated_git(
-            path, "rev-parse", "--path-format=absolute",
+            path, "rev-parse",
             "--git-path", "objects", "--git-path", "index", "--git-path", "info/exclude",
         )
         if paths.returncode != 0:
             return None
-        objects, index, exclude = (Path(p) for p in paths.stdout.splitlines()[:3])
+        entries = paths.stdout.splitlines()
+        if len(entries) != 3:
+            return None
+        objects, index, exclude = ((Path(path) / p).resolve() for p in entries)
         head = _isolated_git(path, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
         with tempfile.TemporaryDirectory(prefix="vulscan-git-") as scratch:
             git_dir = _empty_git_dir(Path(scratch) / "status.git")
@@ -150,9 +154,11 @@ def is_worktree_clean(path: Path) -> "bool | None":
             env = _isolated_git_env(Path(scratch))
             env.update({"GIT_DIR": str(git_dir), "GIT_WORK_TREE": str(path)})
             _set_config(env, _line_ending_settings(Path(path)) + _filemode_setting(path) + _user_excludes())
+            # We need a boolean, not every filename in an untracked toolchain.
+            # "normal" reports untracked directories and still makes them dirty.
             result = run_utf8(
                 ["git", "-c", "core.fsmonitor=false", "--no-optional-locks", "status", "--porcelain",
-                 "--untracked-files=all", "--ignore-submodules=dirty"],
+                 "--untracked-files=normal", "--ignore-submodules=dirty"],
                 cwd=str(path), env=env, capture_output=True, text=True, timeout=30,
             )
         if result.returncode == 0:

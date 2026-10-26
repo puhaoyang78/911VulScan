@@ -304,6 +304,8 @@ class LLMResponseError(LLMError):
     as completions by construction.
 
     Attributes:
+        stop_reason: Normalized provider stop reason, when explicitly known.
+            Retry classification must not depend on the language of the message.
         usage_details: #626/F-A1 — the rejected reply's provider DETAIL
             fields (cache read/write, reasoning), captured by the same
             ``_extract_usage_details*`` the successful return uses on the
@@ -320,11 +322,14 @@ class LLMResponseError(LLMError):
 
     def __init__(self, message: str, *,
                  input_tokens: int = 0, output_tokens: int = 0,
-                 usage_details: Optional[dict] = None):
+                 usage_details: Optional[dict] = None,
+                 stop_reason: Optional[StopReason] = None):
         super().__init__(message)
         self.input_tokens = int(input_tokens or 0)
         self.output_tokens = int(output_tokens or 0)
         self.usage_details = usage_details
+        # Keep control flow independent of translated diagnostic messages.
+        self.stop_reason = stop_reason
 
 
 

@@ -8,7 +8,8 @@
 ## 快速部署
 
 需要 Python 3.11+（含 venv）、Go 1.26+ 和依赖下载网络。
-JavaScript/TypeScript 解析另需 Node.js/npm；动态验证另需 Docker。
+远程仓库扫描需要 Git；JavaScript/TypeScript 解析另需 Node.js/npm；动态验证另需 Docker。
+补丁检查和阶段重放需要 Git 2.32+，以确保配置隔离生效。
 
 ```sh
 python3 scripts/package-deployment.py

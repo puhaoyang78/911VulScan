@@ -23,7 +23,15 @@ from unittest import mock
 
 import pytest
 
-from utilities.autopatcher.patch_applicability import apply_patch, check_applicability
+from utilities.autopatcher.patch_applicability import apply_patch, check_applicability, require_git_config_isolation
+
+
+@pytest.mark.parametrize("version", ["git version 2.25.1", "git version 2.31.9", "unexpected"])
+def test_unsupported_git_cannot_silently_disable_config_isolation(monkeypatch, version):
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a, 0, version.encode(), b""))
+    with pytest.raises(RuntimeError, match="Git 2.32"):
+        require_git_config_isolation()
 
 _SRC = b"def f(x):\n    a = 1\n\n    return a\n"
 _EXPECTED = b"def f(x):\n    a = 1\n    check(x)\n\n    return a\n"

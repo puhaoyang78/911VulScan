@@ -647,7 +647,7 @@ def _count_verdicts(results):
     return counts
 
 
-def _analyze_fingerprint(binding, ctx_sha=None) -> dict:
+def _analyze_fingerprint(binding, ctx_sha=None, *, intentional=False) -> dict:
     """Build the analyze-phase backend-identity fingerprint.
 
     The static system + user-analysis templates are rendered with
@@ -670,7 +670,8 @@ def _analyze_fingerprint(binding, ctx_sha=None) -> dict:
     # records and re-pays.
     return fingerprint_for_binding(
         binding, texts,
-        extra_key=({"ctx_sources_sha256": ctx_sha} if ctx_sha else None))
+        extra_key={**({"ctx_sources_sha256": ctx_sha} if ctx_sha else {}),
+                   **({"include_intentional": True} if intentional else {})} or None)
 
 
 def _archive_stale_results(output_dir: str, current_fp: str) -> None:
@@ -825,7 +826,8 @@ def run_analysis(
     # forces a re-run rather than silently adopting another backend's verdicts.
     # Run AFTER the checkpoint.dir override above.
     analyze_fp = _analyze_fingerprint(
-        binding, ctx_sha=getattr(app_context, "source_sha256", None))
+        binding, ctx_sha=getattr(app_context, "source_sha256", None),
+        intentional=getattr(app_context, "deliberately_vulnerable", False) is True)
     checkpoint.sync_identity(analyze_fp)
     # Preserve a prior scan's final report before this run overwrites it.
     _archive_stale_results(output_dir, analyze_fp["key_digest"])
@@ -1031,7 +1033,8 @@ def run_analysis(
     # transient network class) keeps the #292 same-cap rationale.
     budget_retry_indices = [
         i for i in retryable_indices
-        if is_budget_exhausted_error(results[i].get("error"))
+        if is_budget_exhausted_error(
+            results[i].get("error_info") or results[i].get("error"))
     ]
     _budget_set = set(budget_retry_indices)
     if retryable_indices:

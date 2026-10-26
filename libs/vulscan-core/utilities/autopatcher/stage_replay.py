@@ -317,6 +317,12 @@ def validate_target_repository(
     if not (repo_root / ".git").exists():
         raise StageReplayError(f"Cannot replay {stage}: target repository is not a git repository: {repo_root}")
 
+    from .patch_applicability import require_git_config_isolation
+    try:
+        require_git_config_isolation()
+    except (OSError, RuntimeError) as exc:
+        raise StageReplayError(str(exc)) from exc
+
     actual_sha = collect_full_commit_sha(repo_root)
     if actual_sha is None:
         raise StageReplayError(

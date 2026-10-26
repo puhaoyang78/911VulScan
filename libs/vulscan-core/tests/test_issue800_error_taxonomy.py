@@ -216,7 +216,7 @@ def test_the_analyze_summary_splits_the_classes(tmp_path, monkeypatch):
 
     monkeypatch.setattr(analyzer, "_process_unit", fake_process_unit)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None:
+                        lambda binding, ctx_sha=None, *, intentional=False:
                         {"key_digest": "sha256:test"})
     from utilities.llm import PhaseBinding
 
@@ -367,7 +367,7 @@ def test_the_retry_pass_files_the_residual_class(tmp_path, monkeypatch):
 
     monkeypatch.setattr(analyzer, "_process_unit", fake_process_unit)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None:
+                        lambda binding, ctx_sha=None, *, intentional=False:
                         {"key_digest": "sha256:test"})
     from utilities.rate_limiter import GlobalRateLimiter
     monkeypatch.setattr(GlobalRateLimiter, "wait_if_needed",
@@ -516,7 +516,7 @@ def test_the_dict_typed_error_never_crashes_the_phase(tmp_path, monkeypatch):
 
     monkeypatch.setattr(analyzer, "_process_unit", fake_process_unit)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None:
+                        lambda binding, ctx_sha=None, *, intentional=False:
                         {"key_digest": "sha256:test"})
     from utilities.llm import PhaseBinding
 

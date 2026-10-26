@@ -212,13 +212,13 @@ func PrintScanSummary(data map[string]any) {
 	// line the "eliminated" number silently shrinks when they split out.
 	reclassifiedProtected := intFromAny(metrics["stage2_disagreed_protected"])
 
-	PrintKeyValue("已分析函数", fmt.Sprintf("%d", total))
+	PrintKeyValue("已分析对象", fmt.Sprintf("%d", total))
 
 	if vulnerable > 0 {
 		red.Printf("  存在漏洞：")
 		fmt.Printf("%d", vulnerable)
 		if verified > 0 {
-			fmt.Printf("（已验证 %d 个）", verified)
+			fmt.Printf("（已复核 %d 项）", verified)
 		}
 		fmt.Println()
 	} else {
@@ -282,7 +282,7 @@ func PrintParseSummary(data map[string]any) {
 		PrintKeyValue("处理层级", level)
 	}
 	if units := intFromAny(data["units_count"]); units > 0 {
-		PrintKeyValue("已提取函数", fmt.Sprintf("%d", units))
+		PrintKeyValue("已提取对象", fmt.Sprintf("%d", units))
 	}
 	if path, ok := data["dataset_path"].(string); ok {
 		PrintKeyValue("输出位置", path)
@@ -306,7 +306,7 @@ func PrintAnalyzeSummary(data map[string]any) {
 	inconclusive := intFromAny(metrics["inconclusive"])
 	errors := intFromAny(metrics["errors"])
 
-	PrintKeyValue("函数总数", fmt.Sprintf("%d", total))
+	PrintKeyValue("分析对象数", fmt.Sprintf("%d", total))
 
 	combined := vulnerable + bypassable
 	if combined > 0 {
@@ -371,7 +371,7 @@ func PrintEnhanceSummary(data map[string]any) {
 
 	units := intFromAny(data["units_enhanced"])
 	errors := intFromAny(data["error_count"])
-	PrintKeyValue("已增强函数", fmt.Sprintf("%d", units))
+	PrintKeyValue("已增强对象", fmt.Sprintf("%d", units))
 	if errors > 0 {
 		yellow.Printf("  错误：%d\n", errors)
 	}
@@ -391,7 +391,7 @@ func PrintEnhanceSummary(data map[string]any) {
 
 // PrintVerifySummary outputs a formatted summary of verification results.
 func PrintVerifySummary(data map[string]any) {
-	PrintHeader("验证结果（第二阶段）")
+	PrintHeader("模型复核结果")
 
 	input := intFromAny(data["findings_input"])
 	verified := intFromAny(data["findings_verified"])
@@ -405,11 +405,11 @@ func PrintVerifySummary(data map[string]any) {
 	reclassifiedProtected := intFromAny(data["disagreed_protected"])
 	reclassifiedInconclusive := intFromAny(data["disagreed_inconclusive"])
 
-	PrintKeyValue("待验证发现", fmt.Sprintf("%d", input))
-	PrintKeyValue("已验证发现", fmt.Sprintf("%d", verified))
+	PrintKeyValue("待复核发现", fmt.Sprintf("%d", input))
+	PrintKeyValue("已复核发现", fmt.Sprintf("%d", verified))
 
 	if agreed > 0 {
-		red.Printf("  确认存在：%d\n", agreed)
+		red.Printf("  复核一致：%d\n", agreed)
 	}
 	if disagreed > 0 {
 		green.Printf("  已排除：%d\n", disagreed)
@@ -425,9 +425,9 @@ func PrintVerifySummary(data map[string]any) {
 
 	fmt.Println()
 	if confirmed > 0 {
-		red.Printf("⚠ 已确认 %d 个漏洞\n", confirmed)
+		red.Printf("⚠ 复核保留 %d 个漏洞\n", confirmed)
 	} else {
-		green.Println("✓ 暂无已确认漏洞")
+		fmt.Println("暂无复核保留的漏洞")
 	}
 
 	if path, ok := data["verified_results_path"].(string); ok {
@@ -450,7 +450,7 @@ func PrintDynamicTestSummary(data map[string]any) {
 	PrintKeyValue("已测试发现", fmt.Sprintf("%d", tested))
 
 	if confirmed > 0 {
-		red.Printf("  已确认：%d\n", confirmed)
+		red.Printf("  已复现：%d\n", confirmed)
 	}
 	if notReproduced > 0 {
 		green.Printf("  未复现：%d\n", notReproduced)
@@ -525,7 +525,7 @@ func PrintScanSummaryV2(data map[string]any) {
 			head := shortSHA8(diff["head_sha"])
 			unitsIn := intFromAny(diff["units_in_diff"])
 			unitsTotal := intFromAny(diff["units_total_parsed"])
-			modeLine := fmt.Sprintf("增量扫描（%s..%s，%d/%d 个函数）", base, head, unitsIn, unitsTotal)
+			modeLine := fmt.Sprintf("增量扫描（%s..%s，%d/%d 项分析对象）", base, head, unitsIn, unitsTotal)
 			PrintKeyValue("模式", modeLine)
 		} else {
 			PrintKeyValue("模式", "完整扫描")
@@ -541,7 +541,7 @@ func PrintScanSummaryV2(data map[string]any) {
 	errors := intFromAny(metrics["errors"])
 	verified := intFromAny(metrics["verified"])
 
-	PrintKeyValue("已分析函数", fmt.Sprintf("%d", total))
+	PrintKeyValue("已分析对象", fmt.Sprintf("%d", total))
 
 	// #323: the reachability advisory, in the Scan Results section (wave r1:
 	// it landed under Output Files before — a coverage number beside the
@@ -563,9 +563,9 @@ func PrintScanSummaryV2(data map[string]any) {
 				pct = f
 			}
 			PrintKeyValue("可达性范围", fmt.Sprintf(
-				"纳入 %d/%d 个函数（减少 %.1f%%）", reachable, original, pct))
+				"纳入 %d/%d 项分析对象（减少 %.1f%%）", reachable, original, pct))
 		} else {
-			PrintKeyValue("可达性范围", fmt.Sprintf("纳入 %d 个函数", reachable))
+			PrintKeyValue("可达性范围", fmt.Sprintf("纳入 %d 项分析对象", reachable))
 		}
 		if warns, ok := reach["reachability_warnings"].([]any); ok {
 			for _, wn := range warns {

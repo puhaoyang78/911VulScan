@@ -176,6 +176,8 @@ class ApplicationContext:
     impact_statement: str | None = None
 
     def __post_init__(self):
+        if type(self.deliberately_vulnerable) is not bool:
+            raise ValueError("deliberately_vulnerable 必须是布尔值")
         if self.permissive_warnings is None:
             self.permissive_warnings = []
         """Validate application_type after initialization."""
@@ -270,11 +272,17 @@ class ApplicationContext:
         """靶场说明：命中的依据，供提示词与扫描记录引用。"""
         if not self.deliberately_vulnerable:
             return ""
-        detail = "；".join(self.deliberate_vulnerability_evidence[:4])
+        reasons = self.deliberate_vulnerability_evidence
+        detail = "；".join(item for item in reasons[:4] if isinstance(item, str)) if isinstance(reasons, list) else ""
         return ("该仓库是刻意保留漏洞的练习/教学程序"
                 + (f"（判断依据：{detail}）" if detail else "")
                 + "。其中的演示缺陷按真实漏洞评估：只要攻击者能利用并造成影响就应上报，"
                   "不要因为“这是教学示例”而判定为安全。")
+
+    def intended_behaviors_heading(self) -> str:
+        if self.deliberately_vulnerable:
+            return "**Documented demo behaviors (still evaluate their vulnerabilities):**"
+        return "**Intended Behaviors (these are FEATURES, not vulnerabilities):**"
 
 
 def _context_kwargs_from_dict(data: dict) -> dict:
@@ -864,7 +872,8 @@ def generate_application_context(
         manual_context = check_manual_override(repo_path)
         if manual_context:
             print(f"Using manual override from repository", file=sys.stderr)
-            return manual_context
+            return stamp_intentional_vulnerability(
+                manual_context, repo_path, force=include_intentional)
 
     # Gather sources
     print(f"Gathering context sources from {repo_path}...", file=sys.stderr)
@@ -988,7 +997,8 @@ def stamp_intentional_vulnerability(
     if not (detected or force):
         return context
     context.deliberately_vulnerable = True
-    merged = list(context.deliberate_vulnerability_evidence or [])
+    reasons = context.deliberate_vulnerability_evidence
+    merged = [item for item in reasons if isinstance(item, str)] if isinstance(reasons, list) else []
     for item in evidence:
         if item not in merged:
             merged.append(item)
@@ -1082,7 +1092,7 @@ def format_context_for_prompt(context: ApplicationContext) -> str:
     lines.append("")
 
     if context.intended_behaviors:
-        lines.append("**Intended Behaviors (these are FEATURES, not vulnerabilities):**")
+        lines.append(context.intended_behaviors_heading())
         for behavior in context.intended_behaviors:
             lines.append(f"- {collapse_inline(behavior)}")
         lines.append("")
@@ -1093,7 +1103,11 @@ def format_context_for_prompt(context: ApplicationContext) -> str:
             lines.append(f"- {collapse_inline(source)}: {collapse_inline(level)}")
         lines.append("")
 
-    if context.not_a_vulnerability:
+    if context.deliberately_vulnerable:
+        lines.append("**Deliberately vulnerable by design — STILL REPORT:**")
+        lines.append(collapse_inline(context.intent_note()))
+        lines.append("")
+    elif context.not_a_vulnerability:
         lines.append("**Do NOT flag as vulnerable:**")
         for item in context.not_a_vulnerability:
             lines.append(f"- {collapse_inline(item)}")

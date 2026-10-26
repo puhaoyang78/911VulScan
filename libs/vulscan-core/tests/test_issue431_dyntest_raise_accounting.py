@@ -102,7 +102,7 @@ def test_generate_test_raising_records_error_and_continues(monkeypatch, tmp_path
         f"(the live repro wrote errors: 0 — the exact #311 defect on the raise route)")
 
     # CONTINUE: the second finding was attempted (not aborted by finding 1's raise)
-    unit_files = [f for f in (out / "dynamic_test_checkpoints").glob("*.json") if f.name != "_summary.json"]
+    unit_files = [f for f in (out / "dynamic_test_checkpoints").glob("*.json") if not f.name.startswith("_")]
     assert len(unit_files) == 2, f"both findings must record unit files, found: {[f.name for f in unit_files]}"
 
 

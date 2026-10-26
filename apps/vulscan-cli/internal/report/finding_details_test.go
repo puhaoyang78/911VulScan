@@ -49,7 +49,7 @@ func TestFindingDetailsRenderAcrossLayouts(t *testing.T) {
 			for _, want := range []string{
 				"问题描述", f.Description, "CWE-120", f.CWEName, "影响", f.Impact,
 				"修复建议", f.Remediation, f.VulnerableCode, "修复示例", "未测试", "if (length &gt;= capacity) return ERROR;",
-				f.StepsToReproduce, f.Stage2Verification, "PoC 构建、运行与输出", "exit status 1",
+				f.StepsToReproduce, f.Stage2Verification, "PoC 与测试记录", "exit status 1",
 				"AddressSanitizer: synthetic fixture only", "模型复核", "动态测试",
 			} {
 				if !strings.Contains(out.String(), want) {

@@ -88,9 +88,26 @@ func analyzeResultData() map[string]any {
 // Stage-2 verification outcome.
 func TestPrintAnalyzeResult_VerifyOutcomeNotDropped(t *testing.T) {
 	out := captureHeaders(func() { PrintAnalyzeResult(verifyResultData(), true) })
-	if !strings.Contains(out, "验证结果（第二阶段）") {
+	if !strings.Contains(out, "模型复核结果") {
 		t.Fatalf("analyze --verify dropped the Stage-2 outcome; expected the "+
 			"verification summary, got output:\n%q", out)
+	}
+}
+
+func TestSafeReviewAgreementIsNotAConfirmedVulnerability(t *testing.T) {
+	out := captureAll(t, func() {
+		PrintVerifySummary(map[string]any{
+			"findings_input": 2, "findings_verified": 2, "agreed": 2,
+			"confirmed_vulnerabilities": 0,
+		})
+	})
+	for _, expected := range []string{"复核一致：2", "暂无复核保留的漏洞"} {
+		if !strings.Contains(out, expected) {
+			t.Fatalf("missing %q: %s", expected, out)
+		}
+	}
+	if strings.Contains(out, "已复现") || strings.Contains(out, "已确认") {
+		t.Fatalf("safe review agreement presented as a reproduced vulnerability: %s", out)
 	}
 }
 

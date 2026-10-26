@@ -54,23 +54,24 @@ const (
 // jobMeta is the on-disk metadata written immediately on job creation, and
 // (per #320) amended at terminal time with the job's final status.
 type jobMeta struct {
-	DockerProxy string    `json:"docker_proxy,omitempty"`
-	ScanTimeout string    `json:"scan_timeout,omitempty"`
+	IncludeIntentional bool   `json:"include_intentional,omitempty"`
+	DockerProxy        string `json:"docker_proxy,omitempty"`
+	ScanTimeout        string `json:"scan_timeout,omitempty"`
 	// Ref is the tag/branch/commit the repository was checked out at.
-	Ref string `json:"ref,omitempty"`
-	LLMConfig   string    `json:"llm_config,omitempty"`
-	ID          string    `json:"id"`
-	Repo        string    `json:"repo"`
-	StartedAt   time.Time `json:"started_at"`
-	Status      string    `json:"status,omitempty"`
+	Ref       string    `json:"ref,omitempty"`
+	LLMConfig string    `json:"llm_config,omitempty"`
+	ID        string    `json:"id"`
+	Repo      string    `json:"repo"`
+	StartedAt time.Time `json:"started_at"`
+	Status    string    `json:"status,omitempty"`
 }
 
 // Job represents a single scan job.
 type Job struct {
-	Snapshot        *jobSnapshot
-	mu              sync.Mutex
-	ID              string
-	Repo            string
+	Snapshot *jobSnapshot
+	mu       sync.Mutex
+	ID       string
+	Repo     string
 	// Ref is the requested tag/branch/commit; empty scans the default branch.
 	Ref             string
 	StartedAt       time.Time
@@ -86,17 +87,18 @@ type Job struct {
 	Cancel          context.CancelFunc
 
 	// Internal scan parameters (not exposed via API)
-	keyEnv      map[string]string
-	llmConfig   string
-	scanTimeout time.Duration
-	languages   []string
-	libraryMode bool
-	verify      bool
-	dynamicTest bool
-	dockerProxy string
-	ctx         context.Context
-	done        chan struct{} // closed by runJob after it stops touching the job dir
-	outDir      string        // #320: the job's scan dir (the meta.json persist target)
+	keyEnv             map[string]string
+	llmConfig          string
+	scanTimeout        time.Duration
+	languages          []string
+	libraryMode        bool
+	includeIntentional bool
+	verify             bool
+	dynamicTest        bool
+	dockerProxy        string
+	ctx                context.Context
+	done               chan struct{} // closed by runJob after it stops touching the job dir
+	outDir             string        // #320: the job's scan dir (the meta.json persist target)
 }
 
 func (j *Job) addLog(line string) {
@@ -349,6 +351,7 @@ func (s *Server) recoverJobs() {
 				job.StartedAt = m.StartedAt
 				job.llmConfig = m.LLMConfig
 				job.dockerProxy = m.DockerProxy
+				job.includeIntentional = m.IncludeIntentional
 				if m.ScanTimeout != "" {
 					job.scanTimeout, _ = parseScanTimeout(m.ScanTimeout)
 				}
@@ -678,6 +681,7 @@ type jobView struct {
 	Status     string
 	HasReport  bool
 	HasSummary bool
+	Partial    bool
 }
 
 type indexData struct {
@@ -726,6 +730,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			Status:     j.Status,
 			HasReport:  j.ReportPath != "",
 			HasSummary: j.SummaryPath != "",
+			Partial:    j.snapshotLocked().Partial,
 		}
 		j.mu.Unlock()
 		views = append(views, v)
@@ -918,6 +923,7 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	verify := r.FormValue("verify") == "on"
+	includeIntentional := r.FormValue("include_intentional") == "on"
 	dynamicTest := r.FormValue("dynamic_test") == "on"
 
 	// Gate new work at shutdown BEFORE creating any disk/manager state, and
@@ -949,30 +955,31 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write meta.json immediately.
-	meta := jobMeta{ID: id, Repo: repo, Ref: ref, StartedAt: time.Now().UTC(), LLMConfig: llmConfig, ScanTimeout: scanTimeoutValue(scanTimeout), DockerProxy: dockerProxy}
+	meta := jobMeta{ID: id, Repo: repo, Ref: ref, StartedAt: time.Now().UTC(), LLMConfig: llmConfig, ScanTimeout: scanTimeoutValue(scanTimeout), DockerProxy: dockerProxy, IncludeIntentional: includeIntentional}
 	if data, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(filepath.Join(jobDir, "meta.json"), data, 0640)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	job := &Job{
-		ID:          id,
-		Repo:        repo,
-		Ref:         ref,
-		StartedAt:   meta.StartedAt,
-		Status:      StatusQueued,
-		Cancel:      cancel,
-		ctx:         ctx,
-		keyEnv:      keyEnv,
-		llmConfig:   llmConfig,
-		scanTimeout: scanTimeout,
-		languages:   languages,
-		libraryMode: libraryMode,
-		verify:      verify,
-		dynamicTest: dynamicTest,
-		dockerProxy: dockerProxy,
-		done:        make(chan struct{}),
-		outDir:      jobDir,
+		ID:                 id,
+		Repo:               repo,
+		Ref:                ref,
+		StartedAt:          meta.StartedAt,
+		Status:             StatusQueued,
+		Cancel:             cancel,
+		ctx:                ctx,
+		keyEnv:             keyEnv,
+		llmConfig:          llmConfig,
+		scanTimeout:        scanTimeout,
+		languages:          languages,
+		libraryMode:        libraryMode,
+		includeIntentional: includeIntentional,
+		verify:             verify,
+		dynamicTest:        dynamicTest,
+		dockerProxy:        dockerProxy,
+		done:               make(chan struct{}),
+		outDir:             jobDir,
 	}
 	job.Snapshot = newJobSnapshot(job, false)
 	job.runnerEventLocked("queue", "queued", "任务已排队，等待执行槽位", "", false)
@@ -1343,15 +1350,20 @@ func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
 
 	infos := make([]disclosureInfo, 0, len(paths))
 	for _, p := range paths {
+		f, _, err := openRegularInRoot(filepath.Join(s.outDir, id), p)
+		if err != nil {
+			continue
+		}
 		name := filepath.Base(p)
-		label := disclosureTitleFromFile(p)
+		label := disclosureTitle(f)
+		f.Close()
 		if label == "" {
 			label = disclosureLabel(name)
 		}
 		infos = append(infos, disclosureInfo{
 			Name:  name,
 			Label: label,
-			URL:   "/disclosure/" + id + "/" + name,
+			URL:   "/disclosure/" + url.PathEscape(id) + "/" + url.PathEscape(name),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1361,6 +1373,7 @@ func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
 type disclosureData struct {
 	ID           string
 	Name         string
+	Filename     string
 	MarkdownJSON template.JS
 	Nonce        string // the noncedPage CSP nonce (see #578 follow-up A)
 }
@@ -1409,10 +1422,15 @@ func (s *Server) handleDisclosure(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mdJSON, _ := json.Marshal(string(data))
+	title := disclosureTitle(bytes.NewReader(data))
+	if title == "" {
+		title = disclosureLabel(filename)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmplDisclosure.Execute(w, disclosureData{
 		ID:           id,
-		Name:         disclosureLabel(filename),
+		Name:         title,
+		Filename:     filename,
 		MarkdownJSON: template.JS(mdJSON),
 		Nonce:        nonceFrom(r),
 	}); err != nil {
@@ -1420,22 +1438,11 @@ func (s *Server) handleDisclosure(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// disclosureTitleFromFile reads the first markdown heading from a disclosure
-// file and returns the vulnerability title.
+// disclosureTitle reads the first markdown heading and returns the vulnerability title.
 // e.g. "# Security Disclosure: Mail Account Credential Theft" → "Mail Account Credential Theft"
 // Returns empty string if the title cannot be extracted.
-func disclosureTitleFromFile(path string) string {
-	// Reject a symlink (Lstat cross-platform; oNoFollow adds unix atomicity) so the
-	// title-scan (reached from handleDisclosureList) can't read a symlink target.
-	if lfi, err := os.Lstat(path); err != nil || lfi.Mode()&os.ModeSymlink != 0 {
-		return ""
-	}
-	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow, 0)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
+func disclosureTitle(reader io.Reader) string {
+	sc := bufio.NewScanner(reader)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if strings.HasPrefix(line, "#") {
@@ -1443,6 +1450,7 @@ func disclosureTitleFromFile(path string) string {
 			title := strings.TrimSpace(strings.TrimLeft(line, "#"))
 			// Strip common "Security Disclosure:" prefix.
 			for _, prefix := range []string{
+				"漏洞报告：",
 				"安全漏洞披露：",
 				"安全披露：",
 				"Security Disclosure: ",
@@ -1652,18 +1660,6 @@ func (s *Server) runJob(job *Job) {
 		snapshot.FinishedAt = &now
 		snapshot.UpdatedAt = now
 		snapshot.Revision++
-		for _, finding := range snapshot.Findings {
-			if finding.Dynamic == "running" {
-				finding.Dynamic = "interrupted"
-				finding.DynamicDetails = "任务结束前未报告本次测试结果，请查看该发现的活动记录。"
-				finding.FailurePhase = ""
-			}
-		}
-		if status != StatusDone {
-			if st := snapshot.Stages[snapshot.Stage]; st != nil && st.Status == "running" {
-				st.Status = "interrupted"
-			}
-		}
 		start := len(job.LogBuf) - 5
 		if start < 0 {
 			start = 0
@@ -1695,6 +1691,7 @@ func (s *Server) runJob(job *Job) {
 	job.snapshotLocked()
 	job.persistSnapshotLocked()
 	job.mu.Unlock()
+	job.runnerEvent("queue", "success", "排队结束", "")
 	job.runnerEvent("initialize", "running", "已获得执行槽位，正在准备扫描", "")
 
 	job.addLog("→ 开始扫描：" + job.Repo)
@@ -1770,6 +1767,9 @@ func (s *Server) runJob(job *Job) {
 	if job.verify {
 		args = append(args, "--verify")
 	}
+	if job.includeIntentional {
+		args = append(args, "--include-intentional")
+	}
 	if job.dynamicTest {
 		args = append(args, "--dynamic-test")
 		if job.dockerProxy != "" {
@@ -1812,6 +1812,7 @@ func (s *Server) runJob(job *Job) {
 		scanEnv[k] = v
 	}
 	scanEnv["VULSCAN_JOB_ID"] = job.ID
+	job.runnerEvent("initialize", "success", "扫描准备完成", "")
 	stdout, exitCode, err := python.InvokeCtxCaptureEnvTimeout(job.ctx, s.pythonPath, args, "", scanEnv, job.addLog, scanTimeout)
 	if job.ctx.Err() != nil {
 		return // cancelled — don't mark error
@@ -1833,16 +1834,31 @@ func (s *Server) runJob(job *Job) {
 	// Exit code 1 means "scan succeeded but found vulnerabilities" (like grep).
 	// Exit code 2+ means actual failure. The CLI writes the reason as a JSON
 	// envelope on stdout (stderr may be empty), so surface it to the UI.
-	if exitCode >= 2 || exitCode < 0 {
+	var scanEnvelope types.Envelope
+	envelopeErr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &scanEnvelope)
+	if exitCode >= 2 || exitCode < 0 || envelopeErr != nil || scanEnvelope.Status != "success" || len(scanEnvelope.Errors) > 0 {
 		if msgs := envelopeErrors(stdout); len(msgs) > 0 {
 			for _, m := range msgs {
 				job.addLog("[error] " + m)
 			}
-		} else {
+		} else if exitCode >= 2 || exitCode < 0 {
 			job.addLog(fmt.Sprintf("[error] 扫描退出，错误码 %d", exitCode))
+		} else {
+			job.addLog("[error] 扫描未返回有效的成功结果，请查看原始日志")
 		}
 		job.setError()
 		return
+	}
+	if data, ok := scanEnvelope.Data.(map[string]any); ok {
+		status, _ := data["scan_status"].(string)
+		if data["degraded"] == true || status == "partial" || status == "error" || status == "interrupted" {
+			job.mu.Lock()
+			snapshot := job.snapshotLocked()
+			snapshot.Partial = true
+			snapshot.Coverage = "incomplete"
+			job.persistSnapshotLocked()
+			job.mu.Unlock()
+		}
 	}
 
 	// Patch pipeline_output.json with the original repo URL.
@@ -1868,7 +1884,7 @@ func (s *Server) runJob(job *Job) {
 	// If still missing, try explicit report generation (non-fatal).
 	if !fileExists(reportPath) {
 		job.runnerEvent("report", "running", "正在生成补充 HTML 报告", "")
-		if err := s.generateHTMLReport(job.ctx, outDir, reportPath, job.llmConfig, job.keyEnv, job.addLog); err != nil {
+		if err := s.generateHTMLReport(job.ctx, outDir, reportPath, job.addLog); err != nil {
 			job.runnerEvent("report", "error", "补充 HTML 报告生成失败", err.Error())
 			if job.ctx.Err() != nil {
 				return
@@ -1941,7 +1957,7 @@ func (s *Server) runJob(job *Job) {
 	if job.Snapshot != nil {
 		if st := job.Snapshot.Stages["report"]; st != nil && st.Status == "running" {
 			st.Status = "success"
-			st.Activity = "报告与材料整理完成"
+			st.Activity = "报告整理完成"
 		}
 	}
 	job.mu.Unlock()
@@ -1954,6 +1970,11 @@ func (s *Server) runJob(job *Job) {
 // It scans lines bottom-up for the last well-formed envelope carrying errors,
 // tolerating non-JSON log noise on the same stream.
 func envelopeErrors(stdout string) []string {
+	// Python's _output_json writes a pretty-printed, multi-line envelope.
+	var envelope types.Envelope
+	if json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope) == nil {
+		return envelope.Errors
+	}
 	lines := strings.Split(stdout, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
@@ -2475,23 +2496,21 @@ func patchPipelineOutput(outDir, repo string, onLog func(string)) {
 // generateHTMLReport uses `python -m vulscan report-data` to get pre-computed
 // report JSON, then renders it with Go's embedded HTML template — the same
 // pipeline the `vulscan report -f html` CLI command uses.
-func (s *Server) generateHTMLReport(ctx context.Context, outDir, reportPath, llmConfig string, keyEnv map[string]string, onLog func(string)) error {
+func (s *Server) generateHTMLReport(ctx context.Context, outDir, reportPath string, onLog func(string)) error {
 	resultsPath := findResultsFile(outDir)
 	if resultsPath == "" {
 		return fmt.Errorf("未在 %s 中找到结果文件", outDir)
 	}
 
-	args := []string{"report-data", resultsPath}
-	// HTML remediation is an LLM-backed report phase, so retain the job binding.
-	if llmConfig != "" {
-		args = append(args, "--llm-config="+llmConfig)
-	}
+	// The scan already generated its analysis, fixes and narrative reports.
+	// Rendering the HTML must not depend on a second paid analysis succeeding.
+	args := []string{"report-data", resultsPath, "--no-llm"}
 	if ds := findDatasetFile(outDir); ds != "" {
 		args = append(args, "--dataset", ds)
 	}
 
 	onLog("[report] 正在生成 HTML 报告…")
-	stdout, exitCode, err := python.InvokeCtxCaptureEnv(ctx, s.pythonPath, args, "", keyEnv, func(line string) {
+	stdout, exitCode, err := python.InvokeCtxCaptureEnv(ctx, s.pythonPath, args, "", nil, func(line string) {
 		onLog("[report] " + line)
 	})
 	if err != nil {

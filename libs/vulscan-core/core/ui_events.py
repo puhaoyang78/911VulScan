@@ -175,11 +175,12 @@ def command_output(phase):
                                      for line in output.splitlines()))
             sys.stderr.flush()
             now = time.monotonic()
-            if route and now - last >= 3:
+            content_lines = output.strip().splitlines()
+            if content_lines and now - last >= 3:
                 last = now
                 emit("activity", stage="dynamic-test", phase=phase, status="running",
                      finding_id=route, attempt=attempt,
-                     message=_bounded(output.strip().splitlines()[-1], 180),
+                     message=_bounded(content_lines[-1], 180),
                      details=_bounded(output, 4000),
                      duration_seconds=round(now - started, 2))
     return observe
@@ -187,13 +188,16 @@ def command_output(phase):
 
 def skipped(step, reason):
     emit("stage.changed", stage=step, status="error" if reason == "failed" else "skipped", message="阶段失败" if reason == "failed" else "跳过阶段", details=reason)
-    if step == "dynamic-test" and reason != "failed":
+    if step == "dynamic-test":
         with _lock:
-            for route in sorted(_known):
+            for route in sorted(_known | set(_dynamic_states)):
                 if _dynamic_states.get(route) not in (None, "pending"):
                     continue
+                if reason == "failed" and _dynamic_states.get(route) != "pending":
+                    continue  # No eligible test was queued for this finding.
                 _dynamic_states[route] = "skipped"
+                details = "动态验证阶段失败，本项测试未执行。请查看该阶段的错误记录。" if reason == "failed" else reason
                 emit("validation.updated", stage=step, finding_id=route,
                      finding=dict(finding_id=route, dynamic="skipped",
-                                  dynamic_details=reason),
-                     status="skipped", message="动态测试未执行", details=reason)
+                                  dynamic_details=details),
+                     status="skipped", message="动态测试未执行", details=details)

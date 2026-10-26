@@ -275,7 +275,7 @@ class GoPipelineTest:
         staging = tempfile.mkdtemp(prefix=_GO_BUILD_STAGING_PREFIX, dir=go_parser_dir)
         try:
             result = run_utf8(
-                ['go', 'build', '-o', os.path.join(staging, 'go_parser'), '.'],
+                ['go', 'build', '-buildvcs=false', '-o', os.path.join(staging, 'go_parser'), '.'],
                 cwd=go_parser_dir,
                 capture_output=True,
                 text=True,

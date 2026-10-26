@@ -120,6 +120,34 @@ func (j *Job) snapshotLocked() *jobSnapshot {
 	if !scanActive(j.Status) && j.Status != StatusDone {
 		s.Partial = true
 	}
+	if !scanActive(j.Status) {
+		// Terminal jobs cannot still have work waiting or executing. Apply this
+		// on reads too, so historical snapshots receive the same projection.
+		for _, st := range s.Stages {
+			if st.Status == "running" || st.Status == "queued" || st.Status == "pending" {
+				st.Status, st.ETA = "interrupted", nil
+				s.Partial = true
+			}
+		}
+		for _, f := range s.Findings {
+			if f.ModelReview == "pending" {
+				f.ModelReview = "interrupted"
+				f.ReviewDetails = strings.TrimSpace(f.ReviewDetails + "\n\n任务结束前未收到本项复核结果。")
+				s.Partial = true
+			}
+			if f.Dynamic == "pending" {
+				f.Dynamic = "skipped"
+				f.DynamicDetails = strings.TrimSpace(f.DynamicDetails + "\n\n任务已结束，本项未执行动态测试。")
+				f.FailurePhase = ""
+				s.Partial = true
+			} else if f.Dynamic == "running" {
+				f.Dynamic = "interrupted"
+				f.DynamicDetails = strings.TrimSpace(f.DynamicDetails + "\n\n任务结束前未报告本次测试结果，请查看该发现的活动记录。")
+				f.FailurePhase = ""
+				s.Partial = true
+			}
+		}
+	}
 	s.projectCounts()
 	s.Artifacts = map[string]bool{"report": j.ReportPath != "", "summary": j.SummaryPath != "", "disclosures": len(j.DisclosurePaths) > 0}
 	return s
@@ -138,7 +166,7 @@ func (s *jobSnapshot) projectCounts() {
 	reviewKnown, reviewResultKnown, dynamicKnown, dynamicResultKnown := false, false, false, false
 	reviewValues, dynamicValues := map[string]int{}, map[string]int{}
 	for _, f := range s.Findings {
-		if f.ModelReview == "pending" || f.ModelReview == "not_requested" || f.ModelReview == "retained" || f.ModelReview == "excluded" || f.ModelReview == "error" || f.ModelReview == "inconclusive" {
+		if f.ModelReview == "pending" || f.ModelReview == "not_requested" || f.ModelReview == "retained" || f.ModelReview == "excluded" || f.ModelReview == "error" || f.ModelReview == "inconclusive" || f.ModelReview == "interrupted" {
 			reviewKnown = true
 			reviewValues[f.ModelReview]++
 			if f.ModelReview == "retained" || f.ModelReview == "excluded" || f.ModelReview == "error" || f.ModelReview == "inconclusive" {
@@ -168,12 +196,11 @@ func (s *jobSnapshot) projectCounts() {
 }
 
 func (j *Job) acceptUIEventLocked(line string) {
-	start := strings.Index(line, uiEventPrefix)
-	if start < 0 {
+	if !strings.HasPrefix(line, uiEventPrefix) {
 		return
 	}
 	var e uiEvent
-	if len(line) > 128<<10 || json.NewDecoder(strings.NewReader(line[start+len(uiEventPrefix):])).Decode(&e) != nil ||
+	if len(line) > 128<<10 || json.Unmarshal([]byte(line[len(uiEventPrefix):]), &e) != nil ||
 		e.Version != 1 || e.JobID != j.ID || e.Seq == 0 || e.Time.IsZero() {
 		return
 	}
@@ -224,6 +251,9 @@ func (s *jobSnapshot) reduce(e uiEvent) {
 				st.Status = e.Status
 			}
 			st.Duration = e.Duration
+			if e.Status != "running" && e.Status != "queued" {
+				st.ETA = nil
+			}
 		}
 		if e.Processed != nil {
 			st.Processed = e.Processed
@@ -268,7 +298,21 @@ func (s *jobSnapshot) reduce(e uiEvent) {
 		s.Partial = true
 		s.Coverage = "incomplete"
 	case "coverage.updated":
-		s.Coverage = e.Status
+		// The final scanner projection reconciles recovered retries. Preserve
+		// actual failed stages and transport gaps independently of old activity.
+		if s.Coverage != "event_gap" {
+			s.Coverage = e.Status
+		}
+		if e.Status == "reported" && s.Coverage != "event_gap" {
+			s.Partial = s.PersistenceError != ""
+			for _, st := range s.Stages {
+				if st.Status == "error" || st.Status == "partial" || st.Status == "interrupted" {
+					s.Partial = true
+				}
+			}
+		} else if e.Status == "incomplete" {
+			s.Partial = true
+		}
 		s.CoverageDetails = e.Message
 	}
 	// Progress is sampled into the stage snapshot, not thousands of activity

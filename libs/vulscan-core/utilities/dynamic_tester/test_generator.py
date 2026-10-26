@@ -106,8 +106,10 @@ DEPENDENCY INSTALLATION:
   fallback install paths. The caller supplies build networking; do not override it.
 - For Node.js: put ALL runtime and build dependencies in package.json. Install them
   at image build time, including devDependencies needed to compile TypeScript.
-- For Go: do NOT write go.mod or go.sum yourself. Initialize the isolated module at
-  image build time with `go mod init vulscan-test`, then run `go mod tidy` and `go build`.
+- For Go: retain the target's go.mod/go.sum and the module files in a dependency image.
+  Only when no module exists, initialize an isolated module at image build time with
+  `go mod init vulscan-test`. Never initialize over an existing module. Run any required
+  `go mod tidy` and `go build` at build time.
   Use golang:1.26-alpine as the verified stable fallback when no target runtime is
   declared (matches docker_templates/go.Dockerfile). Set GOTOOLCHAIN=local so dependency
   resolution cannot silently upgrade the declared compiler. Do not hide failures with
@@ -247,8 +249,8 @@ def _build_finding_prompt(finding: dict, repo_info: dict) -> str:
             "",
             f"  Dependency image already built: {collapse_inline(deps_image)}",
             "  Use it as your FROM (or as the base of your build stage): the repository's",
-            "  third-party dependencies are already installed there. Do not run the install",
-            "  command again. It contains NO application source — you must still COPY the",
+            "  third-party dependencies are already installed there. Reuse them; install only",
+            "  additional harness dependencies at build time. It contains NO application source — COPY the",
             "  target code (repository/) and your harness into the image.",
             f"  {collapse_inline(str(repo_info.get('deps_hint') or ''))}",
             "  Install only the extra packages the harness itself needs.",

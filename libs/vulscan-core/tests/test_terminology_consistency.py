@@ -60,6 +60,21 @@ def test_dynamic_status_words_are_the_same_everywhere():
     assert js["blocked"] == _LABELS["blocked"]
 
 
+def test_model_and_dynamic_confirmation_are_distinct():
+    from report.localization import display_label, dynamic_label
+    assert display_label("confirmed") == "复核保留"
+    assert dynamic_label("CONFIRMED") == "已复现"
+    assert dynamic_label("ERROR") == "测试错误"
+
+
+def test_shared_provider_policy_applies_wording_once():
+    from utilities.llm.language import with_chinese_output
+    system = with_chinese_output("Return JSON only.")
+    assert "WORDING REQUIREMENT" in system
+    assert "模型复核保留写成" in system
+    assert with_chinese_output(system) == system
+
+
 def test_no_stiff_words_survive_in_user_facing_tables():
     banned = ("代码单元", "证据", "裁决", "发现项", "无法判定")
     for path in (ROOT / "libs/vulscan-core/report", ROOT / "libs/vulscan-core/core",

@@ -150,6 +150,27 @@ const checkContrast=async(page,label,selectors)=>{
  if(bad.length)throw Error(label+' contrast below 4.5: '+JSON.stringify(bad));
 };
 const ready = async (page, name, fn) => { try { await fn(); } catch (e) { const state=await page.evaluate(()=>({status:document.getElementById('status-text')?.dataset.state,logCount:document.getElementById('log-count')?.textContent,follow:document.getElementById('auto-scroll')?.checked,newLogs:document.getElementById('log-new')?.textContent}));note(name, `readiness: ${e.message.split('\n')[0]} ${JSON.stringify(state)}`); } };
+const checkControls=async(page,name)=>{
+ const issues=await page.evaluate(()=>{
+  const issues=[],ids=new Set();
+  for(const el of document.querySelectorAll('[id]')){if(ids.has(el.id))issues.push('duplicate id '+el.id);ids.add(el.id);}
+  for(const el of document.querySelectorAll('button,input:not([type=hidden]),select,summary')){
+   if(!el.getClientRects().length)continue;
+   const labelled=(el.getAttribute('aria-labelledby')||'').split(/\s+/).filter(Boolean).map(id=>document.getElementById(id)?.textContent||'').join(' ');
+   const label=el.id?[...document.querySelectorAll('label')].find(l=>l.htmlFor===el.id)?.textContent:'';
+   const text=el.getAttribute('aria-label')||labelled||label||el.closest('label')?.textContent||(el.matches('button,summary')?el.textContent:'');
+   if(!text?.trim())issues.push('unnamed control '+el.tagName+'#'+el.id);
+   for(const id of (el.getAttribute('aria-controls')||'').split(/\s+/).filter(Boolean))if(!document.getElementById(id))issues.push('missing controlled region '+id);
+  }
+  for(const link of document.querySelectorAll('.breadcrumb a,.report-top-nav a,.report-toc a,.document-toc a,.skip-link')){
+   const href=link.getAttribute('href')||'';if(href.startsWith('#')&&!document.getElementById(href.slice(1)))issues.push('broken navigation '+href);
+  }
+  for(const link of document.querySelectorAll('a[aria-disabled=true]'))if(link.hasAttribute('href'))issues.push('disabled link remains navigable '+link.id);
+  const active=document.activeElement;if(active&&!active.matches('body,html')&&!active.getClientRects().length)issues.push('focus left in hidden content '+active.id);
+  return issues;
+ });
+ for(const issue of issues)note(name,issue);
+};
 
 // The violation DRAIN (the review round's catch): the init-script listener
 // pushes into window.__violations — read it AFTER the async work settles
@@ -194,6 +215,7 @@ const drain = async (page, name) => {
     note(name, 'csp violation: ' + v);
     violationsSeen++;
   }
+  await checkControls(page,name);
   return viols.length;
 };
 let dompurifyProbeBlocked = 0;
@@ -211,6 +233,10 @@ let dompurifyProbeBlocked = 0;
     await page.selectOption('#job-status','queued');if(await page.locator('#scans-list .scan-row:visible').count()!==1)throw Error('queued task filtering failed');
     await page.selectOption('#job-status','');await page.fill('#job-query','f0000005');if(await page.locator('#scans-list .scan-row:visible').count()!==1)throw Error('task identifier search failed');
     await page.fill('#job-query','');if(await page.locator('#scans-list .scan-row:visible').count()!==hasRows)throw Error('clearing task search did not restore rows');
+    await page.fill('#job-query','no-matching-project-fixture');
+    if(!await page.locator('#job-empty').isVisible()||await page.locator('#scans-list').isVisible())throw Error('empty task search has no result feedback');
+    await page.locator('#clear-jobs').click();
+    if(await page.locator('#scans-list .scan-row:visible').count()!==hasRows||await page.locator('#job-empty').isVisible()||!await page.locator('#clear-jobs').isDisabled())throw Error('task filter reset failed');
   });
   await ready(page, 'index language selection', async () => {
     const inputs = page.locator('input[name="languages"]');
@@ -263,6 +289,7 @@ let dompurifyProbeBlocked = 0;
     await page.waitForFunction(() => !document.getElementById('start-button').disabled && document.getElementById('form-feedback').textContent.includes('任务响应异常'));
     if (submissions !== 1) throw new Error(`duplicate form submissions: ${submissions}`);
     if (submittedBudget !== '4h') throw new Error(`request lost scan budget: ${submittedBudget}`);
+    if(!await page.locator('.notice-toast[data-tone=error]').filter({hasText:'任务响应异常'}).isVisible())throw Error('submission error has no visible feedback component');
     await page.unroute('**/scan');
   });
   await ready(page, 'index back navigation clears one-run key', async () => {
@@ -274,6 +301,117 @@ let dompurifyProbeBlocked = 0;
   });
   await drain(page, 'index');
   await page.close();
+}
+
+// Version selection uses the shared feedback components. Every request is
+// intercepted, including errors and delayed replies; no remote Git or scan.
+{
+  const page=await context.newPage();
+  page.on('pageerror',e=>note('version selection',e.message));
+  let requests=0,reply={status:200,body:JSON.stringify({refs:[{name:'v1.2.0',kind:'tag'},{name:'main',kind:'branch'}]})};
+  let releaseOld,oldSeen=false;
+  const oldResponse=new Promise(resolve=>{releaseOld=resolve;});
+  let oldHandled;
+  const oldFinished=new Promise(resolve=>{oldHandled=resolve;});
+  await page.route('**/refs?**',async route=>{
+    requests++;
+    const repo=new URL(route.request().url()).searchParams.get('repo');
+    if(repo==='https://example.com/old-repo'){
+      oldSeen=true;
+      await oldResponse;
+      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({refs:[{name:'stale-tag',kind:'tag'}]})});
+      oldHandled();return;
+    }
+    const current=reply;
+    if(current.wait)await current.wait;
+    if(current.abort){await route.abort('failed');return;}
+    await route.fulfill({status:current.status,contentType:'application/json',body:current.body});
+  });
+  await ready(page,'version selection',async()=>{
+    await page.goto(baseURL+'/',{waitUntil:'domcontentloaded'});
+    await page.setViewportSize({width:1440,height:1000});
+    const button=page.locator('#load-refs'),input=page.locator('#ref'),options=page.locator('#ref-options option');
+    const notice=(message,tone)=>page.locator('.notice-toast'+(tone?`[data-tone=${tone}]`:'')).filter({hasText:message});
+    const load=async(message,tone)=>{
+      await button.click();
+      await page.waitForFunction(()=>document.getElementById('load-refs').getAttribute('aria-busy')==='false');
+      await notice(message,tone).waitFor();
+    };
+    await button.focus();await page.keyboard.press('Enter');
+    await notice('请先填写仓库地址。','error').waitFor();
+    if(!await page.locator('#repo').evaluate(e=>e===document.activeElement)||requests)throw Error('missing repository has no focused feedback');
+    await page.fill('#repo','/fixture/local-project');await button.click();
+    await notice('本机项目请直接填写分支、标签或提交号。','info').waitFor();
+    if(requests)throw Error('local path made a remote refs request');
+
+    let release;
+    reply={...reply,wait:new Promise(resolve=>{release=resolve;})};
+    await page.fill('#repo','https://example.com/repo');await button.click();
+    await page.waitForFunction(()=>document.getElementById('load-refs').getAttribute('aria-busy')==='true');
+    if(!await button.isDisabled()||!await button.innerText().then(t=>t.includes('正在获取')))throw Error('refs loading feedback is missing');
+    await button.evaluate(e=>e.click());
+    await page.waitForFunction(()=>document.getElementById('load-refs').disabled);
+    if(requests!==1)throw Error('duplicate version request while loading');
+    if(screenshotDir)await page.screenshot({path:`${screenshotDir}/versions-loading-light.png`});
+    await input.focus();release();
+    await notice('已获取 2 个可选版本。','success').waitFor();
+    if(await button.isDisabled()||await button.getAttribute('aria-busy')!=='false')throw Error('refs loading state did not reset');
+    if(!await input.evaluate(e=>e===document.activeElement))throw Error('async refs response stole focus');
+    const actual=await options.evaluateAll(nodes=>nodes.map(n=>[n.value,n.label,n.textContent]));
+    if(JSON.stringify(actual)!==JSON.stringify([
+      ['v1.2.0','v1.2.0 · 标签','v1.2.0 · 标签'],
+      ['main','main · 分支','main · 分支'],
+    ]))throw Error('version options must show the actual ref name with its kind');
+    // Chromium headless does not open the OS datalist popup. Check both
+    // visible-label sources above and exercise each option's submitted value.
+    for(const ref of ['v1.2.0','main']){
+      await input.fill(ref);await input.press('Tab');
+      if(await page.locator('#scan-form').evaluate(form=>new FormData(form).get('ref'))!==ref)throw Error('selected version submission contains display-only text');
+    }
+    await input.fill('v1.2.0');await input.press('Tab');
+    await notice('扫描版本已设为 v1.2.0。','info').waitFor();
+    if(await page.locator('.notice-toast').filter({hasText:'已获取'}).count())throw Error('version selection stacked obsolete feedback');
+    if(await page.locator('#scan-form').evaluate(form=>new FormData(form).get('ref'))!=='v1.2.0')throw Error('version selection lost submitted ref');
+    for(const width of [1440,768,360]){
+      await page.setViewportSize({width,height:1000});
+      if(screenshotDir)await page.screenshot({path:`${screenshotDir}/versions-selected-light-${width}.png`});
+      if(await page.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth+1))throw Error('version controls overflow '+width);
+    }
+    await input.fill('');await input.press('Tab');
+    await notice('已恢复扫描默认分支。','info').waitFor();
+
+    await page.locator('[data-theme-toggle]').click();
+    reply={status:503,body:'无法读取版本列表：请检查访问权限。'};
+    await load('请检查访问权限。','error');
+    if(await button.isDisabled())throw Error('failed refs request cannot be retried');
+    if(screenshotDir)await page.screenshot({path:`${screenshotDir}/versions-error-dark-360.png`});
+    await checkContrast(page,'dark version feedback',['#ref','#load-refs','#ref-hint','.notice-message','.notice-close']);
+    reply={status:200,body:JSON.stringify({refs:null})};
+    await load('此仓库没有可列出的标签或分支。','info');
+    if(await options.count())throw Error('empty refs result kept old suggestions');
+    reply={abort:true};await load('请检查连接后重试。','error');
+    reply={status:200,body:'not JSON'};await load('版本列表格式异常，请重试。','error');
+    reply={status:200,body:JSON.stringify({refs:[{name:42,kind:'tag'}]})};
+    await load('版本列表格式异常，请重试。','error');
+    reply={status:200,body:JSON.stringify({refs:[{name:'v2.0.0',kind:'tag'}]})};
+    await load('已获取 1 个可选版本。','success');
+    await input.fill('manual-commit');await input.press('Tab');
+    await page.fill('#repo','https://example.com/old-repo');
+    if(await options.count()||await input.inputValue()!=='manual-commit')throw Error('repo change kept stale suggestions or erased manual version');
+    const before=requests;await button.click();await page.waitForFunction(()=>document.getElementById('load-refs').disabled);
+    await page.fill('#repo','https://example.com/new-repo');
+    if(await button.isDisabled()||await button.getAttribute('aria-busy')!=='false')throw Error('repo change did not cancel pending version loading');
+    reply={status:200,body:JSON.stringify({refs:[{name:'<img src=x onerror=alert(1)>',kind:'tag'},{name:'new-branch',kind:'branch'}]})};
+    await load('已获取 2 个可选版本。','success');
+    releaseOld();await oldFinished;
+    if(requests!==before+2||await options.last().getAttribute('value')!=='new-branch')throw Error('late response overwrote the current repository');
+    if(await page.locator('#ref-options img,#ref-options script').count())throw Error('version name treated as HTML');
+    if(await page.locator('.notice-message').filter({hasText:'stale-tag'}).count())throw Error('stale response produced feedback');
+    await page.locator('[data-theme-toggle]').click();
+    await checkContrast(page,'light version feedback',['#ref','#load-refs','#ref-hint','.notice-message','.notice-close']);
+  });
+  releaseOld();if(oldSeen)await oldFinished;
+  await drain(page,'version selection');await page.close();
 }
 
 // --- /scan/jx: the live page for a done job — the SSE done event + the
@@ -323,7 +461,9 @@ let dompurifyProbeBlocked = 0;
   });
   await page.goto(baseURL+'/scan/jx');
   await ready(page, 'scan-cancel', async () => {
+    if(!await page.locator('#btn-cancel').isDisabled())throw Error('cancel is enabled before the job state is known');
     await page.evaluate(() => {
+      testStreams.state.handlers.snapshot({data:JSON.stringify({version:1,job_id:'jx',revision:1,status:'running',legacy:false,started_at:'2026-10-25T08:00:00Z',updated_at:'2026-10-25T08:01:00Z',stages:{},findings:{},counts:{},activity:[]})});
       testStreams.logs.onmessage({lastEventId:'0',data:'[Enhance] 1/2 source.c::tc_error neutral (elapsed 1s, ETA ~1s, $0)'});
       testStreams.logs.onmessage({lastEventId:'0',data:'duplicate'});
       testStreams.logs.readyState=EventSource.CONNECTING;testStreams.logs.onerror();
@@ -439,6 +579,10 @@ let summaryHTML = '';
   await goto('f0000009');if(await page.locator('#count-candidates').innerText()!=='0'||await page.locator('#count-retained').innerText()!=='—'||await page.locator('#count-reproduced').innerText()!=='—')throw Error('known empty discovery and unproduced verification were conflated');
   await page.locator('#tab-findings').click();if(!(await page.locator('#findings-empty').innerText()).includes('尚未发现候选'))throw Error('known empty finding list is unclear');
   await goto('f0000006');await page.locator('#tab-activity').click();await page.selectOption('#activity-stage','report');if(!(await page.locator('#activity-groups').innerText()).includes('报告步骤部分失败')||await page.locator('.activity-row:visible details[open]').count()<1)throw Error('failure phase/output not visible in activity');
+  await goto('f0000005');await page.locator('#tab-findings').click();await page.selectOption('#review-filter','interrupted');
+  if(await page.locator('#finding-rows tr:visible').count()!==1||!(await page.locator('#finding-rows').innerText()).includes('复核未完成'))throw Error('terminal unfinished review cannot be filtered');
+  const stopped=await page.evaluate(async()=>await(await fetch('/scan/f0000005/snapshot')).json());
+  if(Object.values(stopped.findings).some(f=>f.model_review==='pending'||['pending','running'].includes(f.dynamic))||Object.values(stopped.stages).some(s=>['queued','running'].includes(s.status)))throw Error('terminal task still shows pending work');
   await goto('f0000002');
   for(const [key,n]of[['candidates',6],['retained',3],['excluded',1],['reproduced',1]])if(await page.locator('#count-'+key).innerText()!==String(n))throw Error('incorrect projection '+key);
   if(!(await page.locator('#overview-count').innerText()).startsWith('94 / 987'))throw Error('processing denominator became finding count');
@@ -466,6 +610,28 @@ let summaryHTML = '';
   const focus=await page.locator('#finding-rows .finding-title').first();await focus.focus();
   await page.evaluate(async()=>{const s=await(await fetch('/scan/f0000002/snapshot')).json();s.revision+=1;s.findings[Object.keys(s.findings)[0]].dynamic='not_reproduced';VulscanScan.applySnapshot(s);});
   if(!(await page.evaluate(()=>document.activeElement?.classList.contains('finding-title'))))throw Error('live update stole reading focus');
+  await page.evaluate(async()=>{
+   const s=await(await fetch('/scan/f0000002/snapshot')).json();s.revision+=100;
+   window.auditSnapshot=s;const f=s.findings[Object.keys(s.findings)[0]];
+   f.description='```c\n// 中文注释：测试阅读状态\n'+Array.from({length:30},(_,i)=>'int value_'+i+' = '+i+';').join('\n')+'\n```';
+   VulscanScan.applySnapshot(s);
+  });
+  await page.locator('#finding-rows .finding-title').first().click();
+  const reader=page.locator('#finding-detail .code-reader').first(),wrap=reader.getByRole('button',{name:/^换行：/});
+  await wrap.click();await reader.getByRole('button',{name:'展开长代码',exact:true}).click();
+  await page.locator('#finding-detail .finding-record > summary').click();await wrap.focus();
+  await page.evaluate(()=>{const s=window.auditSnapshot;s.revision++;const f=s.findings[Object.keys(s.findings)[0]];f.dynamic='environment_error';f.attempt=(f.attempt||0)+1;f.failure_phase='build';s.counts.reproduced=0;VulscanScan.applySnapshot(s);});
+  if(!await wrap.evaluate(el=>el===document.activeElement)||!(await reader.getAttribute('class')).includes('is-wrapped')||(await reader.getAttribute('class')).includes('is-collapsed')||!await page.locator('#finding-detail .finding-record').evaluate(el=>el.open))throw Error('live detail update reset reader focus or expansion');
+  await page.evaluate(()=>{const s=window.auditSnapshot;s.revision++;s.findings[Object.keys(s.findings)[0]].description='更新后的问题描述。';VulscanScan.applySnapshot(s);});
+  if(!await wrap.evaluate(el=>el===document.activeElement))throw Error('updated prose removed the focused code toolbar');
+  await page.locator('#finding-close').focus();
+  await page.waitForFunction(()=>document.querySelector('#finding-detail [data-detail=description]').textContent.includes('更新后的问题描述'));
+  await page.locator('#finding-activity').click();
+  if(!await page.locator('#activity-panel').isVisible()||!await page.locator('#tab-activity').evaluate(el=>el===document.activeElement))throw Error('detail-to-activity navigation lost keyboard focus');
+  await page.fill('#activity-finding','no-matching-activity');
+  if(!(await page.locator('#activity-note').innerText()).includes('没有匹配'))throw Error('empty activity filter has no feedback');
+  await page.locator('#clear-activity').click();
+  if((await page.locator('#activity-note').innerText()).includes('没有匹配'))throw Error('activity filter feedback was not cleared');
   await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.getElementById('count-reproduced')?.textContent==='1');
   await page.locator('#tab-terminal').click();await page.waitForFunction(()=>document.getElementById('log-count').textContent.includes(' / 1520 行'));
   const count=await page.locator('#log-count').innerText();if(!/1[,.]?5\d\d/.test(count.replaceAll(',','')))throw Error('long-log fixture was not fully received: '+count);
@@ -479,8 +645,17 @@ let summaryHTML = '';
   await page.locator('#log-body').hover();await page.mouse.wheel(0,-600);await page.waitForFunction(()=>!document.getElementById('auto-scroll').checked);
   await page.evaluate(()=>VulscanScan.appendLine('new while reading'));await page.waitForFunction(()=>document.getElementById('log-new').textContent.includes('1'));
   await page.locator('#log-latest').click();if(await page.locator('#log-new').innerText()!=='')throw Error('new-log counter did not clear');
+  await page.selectOption('#log-level','error');
+  await page.evaluate(()=>VulscanScan.appendLine('INFO: hidden by the current filter'));
+  await settleLayout(page);if(await page.locator('#log-new').innerText()!=='')throw Error('new-log counter included filtered-out lines');
+  await page.evaluate(()=>VulscanScan.appendLine('ERROR: matching the current filter'));
+  await page.waitForFunction(()=>document.getElementById('log-new').textContent.includes('1'));
+  await page.locator('#log-clear').click();if(await page.locator('#log-new').innerText()!=='')throw Error('log filter reset kept an obsolete new-log count');
   await checkContrast(page,'dark log',['.log-line .body','.log-line .ts']);
   await page.locator('#tab-terminal').press('Home');if(!(await page.locator('#overview-panel').isVisible()))throw Error('keyboard tab navigation');
+  await page.locator('#show-findings').focus();await page.keyboard.press('Enter');
+  if(!await page.locator('#tab-findings').evaluate(el=>el===document.activeElement))throw Error('overview navigation left focus in a hidden panel');
+  await page.locator('#tab-overview').click();
   await checkContrast(page,'scan',['.meta','.overview-note','.status-pill','.summary-stat span']);
   for(const width of [1440,1920,768,360]){await page.setViewportSize({width,height:1000});if(screenshotDir)await page.screenshot({path:`${screenshotDir}/scan-running-${width}.png`,fullPage:true});const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth+1);if(overflow)throw Error('running page overflow '+width+' '+JSON.stringify(await overflowDetails(page)));}
  });
@@ -492,6 +667,61 @@ let summaryHTML = '';
  await ready(page,'real reconnect',async()=>{await page.goto(baseURL+'/scan/f0000002',{waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.getElementById('connection-status').textContent.includes('重连'));if(await page.locator('#status-text').getAttribute('data-state')!=='running')throw Error('connection drop became task failure');await page.waitForFunction(()=>document.getElementById('connection-status').dataset.state==='connected');if(streams<2||await page.locator('#count-candidates').innerText()!=='6')throw Error('reconnect lost or duplicated state');});
  const other=await context.newPage();await ready(other,'parallel isolation',async()=>{await other.goto(baseURL+'/scan/f0000008',{waitUntil:'domcontentloaded'});await other.waitForFunction(()=>document.getElementById('status-text').dataset.state==='running');if(await other.locator('#count-candidates').innerText()!=='—')throw Error('other job inherited counters');await other.evaluate(()=>VulscanScan.applySnapshot({version:1,job_id:'f0000002',revision:999,counts:{candidates:99},findings:{},stages:{}}));if(await other.locator('#count-candidates').innerText()!=='—')throw Error('cross-job snapshot accepted');});
  await drain(page,'reconnect');await drain(other,'parallel');await page.close();await other.close();
+}
+// Read failures must remain distinct from absent reports. Retrying does not
+// submit a scan, and exported HTML/logs retain the complete saved bytes.
+{
+ const page=await context.newPage();let failing=true,refreshes=0,releaseRefresh;
+ const refreshing=new Promise(resolve=>{releaseRefresh=resolve;});
+ let markStarted;const started=new Promise(resolve=>{markStarted=resolve;});
+ page.on('pageerror',e=>note('artifact recovery',e.message));
+ await page.route('**/summary/f0000007',async route=>{
+  if(route.request().method()!=='HEAD'){await route.continue();return;}
+  refreshes++;if(failing){await route.fulfill({status:503,body:'fixture read error'});return;}
+  markStarted();await refreshing;await route.continue();
+ });
+ await page.route('**/report/f0000007',async route=>{if(failing&&route.request().method()==='HEAD')await route.abort('failed');else await route.continue();});
+ await page.route('**/disclosures/f0000007',async route=>{if(failing)await route.fulfill({status:503,body:'fixture read error'});else await route.continue();});
+ await ready(page,'artifact recovery',async()=>{
+  await page.goto(baseURL+'/scan/f0000007',{waitUntil:'domcontentloaded'});await page.locator('#tab-materials').click();
+  await page.waitForFunction(()=>document.getElementById('artifact-note').textContent.includes('暂时无法读取')&&!document.getElementById('refresh-artifacts').disabled);
+  if(await page.locator('#artifact-note').innerText().then(text=>text.includes('尚未生成')))throw Error('report read failure was presented as missing output');
+  if(await page.locator('#materials-panel a[aria-disabled=true][href]').count())throw Error('unavailable report links remain navigable');
+  failing=false;await page.locator('#refresh-artifacts').click();await started;
+  if(!await page.locator('#refresh-artifacts').isDisabled()||await page.locator('#refresh-artifacts').getAttribute('aria-busy')!=='true')throw Error('report refresh has no busy feedback');
+  await page.locator('#refresh-artifacts').evaluate(button=>button.click());releaseRefresh();
+  await page.waitForFunction(()=>!document.getElementById('refresh-artifacts').disabled&&document.getElementById('btn-report').hasAttribute('href'));
+  if(refreshes!==2||await page.locator('#materials-panel a[aria-disabled=true]').count()||!await page.locator('#disclosure-links a').isVisible())throw Error('report retry lost links or sent duplicate requests');
+  if(await page.locator('.notice-toast[data-tone=info]').filter({hasText:'报告列表已更新。'}).count()!==1)throw Error('report refresh has no completion feedback');
+  const expected=await(await context.request.get(baseURL+'/report/f0000007')).text();
+  const [reportDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#download-report').click()]);
+  if(reportDownload.suggestedFilename()!=='扫描报告-f0000007.html'||readFileSync(await reportDownload.path(),'utf8')!==expected)throw Error('HTML download is incomplete or named incorrectly');
+  if(!expected.includes('data:font/woff2;base64,')||!expected.includes('VulscanReader'))throw Error('HTML download lost offline resources');
+  await page.goto(baseURL+'/scan/f0000002',{waitUntil:'domcontentloaded'});await page.locator('#tab-terminal').click();
+  const logs=await(await context.request.get(baseURL+'/scan/f0000002/logs.txt')).text();
+  if(logs.split('\n').length<1500)throw Error('log download fixture is incomplete');
+  const [logDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('link',{name:'下载原始日志',exact:true}).click()]);
+  if(readFileSync(await logDownload.path(),'utf8')!==logs)throw Error('raw log download lost saved lines');
+  if(await page.locator('.notice-toast[data-tone=info]').filter({hasText:'已开始下载原始日志。'}).count()!==1)throw Error('raw log download has no feedback');
+ });
+ releaseRefresh();await drain(page,'artifact recovery');await page.close();
+}
+// Denied clipboard permissions leave actions usable and produce the same
+// error component across repository, Markdown, code and log copying.
+for(const [name,path,selector]of[['repository','/','.copy-btn'],['Markdown','/summary/f0000007','#document-copy'],['code','/summary/f0000007','.code-toolbar button[aria-label="复制代码原文"]'],['logs','/scan/f0000002','#log-copy']]){
+ const page=await context.newPage();page.on('pageerror',e=>note('clipboard '+name,e.message));
+ await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw new DOMException('fixture permission denial','NotAllowedError');}}}));
+ await ready(page,'clipboard '+name,async()=>{
+  await page.goto(baseURL+path,{waitUntil:'domcontentloaded'});
+  if(name==='logs'){await page.locator('#tab-terminal').click();await page.waitForFunction(()=>document.querySelectorAll('.log-line').length>0);}
+  const button=page.locator(selector).first();await button.click();
+  await page.locator('.notice-toast[data-tone=error]').filter({hasText:'复制失败'}).waitFor();
+  if(await button.isDisabled()||name==='code'&&await button.innerText()!=='复制')throw Error('clipboard failure left the action unusable');
+  await page.evaluate(()=>{navigator.clipboard.writeText=async text=>{window.clipboardRetry=text;};});
+  await button.click();await page.waitForFunction(()=>typeof window.clipboardRetry==='string');
+  if(!await page.locator('.notice-toast[data-tone=success]').isVisible())throw Error('clipboard retry did not provide success feedback');
+ });
+ await drain(page,'clipboard '+name);await page.close();
 }
 for(const [name,path]of[['summary-rich','/summary/f0000007'],['disclosure-rich','/disclosure/f0000007/DISCLOSURE_01_FIXTURE.md'],['report-rich','/report/f0000007']]){
  const {page}=await visit(name,path);
@@ -507,7 +737,39 @@ for(const [name,path]of[['summary-rich','/summary/f0000007'],['disclosure-rich',
   if(await code.locator('.hljs-comment').count()<1)throw Error('known code language was not highlighted');
   await code.getByRole('button',{name:'换行：关',exact:true}).click();if(!(await code.getAttribute('class')).includes('is-wrapped'))throw Error('wrap toggle');
   await code.getByRole('button',{name:'展开长代码',exact:true}).click();if((await code.getAttribute('class')).includes('is-collapsed'))throw Error('long code cannot expand');
-  if(name!=='report-rich'){const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#document-download').click()]);const expected=await page.evaluate(()=>markdown);if(readFileSync(await download.path(),'utf8')!==expected)throw Error('Markdown download changed original bytes');if(await page.locator('.notice-toast[data-tone=info]').filter({hasText:'已开始下载 Markdown。'}).count()!==1)throw Error('download has no feedback component');await page.locator('#document-copy').click();if(await page.evaluate(()=>navigator.clipboard.readText())!==expected)throw Error('Markdown copy changed original bytes');if(await page.locator('.notice-toast[data-tone=success]').filter({hasText:'原始 Markdown 已复制。'}).count()!==1)throw Error('Markdown copy has no feedback component');const unknown=page.locator('.code-reader').filter({hasText:'untouched <>&'});if(!(await unknown.locator('code').getAttribute('class')).includes('plaintext'))throw Error('unknown language was guessed');if(await page.locator('#content img,#content script,#content form,#content [onerror]').count())throw Error('unsafe Markdown reached DOM');}
+  if(name!=='report-rich'){
+   const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#document-download').click()]);
+   const expected=await page.evaluate(()=>markdown);
+   if(readFileSync(await download.path(),'utf8')!==expected)throw Error('Markdown download changed original bytes');
+   if(name==='disclosure-rich'&&download.suggestedFilename()!=='DISCLOSURE_01_FIXTURE.md')throw Error('vulnerability report lost its own download filename');
+   if(await page.locator('.notice-toast[data-tone=info]').filter({hasText:'已开始下载 Markdown。'}).count()!==1)throw Error('download has no feedback component');
+   await page.locator('#document-copy').click();if(await page.evaluate(()=>navigator.clipboard.readText())!==expected)throw Error('Markdown copy changed original bytes');
+   if(await page.locator('.notice-toast[data-tone=success]').filter({hasText:'原始 Markdown 已复制。'}).count()!==1)throw Error('Markdown copy has no feedback component');
+   const unknown=page.locator('.code-reader').filter({hasText:'untouched <>&'});
+   if(!(await unknown.locator('code').getAttribute('class')).includes('plaintext'))throw Error('unknown language was guessed');
+   if(await page.locator('#content img,#content script,#content form,#content [onerror]').count())throw Error('unsafe Markdown reached DOM');
+   await page.locator('#document-source').click();
+   if(!await page.locator('#source-view').isVisible()||await page.locator('#source-view code').textContent()!==expected)throw Error('raw Markdown view changed original text');
+   await page.locator('#document-toc a').first().click();
+   if(!await page.locator('#content').isVisible()||await page.locator('#source-view').isVisible()||!new URL(page.url()).hash.startsWith('#section-'))throw Error('table of contents navigated to a hidden preview');
+   await page.locator('#document-source').click();await page.locator('.skip-link').focus();await page.keyboard.press('Enter');
+   if(!await page.locator('#content').isVisible()||new URL(page.url()).hash!=='#content')throw Error('skip link did not restore the preview');
+   await page.locator('#document-source').click();await page.evaluate(()=>history.back());
+   await page.waitForFunction(()=>location.hash.startsWith('#section-')&&!document.getElementById('content').hidden&&document.getElementById('source-view').hidden);
+   if(name==='disclosure-rich'){
+    if(await page.locator('.document-heading h1').innerText()!=='用户输入长度未校验'||await page.locator('.header-subtitle').innerText()!=='漏洞报告')throw Error('vulnerability report title or name is inconsistent');
+    if(await page.locator('#content > blockquote').first().locator('br').count()!==3)throw Error('vulnerability report metadata collapsed into one paragraph');
+   }
+  }else{
+   const record=page.locator('.finding-record').filter({has:page.locator('summary').filter({hasText:'PoC 与测试记录'})});
+   if(await record.locator('h3').innerText()!=='PoC 与测试记录'||await record.locator('h4').innerText()!=='实际结果'||await record.locator('.code-reader code').textContent()!=='fixture-build\nfixture-run\n')throw Error('PoC Markdown was rendered as one raw code block');
+   await page.locator('.report-toc a[data-finding]').first().click();await page.locator('#finding-collapse').click();
+   await page.evaluate(()=>{location.hash='#overview';});await page.waitForFunction(()=>location.hash==='#overview');
+   await page.fill('#finding-query','no-matching-finding');
+   await page.evaluate(()=>history.back());
+   await page.waitForFunction(()=>location.hash==='#finding-1'&&document.getElementById('finding-1').open&&!document.getElementById('finding-1').hidden&&document.getElementById('finding-query').value==='');
+   if(!await page.locator('.report-toc a[data-finding="finding-1"]').evaluate(el=>el.getAttribute('aria-current')==='true'))throw Error('history navigation lost the current finding');
+  }
   await checkContrast(page,'code',['.code-toolbar button','.code-lines','.hljs-comment','.hljs-keyword','.status-pill']);
   if(name==='report-rich'){await page.locator('#remediation > details > summary').click();await checkContrast(page,'remediation typography',['.remediation-content h5','.remediation-content blockquote','.remediation-content td']);}
   const fontState=await page.evaluate(async()=>{await document.fonts.ready;return [...document.fonts].filter(f=>['Inter','JetBrains Mono'].includes(f.family.replaceAll('"',''))).map(f=>f.status);});if(fontState.filter(s=>s==='loaded').length<2)throw Error('actual packaged body/code fonts did not load');

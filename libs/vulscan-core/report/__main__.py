@@ -101,7 +101,7 @@ def cmd_disclosures(args):
         if finding.get("stage2_verdict") not in DISCLOSURE_ELIGIBLE:
             continue
 
-        print(f"正在为 {finding['short_name']} 生成披露文档…")
+        print(f"正在为 {finding['short_name']} 生成漏洞报告…")
         disclosure, _usage = generate_disclosure(finding, product_name, report_binding)
 
         # Coerce to str, fall back to id, and basename so a null/typed/traversal
@@ -115,9 +115,9 @@ def cmd_disclosures(args):
         count += 1
 
     if count == 0:
-        print("没有可生成披露文档的已确认漏洞。")
+        print("没有符合漏洞报告生成条件的漏洞。")
     else:
-        print(f"已生成 {count} 份披露文档。")
+        print(f"已生成 {count} 份漏洞报告。")
 
 
 def cmd_all(args):
@@ -129,7 +129,7 @@ def cmd_all(args):
 def main():
     parser = argparse.ArgumentParser(
         prog="report",
-        description="根据 911VulScan 扫描结果生成安全报告和漏洞披露文档。"
+        description="根据 911VulScan 扫描结果生成安全报告和漏洞报告。"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
@@ -141,13 +141,13 @@ def main():
     summary_parser.set_defaults(func=cmd_summary)
 
     # disclosures command
-    disclosures_parser = subparsers.add_parser("disclosures", help="生成漏洞披露文档")
+    disclosures_parser = subparsers.add_parser("disclosures", help="生成漏洞报告")
     disclosures_parser.add_argument("input", help="扫描结果 JSON 文件")
     disclosures_parser.add_argument("-o", "--output", help="输出目录（默认：disclosures/）")
     disclosures_parser.set_defaults(func=cmd_disclosures)
 
     # all command
-    all_parser = subparsers.add_parser("all", help="生成全部报告（摘要和披露文档）")
+    all_parser = subparsers.add_parser("all", help="生成全部报告（摘要和漏洞报告）")
     all_parser.add_argument("input", help="扫描结果 JSON 文件")
     all_parser.add_argument("-o", "--output", help="输出目录（默认：output/）")
     all_parser.set_defaults(func=cmd_all)

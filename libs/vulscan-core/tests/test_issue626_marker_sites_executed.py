@@ -316,7 +316,7 @@ def test_analyze_fresh_run_summary_unions_the_tracker_cache_kind(tmp_path,
 
     monkeypatch.setattr(analyzer, "_run_detection", fake_run_detection)
     monkeypatch.setattr(analyzer, "_analyze_fingerprint",
-                        lambda binding, ctx_sha=None: {"key_digest": "sha256:test"})
+                        lambda binding, ctx_sha=None, *, intentional=False: {"key_digest": "sha256:test"})
     try:
         analyzer.run_analysis(str(dataset_path), str(output_dir),
                               registry=_FakeRegistry(), workers=1)

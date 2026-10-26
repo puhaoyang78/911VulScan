@@ -1470,11 +1470,10 @@ def scan_repository(
                 active_results_path = verify_result.verified_results_path
                 attacker_model = getattr(verify_result, "attacker_model", None)
 
-                print(f"  Confirmed: {verify_result.confirmed_vulnerabilities} vulnerabilities",
+                print(f"  复核保留：{verify_result.confirmed_vulnerabilities} 个漏洞",
                       file=sys.stderr)
                 if verify_result.needs_review:
-                    print(f"  Needs manual review: {verify_result.needs_review} "
-                          f"(verification incomplete)", file=sys.stderr)
+                    print(f"  复核未完成：{verify_result.needs_review} 项", file=sys.stderr)
 
                 # Update metrics from verified results.
                 #
@@ -2386,7 +2385,9 @@ def _write_scan_report(
     if result.excluded_languages:
         _coverage_note += " 排除的语言：" + ", ".join(result.excluded_languages) + "。"
     ui_events.emit("coverage.updated", stage="scan",
-                   status="incomplete" if result.degraded or result.metrics.errors else "reported",
+                   status="incomplete" if (result.degraded or result.metrics.errors
+                                            or _worst_status in {"partial", "error", "interrupted"}
+                                            or "failed" in result.skipped_step_reasons.values()) else "reported",
                    message=_coverage_note)
     print(f"[Scan] Aggregate report: {path}", file=sys.stderr)
     return path
@@ -2429,32 +2430,30 @@ def _print_banner(
 def _print_summary(result: ScanResult) -> None:
     """Print the final scan summary."""
     print("=" * 60, file=sys.stderr)
-    print("SCAN COMPLETE", file=sys.stderr)
+    print("扫描完成", file=sys.stderr)
     print("=" * 60, file=sys.stderr)
-    print(f"  Units analyzed: {result.metrics.total}", file=sys.stderr)
-    print(f"  Vulnerable:     {result.metrics.vulnerable}", file=sys.stderr)
-    print(f"  Bypassable:     {result.metrics.bypassable}", file=sys.stderr)
-    print(f"  Protected:      {result.metrics.protected}", file=sys.stderr)
-    print(f"  Safe:           {result.metrics.safe}", file=sys.stderr)
-    print(f"  Inconclusive:   {result.metrics.inconclusive}", file=sys.stderr)
+    print(f"  已分析对象：{result.metrics.total}", file=sys.stderr)
+    print(f"  疑似漏洞：{result.metrics.vulnerable}", file=sys.stderr)
+    print(f"  防护可绕过：{result.metrics.bypassable}", file=sys.stderr)
+    print(f"  已有防护：{result.metrics.protected}", file=sys.stderr)
+    print(f"  未发现漏洞：{result.metrics.safe}", file=sys.stderr)
+    print(f"  无法确定：{result.metrics.inconclusive}", file=sys.stderr)
     # PR #69 F5: surface findings whose Stage-2 verification could not complete
     # so they read distinctly from "safe" in the headline summary.
     if result.metrics.needs_review:
-        print(f"  Needs review:   {result.metrics.needs_review} "
-              f"(verification incomplete)", file=sys.stderr)
-    print(f"  Errors:         {result.metrics.errors}", file=sys.stderr)
+        print(f"  复核未完成：{result.metrics.needs_review} 项", file=sys.stderr)
+    print(f"  分析错误：{result.metrics.errors}", file=sys.stderr)
     if result.metrics.verified:
         # #622: the disagreement split, composed as ONE line — the residual
         # `disagreed` excludes the reclassifications, so the companion must
         # state them (a bare shrinking number is the issue's own failure
         # class) without implying a subset of the figure beside it.
-        line = (f"  Verified:       {result.metrics.verified} "
-                f"({result.metrics.stage2_agreed} agreed, "
-                f"{result.metrics.stage2_disagreed} disagreed to safe")
+        line = (f"  已复核：{result.metrics.verified} 项 "
+                f"（结论一致 {result.metrics.stage2_agreed} 项，"
+                f"复核排除 {result.metrics.stage2_disagreed} 项")
         if result.metrics.stage2_disagreed_protected:
-            line += (f"; {result.metrics.stage2_disagreed_protected} "
-                     f"reclassified protected-by-controls")
-        print(line + ")", file=sys.stderr)
+            line += f"，改为已有防护 {result.metrics.stage2_disagreed_protected} 项"
+        print(line + "）", file=sys.stderr)
     # #786: an unpriced model's under-count must not read as a complete
     # figure on the line the operator actually reads.
     from core.tracking import cost_marker

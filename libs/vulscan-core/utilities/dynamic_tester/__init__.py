@@ -11,6 +11,7 @@ Public API:
     run_dynamic_tests(pipeline_output_path, output_dir) -> list[DynamicTestResult]
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -191,13 +192,7 @@ def run_dynamic_tests(
     # Resolve the dynamic_test phase binding from the registry once and
     # reuse it across every finding. Standalone-invocation path
     # validates upfront; scanner-driven calls trust the scanner's probe.
-    if registry is None:
-        from utilities.llm import probe_registry_or_raise
-
-        cf = load_config_file()
-        registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
-        probe_registry_or_raise(registry)
-    dynamic_test_binding = registry.get("dynamic_test")
+    dynamic_test_binding = None
 
     # Load pipeline output
     pipeline = read_json(pipeline_output_path)
@@ -207,7 +202,7 @@ def run_dynamic_tests(
         normalize_results(pipeline, "findings")
     findings = pipeline.get("findings", [])
     # Enforce the dynamic-testability filter at the execution site. Only
-    # findings asserted vulnerable are worth an active Docker reproduction;
+    # retained and unresolved vulnerability candidates reach Docker reproduction;
     # core/dynamic_tester.py computes the same filter for reporting, but the
     # per-finding loop lives here, so without this every finding (regardless
     # of stage2_verdict) was dynamically tested anyway.
@@ -236,63 +231,6 @@ def run_dynamic_tests(
         print("没有需要动态测试的发现。", file=sys.stderr)
         return []
 
-    # 预检：守护进程、buildx 与代理可达性。放在任何模型调用之前，宿主问题只报
-    # 一次并给出可操作的说明，而不是让每条发现各自耗尽构建预算。
-    from utilities.docker_build.preflight import verify_build_environment
-    from utilities.dynamic_tester.docker_executor import _run_command
-    environment = verify_build_environment(docker_proxy, _run_command,
-                                           language=repo_info["language"])
-    from utilities.docker_build import (
-        available_images, build_proxy_arguments, dockerfile_bases,
-        ensure_base_images, ensure_toolchain, native_toolchain,
-    )
-    from utilities import docker_resources
-    from utilities.dynamic_tester.test_generator import resolve_native_language
-
-    # 已缓存镜像确实进入生成提示词；此前只有消费者，没有赋值入口。
-    repo_info["base_images"] = available_images(_run_command)
-
-    # 依赖镜像：仓库依赖只装一次，每条发现的测试镜像直接复用。构建失败不致命，
-    # 生成器会退回"在 Dockerfile 里自己装"。
-    from utilities.docker_build.dependencies import (
-        ensure_dependency_image,
-        plan_for_repository,
-    )
-    dependency_plan = plan_for_repository(
-        repo_info["language"], repo_path, tuple(repo_info.get("base_images") or ()))
-    if dependency_plan is not None:
-        dependency_image = None
-        with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
-            with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
-                dependency_image = ensure_dependency_image(
-                    dependency_plan, repo_path, _run_command,
-                    proxy_arguments=proxy_args, build_timeout=policy.build_timeout)
-        if dependency_image:
-            repo_info["deps_image"] = dependency_image
-            repo_info["deps_hint"] = dependency_plan.prompt_note
-
-    # C/C++ 共用工具链，必须在任何模型生成调用之前只准备一次。
-    # 这样拉取/工具链构建失败会在阶段入口明确报错，不会逐项消耗
-    # 模型费用或重复等待 1800 秒。
-    if any(resolve_native_language(
-            f["location"]["file"] if isinstance(f.get("location"), dict)
-            and isinstance(f["location"].get("file"), str) else "",
-            repo_info["language"],
-        ) for f in findings):
-        toolchain = native_toolchain("c")
-        with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
-            with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
-                ensure_base_images(dockerfile_bases(toolchain.context), _run_command,
-                                   timeout=policy.pull_timeout)
-                ensure_toolchain(toolchain, _run_command, proxy_arguments=proxy_args,
-                                 timeout=policy.toolchain_timeout)
-
-    print(f"  Docker 构建环境：server {environment['server_version']}，"
-          f"{environment['proxy_description']}", file=sys.stderr)
-    print(f"  Docker 时间预算：构建 {policy.build_timeout}s / "
-          f"容器 {policy.run_timeout}s / 工具链 {policy.toolchain_timeout}s",
-          file=sys.stderr)
-
     if output_dir is None:
         output_dir = os.path.dirname(os.path.abspath(pipeline_output_path))
     os.makedirs(output_dir, exist_ok=True)
@@ -303,11 +241,45 @@ def run_dynamic_tests(
     if checkpoint_path is None:
         checkpoint_path = os.path.join(output_dir, "dynamic_test_checkpoints")
 
-    from core.checkpoint import StepCheckpoint
+    from core.checkpoint import FINGERPRINT_FILE, StepCheckpoint
     checkpoint = StepCheckpoint("dynamic_test", output_dir)
     checkpoint.dir = checkpoint_path
-    if checkpoint.exists:
-        checkpointed = checkpoint.load()
+    current_findings = {str(f.get("id", f"VULN-{i + 1:03d}")): f
+                        for i, f in enumerate(findings)}
+    # VULN-NNN is positional: a changed finding list must not adopt another
+    # function's saved test. Keep old artifacts through the shared archive path.
+    fingerprint = {
+        "schema": 1,
+        "key_digest": hashlib.sha256(json.dumps({
+            "repository": pipeline.get("repository", {}),
+            "findings": findings,
+            "runtimes": repo_info["declared_runtimes"],
+        }, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+    }
+    if checkpoint.exists and not os.path.isfile(os.path.join(checkpoint.dir, FINGERPRINT_FILE)):
+        legacy = checkpoint.load()
+        unmatched = {key for key, value in legacy.items() if key in current_findings
+                     and (not value.get("identity_key")
+                          or value.get("identity_key") != current_findings[key].get("identity_key"))}
+        if unmatched:
+            archived = checkpoint._archive_dir(fingerprint["key_digest"])
+            for key, value in legacy.items():
+                if key not in unmatched:
+                    checkpoint.save(key, value)
+            print(f"旧测试记录有 {len(unmatched)} 项无法匹配当前漏洞，已保存在 {archived}；"
+                  "这些漏洞将重新测试。", file=sys.stderr)
+    checkpoint.sync_identity(fingerprint)
+
+    def current_checkpoints():
+        from utilities.dynamic_tester.models import VALID_STATUSES
+        records = checkpoint.load() if checkpoint.exists else {}
+        return {key: value for key, value in records.items()
+                if key in current_findings and isinstance(value, dict)
+                and value.get("status") in VALID_STATUSES
+                and (value.get("identity_key") or "")
+                == (current_findings[key].get("identity_key") or "")}
+
+    checkpointed = current_checkpoints()
 
     # Count successful vs errored checkpoints. Errored ones are NOT "already
     # done" — they'll be retried with fresh test generation on resume.
@@ -321,6 +293,83 @@ def run_dynamic_tests(
     if errored_ids:
         print(f"准备重试之前出错的 {len(errored_ids)} 项发现",
               file=sys.stderr, flush=True)
+
+    # Saved successful tests need neither a live daemon nor another build.
+    # Inspect only the current queue: unrelated checkpoint rows cannot reduce it.
+    current_ids = {str(f.get("id", f"VULN-{i + 1:03d}")) for i, f in enumerate(findings)}
+    successful_ids.intersection_update(current_ids)
+    pending_tests = []
+    for i, finding in enumerate(findings):
+        location = finding.get("location")
+        filename = location.get("file", "") if isinstance(location, dict) else ""
+        filename = filename if isinstance(filename, str) else ""
+        if (str(finding.get("id", f"VULN-{i + 1:03d}")) not in successful_ids
+                and not should_skip_for_language(filename, repo_info["language"])[0]):
+            pending_tests.append(finding)
+    if pending_tests:
+        # 预检：守护进程、buildx 与代理可达性。放在任何模型调用之前，宿主问题只报
+        # 一次并给出可操作的说明，而不是让每条发现各自耗尽构建预算。
+        from utilities.docker_build.preflight import verify_build_environment
+        from utilities.dynamic_tester.docker_executor import _run_command
+        environment = verify_build_environment(docker_proxy, _run_command,
+                                               language=repo_info["language"])
+        if registry is None:
+            from utilities.llm import probe_registry_or_raise
+            cf = load_config_file()
+            registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
+            probe_registry_or_raise(registry)
+        dynamic_test_binding = registry.get("dynamic_test")
+        from utilities.docker_build import (
+            available_images, build_proxy_arguments, dockerfile_bases,
+            ensure_base_images, ensure_toolchain, native_toolchain,
+        )
+        from utilities import docker_resources
+        from utilities.dynamic_tester.test_generator import resolve_native_language
+
+        # 已缓存镜像确实进入生成提示词；此前只有消费者，没有赋值入口。
+        repo_info["base_images"] = available_images(_run_command)
+
+        # 依赖镜像：仓库依赖只装一次，每条发现的测试镜像直接复用。构建失败不致命，
+        # 生成器会退回"在 Dockerfile 里自己装"。
+        from utilities.docker_build.dependencies import (
+            ensure_dependency_image,
+            plan_for_repository,
+        )
+        dependency_plan = plan_for_repository(
+            repo_info["language"], repo_path, tuple(repo_info.get("base_images") or ()))
+        if dependency_plan is not None:
+            dependency_image = None
+            with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
+                with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
+                    dependency_image = ensure_dependency_image(
+                        dependency_plan, repo_path, _run_command,
+                        proxy_arguments=proxy_args, build_timeout=policy.build_timeout,
+                        pull_timeout=policy.pull_timeout)
+            if dependency_image:
+                repo_info["deps_image"] = dependency_image
+                repo_info["deps_hint"] = dependency_plan.prompt_note
+
+        # C/C++ 共用工具链，必须在任何模型生成调用之前只准备一次。
+        # 这样拉取/工具链构建失败会在阶段入口明确报错，不会逐项消耗
+        # 模型费用或重复等待 1800 秒。
+        if any(resolve_native_language(
+                f["location"]["file"] if isinstance(f.get("location"), dict)
+                and isinstance(f["location"].get("file"), str) else "",
+                repo_info["language"],
+        ) for f in pending_tests):
+            toolchain = native_toolchain("c")
+            with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
+                with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
+                    ensure_base_images(dockerfile_bases(toolchain.context), _run_command,
+                                       timeout=policy.pull_timeout)
+                    ensure_toolchain(toolchain, _run_command, proxy_arguments=proxy_args,
+                                     timeout=policy.toolchain_timeout)
+
+        print(f"  Docker 构建环境：server {environment['server_version']}，"
+              f"{environment['proxy_description']}", file=sys.stderr)
+        print(f"  Docker 时间预算：构建 {policy.build_timeout}s / "
+              f"容器 {policy.run_timeout}s / 工具链 {policy.toolchain_timeout}s",
+              file=sys.stderr)
 
     # Use the global tracker so step_context captures dynamic-test cost in
     # dynamic-test.report.json (same as enhance/analyze/verify).
@@ -475,7 +524,7 @@ def run_dynamic_tests(
                 finding_id=finding_id,
                 # #314: thread the identity through resume so a checkpointed
                 # verdict merges on the same key as a fresh one.
-                identity_key=finding.get("identity_key", ""),
+                identity_key=cp_data.get("identity_key", ""),
                 status=cp_data.get("status", "ERROR"),
                 details=cp_data.get("details", ""),
                 elapsed_seconds=cp_data.get("elapsed_seconds", 0),
@@ -581,7 +630,7 @@ def run_dynamic_tests(
                 # #311: the saved ERROR unit file IS the count — derive the
                 # summary from the unit files so this branch can no longer
                 # write errors: 0 for an errored run.
-                _counts = _summary_counts_from_checkpoints(checkpoint.load())
+                _counts = _summary_counts_from_checkpoints(current_checkpoints())
                 _completed = _counts["completed"]
                 _errors = _counts["errors"]
                 checkpoint.write_summary(total, _completed, _errors, _counts["error_breakdown"],
@@ -715,7 +764,7 @@ def run_dynamic_tests(
         # checkpoint was just saved, so the derivation includes it).
         if checkpoint:
             checkpoint.save(finding_id, result.to_dict())
-            _counts = _summary_counts_from_checkpoints(checkpoint.load())
+            _counts = _summary_counts_from_checkpoints(current_checkpoints())
             _completed = _counts["completed"]
             _errors = _counts["errors"]
             checkpoint.write_summary(total, _completed, _errors, _counts["error_breakdown"], phase="in_progress", usage=_summary_usage())
@@ -772,7 +821,7 @@ def run_dynamic_tests(
     if checkpoint:
         # #311: the final summary derives from the unit files too — the
         # authoritative record, structurally identical to status().
-        _counts = _summary_counts_from_checkpoints(checkpoint.load())
+        _counts = _summary_counts_from_checkpoints(current_checkpoints())
         checkpoint.write_summary(total, _counts["completed"],
                                  _counts["errors"], _counts["error_breakdown"], phase="done",
                                  usage=_summary_usage())

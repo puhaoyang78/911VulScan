@@ -166,10 +166,10 @@ func TestRenderNoBlockOnScopeWithoutEdges(t *testing.T) {
 		if err := render.fn(unmarshalReportData(t, scopeOnlyReportDataJSON), &buf); err != nil {
 			t.Fatalf("%s: %v", render.name, err)
 		}
-		if strings.Contains(buf.String(), "Call edges") {
+		if strings.Contains(buf.String(), "调用关系") {
 			t.Errorf("%s: a SAFE row with scope but NO edges rendered the block "+
 				"(the gate must key on the edges, never the scope): %s",
-				render.name, excerpt(buf.String(), "Call edges"))
+				render.name, excerpt(buf.String(), "调用关系"))
 		}
 	}
 }
@@ -177,15 +177,15 @@ func TestRenderNoBlockOnScopeWithoutEdges(t *testing.T) {
 func assertDelegationEdge(t *testing.T, out string) {
 	t.Helper()
 	for _, want := range []string{
-		"Call edges",
+		"调用关系",
 		"function_local",
 		"app/api.js:_redirect",
 		"app/api.js:_handleSuccess",
-		"no result row (pruned or never analyzed)",
+		"未生成分析结果（已过滤或尚未分析）",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in the rendered finding row — the call edges must reach the HTML consumer: %s",
-				want, excerpt(out, "Call edges"))
+				want, excerpt(out, "调用关系"))
 		}
 	}
 }
@@ -213,9 +213,9 @@ func TestRenderNoDeferralOnNonSafeVerdicts(t *testing.T) {
 		if err := render.fn(data, &buf); err != nil {
 			t.Fatalf("%s: %v", render.name, err)
 		}
-		if strings.Contains(buf.String(), "Call edges") {
+		if strings.Contains(buf.String(), "调用关系") {
 			t.Errorf("%s: a non-safe verdict rendered the call-edges block: %s",
-				render.name, excerpt(buf.String(), "Call edges"))
+				render.name, excerpt(buf.String(), "调用关系"))
 		}
 	}
 }

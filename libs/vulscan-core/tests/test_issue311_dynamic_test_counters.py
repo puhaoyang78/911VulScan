@@ -121,7 +121,7 @@ def test_summary_json_consistent_with_unit_files(tmp_path, monkeypatch):
     assert summary["completed"] == 0, summary
     assert summary["completed"] + summary["errors"] == summary["total_units"]
     # the unit file itself (the identification argument from the issue)
-    unit_files = [f for f in cp_dir.glob("*.json") if f.name != "_summary.json"]
+    unit_files = [f for f in cp_dir.glob("*.json") if not f.name.startswith("_")]
     assert len(unit_files) == 1
     unit = json.loads(unit_files[0].read_text())
     assert unit["status"] == "ERROR"

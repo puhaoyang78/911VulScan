@@ -3,7 +3,7 @@
  'use strict';
  const stages={recovery:'历史恢复',queue:'等待执行',initialize:'初始化',clone:'获取仓库',parse:'代码解析','app-context':'应用上下文',enhance:'上下文增强',analyze:'漏洞分析',verify:'模型复核','build-output':'结果整理','dynamic-test':'动态测试',report:'生成报告',scan:'主扫描',cleanup:'停止与清理',task:'任务结束'};
  const statuses={queued:'排队中',running:'运行中',cancelling:'取消中',cancelled:'已取消',timeout:'已超时',error:'失败',done:'完成',success:'完成',completed:'完成',partial:'部分完成',interrupted:'中断',skipped:'跳过',pending:'待处理',reported:'已记录范围',incomplete:'覆盖不完整'};
- const reviews={pending:'待复核',retained:'复核保留',excluded:'复核排除',inconclusive:'无法确定',error:'复核错误',not_requested:'未请求复核',unreviewed:'未记录复核'};
+ const reviews={pending:'待复核',retained:'复核保留',excluded:'复核排除',inconclusive:'无法确定',error:'复核错误',interrupted:'复核未完成',not_requested:'未请求复核',unreviewed:'未记录复核'};
  const dynamics={pending:'待测试',running:'执行中',reproduced:'已复现',not_reproduced:'未复现',inconclusive:'无法确定',environment_error:'环境错误',error:'测试错误',skipped:'已跳过',blocked:'测试受阻',unknown:'未知',interrupted:'未完成（任务已结束）'};
  const severities={critical:'严重',high:'高危',medium:'中危',low:'低危'};
  const phases={generation:'测试生成',build:'构建',run:'运行',analysis:'结果分析',environment:'执行环境',cleanup:'资源清理',compose_build:'构建',compose_run:'运行'};
@@ -55,13 +55,15 @@
  const date=s=>{if(!s)return '—';const d=new Date(s);return Number.isNaN(+d)?'—':new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d)+' UTC+8';};
  const tone=s=>['error','environment_error','reproduced','critical','high'].includes(s)?'risk':['timeout','partial','inconclusive','blocked','cancelling'].includes(s)?'warn':['running','queued','pending'].includes(s)?'active':['done','success','completed'].includes(s)?'done':'neutral';
  const pill=(label,state)=>{const n=node('span',label||'尚未记录','status-pill');n.dataset.tone=tone(state);return n;};
- let snapshot=null,lastRevision=-1,currentView='overview',cancelPending=false,cancelPromptOpen=false,terminalStatus='',currentFinding='',artifactsChecked=false,lastArtifactState='';
+ let snapshot=null,lastRevision=-1,currentView='overview',cancelPending=false,cancelPromptOpen=false,terminalStatus='',currentFinding='',artifactsChecked=false,artifactsLoading=false,lastArtifactState='';
  let observedActive=false,terminalNoticeShown=false;
- const rowMap=new Map(),rowValues=new WeakMap(),recentRows=new Map(),activityRows=new Map(),activityGroups=new Map();let recentTable=null,detailValue="";
+ const rowMap=new Map(),rowValues=new WeakMap(),detailValues=new WeakMap(),recentRows=new Map(),activityRows=new Map(),activityGroups=new Map();let recentTable=null,detailValue="";
  const views=['overview','findings','activity','terminal','materials'];
  function showView(view){
+  const previousPanel=document.activeElement?.closest('[role=tabpanel]');
   currentView=view;
   views.forEach(name=>{const selected=name===view;const tab=$('tab-'+name);tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;$(name+'-panel').hidden=!selected;});
+  if(previousPanel?.hidden)$('tab-'+view).focus();
   if(view==='terminal'&&$('auto-scroll').checked)jumpLatest();
  }
  views.forEach((view,index)=>{
@@ -84,7 +86,7 @@
  function terminalPresentation(status){
   text('overview-eta','任务已结束');
   if(status==='timeout'){text('error-banner','任务超时。请查看活动和日志中的超时来源及对应时间设置；主扫描可在新建扫描中选择更长的时间上限，补充报告和摘要使用独立时限。已有中间结果保留。');$('error-banner').hidden=false;}
-  if(status==='error'){text('error-banner','任务失败；已保留的发现与材料仍可查看。请从活动记录定位失败阶段，并核对原始日志。');$('error-banner').hidden=false;}
+  if(status==='error'){text('error-banner','任务失败；已保留的分析结果和报告仍可查看。请从活动记录定位失败阶段，并核对原始日志。');$('error-banner').hidden=false;}
  }
  function applySnapshot(data){
   if(data.version!==1||data.job_id!==jobID||data.revision<lastRevision||(terminalStatus&&active(data.status)))return;
@@ -110,7 +112,6 @@
   text('overview-task',stage?.activity||(!active(data.status)?'任务已结束':'等待扫描器状态…'));
   renderStages(data.stages||{});renderFindings(data.findings||{});renderActivity(data.activity||[]);
   if(data.legacy)logs.forEach(r=>applyLegacyRecord(r.raw));
-  if(data.activity_omitted)text('activity-note','仅展示最近 1000 条结构化活动，已省略 '+data.activity_omitted+' 条；请结合保留的原始日志与报告查看。日志达到上限时会注明截断。');
   if(!active(data.status)){
    terminalPresentation(data.status);
    checkArtifacts();
@@ -144,19 +145,37 @@
   const key=$('finding-sort').value,rank={critical:0,high:1,medium:2,low:3};
   Object.values(snapshot?.findings||{}).sort((a,b)=>key==='severity'?(rank[a.severity]??4)-(rank[b.severity]??4)||a.first_seq-b.first_seq:key==='first'?a.first_seq-b.first_seq:key==='title'?findingTitle(a).localeCompare(findingTitle(b),'zh-CN'):String(a[key]||'').localeCompare(String(b[key]||''),'zh-CN')).forEach(f=>$('finding-rows').append(rowMap.get(f.finding_id)));
  });
- function renderFindingDetail(id){const f=snapshot.findings[id];if(!f)return;const signature=JSON.stringify(f);if(signature===detailValue)return;detailValue=signature;text('finding-title',findingTitle(f));const box=$('finding-detail');box.replaceChildren();
-  const status=node('div',undefined,'finding-statuses');status.append(pill(severities[f.severity]||'未评级',f.severity),pill(reviews[f.model_review]||'未记录复核',f.model_review),pill(dynamics[f.dynamic]||'未记录测试',f.dynamic));box.append(status);
-  const location=node('p',[f.file,f.function].filter(Boolean).join(' · ')||'位置未记录','detail-location mono');box.append(location);
-  if(f.cwe||f.cwe_name)box.append(node('p',[f.cwe?'CWE-'+String(f.cwe).replace(/^CWE-/i,''):'',f.cwe_name].filter(Boolean).join(' · '),'meta'));
-  for(const [label,value] of [['问题描述',f.description],['模型复核',f.review_details],['动态测试',f.dynamic_details]]){const section=node('section',undefined,'finding-section');section.append(node('h3',label));const prose=node('div',undefined,'markdown-prose');if(value)VulscanReader.markdown(prose,value);else prose.append(node('p','未提供','hint'));section.append(prose);box.append(section);}
-  if(f.failure_phase)box.append(node('p','失败阶段：'+(phases[f.failure_phase]||f.failure_phase),'feedback'));
-  const record=node('details',undefined,'finding-record');record.append(node('summary','记录信息'),node('p',f.finding_id,'mono'));
-  if(f.report_id)record.append(node('p','报告编号：'+f.report_id));if(f.attempt)record.append(node('p','测试尝试：'+f.attempt));
-  if(f.title&&findingTitle(f)!==f.title)record.append(node('h3','原始标题'),node('p',f.title,'detail-prose'));
-  box.append(record);
+ function renderFindingDetail(id){
+  const f=snapshot.findings[id];if(!f)return;
+  const signature=JSON.stringify(f);if(signature===detailValue)return;detailValue=signature;
+  text('finding-title',findingTitle(f));const box=$('finding-detail');
+  if(box.dataset.finding!==id){box.replaceChildren();box.dataset.finding=id;}
+  const part=(tag,key,cls)=>{let el=box.querySelector('[data-detail="'+key+'"]');if(!el){el=node(tag,undefined,cls);el.dataset.detail=key;box.append(el);}return el;};
+  const status=part('div','status','finding-statuses');
+  status.replaceChildren(pill(severities[f.severity]||'未评级',f.severity),pill(reviews[f.model_review]||'未记录复核',f.model_review),pill(dynamics[f.dynamic]||'未记录测试',f.dynamic));
+  part('p','location','detail-location mono').textContent=[f.file,f.function].filter(Boolean).join(' · ')||'位置未记录';
+  const cwe=part('p','cwe','meta');cwe.hidden=!f.cwe&&!f.cwe_name;cwe.textContent=[f.cwe?'CWE-'+String(f.cwe).replace(/^CWE-/i,''):'',f.cwe_name].filter(Boolean).join(' · ');
+  for(const [label,key] of [['问题描述','description'],['模型复核','review_details'],['动态测试','dynamic_details']]){
+   const section=part('section',key,'finding-section');
+   if(!section.firstElementChild)section.append(node('h3',label),node('div',undefined,'markdown-prose'));
+   const prose=section.lastElementChild,value=f[key]||'';
+   if(detailValues.get(prose)===value)continue;
+   if(prose.contains(document.activeElement)){
+    if(!prose.dataset.pending){prose.dataset.pending='true';prose.addEventListener('focusout',()=>requestAnimationFrame(()=>{delete prose.dataset.pending;if(currentFinding===id&&$('finding-dialog').open){detailValue='';renderFindingDetail(id);}}),{once:true});}
+    continue;
+   }
+   if(value)VulscanReader.markdown(prose,value);else prose.replaceChildren(node('p','未提供','hint'));
+   detailValues.set(prose,value);
+  }
+  const failure=part('p','failure','feedback');failure.hidden=!f.failure_phase;failure.textContent=f.failure_phase?'失败阶段：'+(phases[f.failure_phase]||f.failure_phase):'';
+  const record=part('details','record','finding-record');
+  if(!record.firstElementChild)record.append(node('summary','记录信息'),node('p',f.finding_id,'mono'),node('p'),node('p'),node('h3','原始标题'),node('p',undefined,'detail-prose'));
+  record.children[2].hidden=!f.report_id;record.children[2].textContent='报告编号：'+(f.report_id||'');
+  record.children[3].hidden=!f.attempt;record.children[3].textContent='测试尝试：'+(f.attempt||'');
+  record.children[4].hidden=record.children[5].hidden=!f.title||findingTitle(f)===f.title;record.children[5].textContent=f.title||'';
  }
  function openFinding(id){currentFinding=id;renderFindingDetail(id);$('finding-dialog').showModal();}
- $('finding-close').addEventListener('click',()=>$('finding-dialog').close());$('finding-dialog').addEventListener('close',()=>{currentFinding='';});
+ $('finding-close').addEventListener('click',()=>$('finding-dialog').close());$('finding-dialog').addEventListener('close',()=>{currentFinding='';detailValue='';});
  $('finding-activity').addEventListener('click',()=>{const id=currentFinding;$('finding-dialog').close();$('activity-finding').value=id;filterActivity();showView('activity');});
  function renderActivity(events){
   const live=new Set(events.map(e=>e.seq));activityRows.forEach((row,seq)=>{if(!live.has(seq)){row.remove();activityRows.delete(seq);}});
@@ -165,12 +184,12 @@
    if(!group){group=node('details');group.open=true;group.append(node('summary',stages[key]||key));activityGroups.set(key,group);$('activity-groups').append(group);const opt=node('option',stages[key]||key);opt.value=key;$('activity-stage').append(opt);}
    const row=node('div',undefined,'activity-row');row.dataset.stage=key;row.dataset.finding=e.finding_id||'';const desc=node('div');desc.append(node('span',[e.message||e.type,phases[e.phase]||e.phase].filter(Boolean).join(' · ')),node('br'),pill(e.type==='validation.updated'?dynamics[e.status]||e.status:e.type==='finding.upsert'?reviews[e.status]||'已记录':statuses[e.status]||e.status||'已记录',e.status));if(e.finding_id)desc.append(node('span',' · '+(snapshot.findings[e.finding_id]?.report_id||e.finding_id),'meta'));if(e.attempt)desc.append(node('span',' · 第 '+e.attempt+' 次尝试','meta'));
    row.append(node('time',date(e.time)),desc,node('small','耗时 '+duration(e.duration_seconds)));
-   if(e.details){const full=node('details');full.open=['error','environment_error','partial'].includes(e.status);full.append(node('summary','完整输出 / 依据'),node('pre',e.details));row.append(full);if(full.open)group.open=true;}
+   if(e.details){const full=node('details');full.open=['error','environment_error','partial'].includes(e.status);full.append(node('summary','完整输出'),node('pre',e.details));row.append(full);if(full.open)group.open=true;}
    activityRows.set(e.seq,row);group.append(row);
   });
   filterActivity();
  }
- function filterActivity(){const stage=$('activity-stage').value,q=$('activity-finding').value.trim().toLocaleLowerCase();let visible=0;activityRows.forEach(row=>{const f=snapshot?.findings[row.dataset.finding];row.hidden=!!((stage&&row.dataset.stage!==stage)||(q&&![row.dataset.finding,f?.report_id].join(' ').toLocaleLowerCase().includes(q)));if(!row.hidden)visible++;});activityGroups.forEach(g=>{g.hidden=![...g.querySelectorAll('.activity-row')].some(r=>!r.hidden);});if(!activityRows.size)text('activity-note','尚无结构化活动记录。历史任务可从原始日志排障。');}
+ function filterActivity(){const stage=$('activity-stage').value,q=$('activity-finding').value.trim().toLocaleLowerCase();let visible=0;activityRows.forEach(row=>{const f=snapshot?.findings[row.dataset.finding];row.hidden=!!((stage&&row.dataset.stage!==stage)||(q&&![row.dataset.finding,f?.report_id].join(' ').toLocaleLowerCase().includes(q)));if(!row.hidden)visible++;});activityGroups.forEach(g=>{g.hidden=![...g.querySelectorAll('.activity-row')].some(r=>!r.hidden);});text('activity-note',!activityRows.size?'尚无结构化活动记录。历史任务可从原始日志排障。':!visible?'没有匹配的活动，请调整或清除筛选。':snapshot?.activity_omitted?'仅展示最近 1000 条结构化活动，已省略 '+snapshot.activity_omitted+' 条；完整记录请查看原始日志。':'');}
  ['activity-stage','activity-finding'].forEach(id=>$(id).addEventListener('input',filterActivity));$('clear-activity').addEventListener('click',()=>{$('activity-stage').value='';$('activity-finding').value='';filterActivity();});
  const logs=[],filtered=[];const PAGE=250;let logOffset=0,lastEventID=-1,newLogs=0,paintPending=false;
  function logMatches(record){return (!$('log-query').value||record.raw.toLocaleLowerCase().includes($('log-query').value.toLocaleLowerCase()))&&(!$('log-level').value||record.level===$('log-level').value)&&(!$('log-stage').value||record.stage===$('log-stage').value);}
@@ -192,8 +211,8 @@
   const known=p.total>0&&p.processed<=p.total;$('stage-progress').hidden=!known;if(known){$('stage-progress').max=p.total;$('stage-progress').value=p.processed;}
   text('overview-progress-note','降级显示旧版日志中的阶段处理量；发现及验证数量仍未记录，不计算整体完成率。');
  }
- function appendLine(raw){const record={raw,level:classifyLine(raw),stage:stageFromLog(raw)};logs.push(record);applyLegacyRecord(raw);if(logMatches(record))filtered.push(logs.length-1);if(!$('auto-scroll').checked)newLogs++;queueLogPaint();}
- function refilterLogs(){filtered.length=0;logs.forEach((r,i)=>{if(logMatches(r))filtered.push(i);});logOffset=0;$('auto-scroll').checked=false;paintLog(true);}
+ function appendLine(raw){const record={raw,level:classifyLine(raw),stage:stageFromLog(raw)};logs.push(record);applyLegacyRecord(raw);const matched=logMatches(record);if(matched)filtered.push(logs.length-1);if(matched&&!$('auto-scroll').checked)newLogs++;queueLogPaint();}
+ function refilterLogs(){filtered.length=0;logs.forEach((r,i)=>{if(logMatches(r))filtered.push(i);});logOffset=0;newLogs=0;$('auto-scroll').checked=false;paintLog(true);}
  ['log-query','log-level','log-stage'].forEach(id=>$(id).addEventListener('input',refilterLogs));$('log-clear').addEventListener('click',()=>{['log-query','log-level','log-stage'].forEach(id=>$(id).value='');refilterLogs();});
  $('log-prev').addEventListener('click',()=>{$('auto-scroll').checked=false;logOffset=Math.max(0,logOffset-PAGE);paintLog(true);});$('log-next').addEventListener('click',()=>{$('auto-scroll').checked=false;logOffset=Math.min(Math.max(0,filtered.length-PAGE),logOffset+PAGE);paintLog(true);});
  function jumpLatest(){$('auto-scroll').checked=true;newLogs=0;paintLog(true);}
@@ -210,12 +229,34 @@
   try{const r=await fetch('/scan/'+encodeURIComponent(jobID)+'/cancel',{method:'POST',headers:{'X-CSRF-Token':document.querySelector('meta[name=csrf]').content}});if(!r.ok)throw Error('cancel');const result=await r.json();if(terminalStatus)return;if(active(result.status))showCancelling();else text('cancel-feedback','任务已结束，正在同步最后日志；等待服务端终态。');}
   catch(_){if(terminalStatus)return;cancelPending=false;$('btn-cancel').disabled=false;$('btn-cancel').setAttribute('aria-busy','false');text('btn-cancel','重试取消');text('cancel-feedback','取消请求未确认，扫描可能仍在运行。可重试取消或刷新核实。');VulscanUI.notify('未确认取消结果，可重试取消。',{tone:'error',button:$('btn-cancel'),id:'job-status'});}
  });
- async function checkArtifacts(){
-  if(artifactsChecked)return;artifactsChecked=true;
-  let found=0;for(const [path,id]of[['summary','btn-summary'],['report','btn-report']]){if(snapshot?.artifacts?.[path]===false)continue;try{const r=await fetch('/'+path+'/'+encodeURIComponent(jobID),{method:'HEAD'});if(r.ok){$(id).classList.add('ready');$(id).removeAttribute('aria-disabled');$(id).removeAttribute('tabindex');found++;}}catch(_){text('artifact-note','产物状态暂时无法确认，请刷新重试。');}}
-  text('artifact-note',found?'已生成产物可阅读；未完成任务的结果可能不完整。':'未找到摘要或 HTML 报告；已保存的中间结果和日志仍在任务目录。');
-  try{const r=await fetch('/disclosures/'+encodeURIComponent(jobID));if(!r.ok)throw Error('list');const items=await r.json();$('disclosure-links').replaceChildren();items.forEach(d=>{const a=node('a',d.label||d.name,'btn-disclosure');a.href=d.url;a.target='_blank';a.rel='noopener';$('disclosure-links').append(a);});$('disclosures').hidden=!items.length;}catch(_){text('artifact-note','披露材料暂时无法加载，请刷新重试。');}
+ async function checkArtifacts(manual=false){
+  if(artifactsChecked||artifactsLoading)return;artifactsChecked=true;artifactsLoading=true;
+  const button=$('refresh-artifacts'),errors=[];let found=0;
+  button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='正在刷新…';
+  try{
+   for(const [path,label,ids]of[['summary','扫描摘要',['btn-summary']],['report','扫描报告',['btn-report','download-report']]]){
+    for(const id of ids){$(id).classList.remove('ready');$(id).setAttribute('aria-disabled','true');$(id).tabIndex=-1;$(id).removeAttribute('href');}
+    if(snapshot?.artifacts?.[path]===false)continue;
+    try{
+     const r=await fetch('/'+path+'/'+encodeURIComponent(jobID),{method:'HEAD'});
+     if(r.ok){for(const id of ids){$(id).href=$(id).dataset.href;$(id).classList.add('ready');$(id).removeAttribute('aria-disabled');$(id).removeAttribute('tabindex');}found++;}
+     else if(r.status!==404)errors.push(label);
+    }catch(_){errors.push(label);}
+   }
+   try{
+    const r=await fetch('/disclosures/'+encodeURIComponent(jobID));if(!r.ok)throw Error('list');
+    const items=await r.json();if(!Array.isArray(items))throw Error('list');
+    const links=items.map(d=>{const a=node('a',d.label||d.name,'btn-disclosure');a.href=d.url;a.target='_blank';a.rel='noopener';return a;});
+    $('disclosure-links').replaceChildren(...links);$('disclosures').hidden=!items.length;if(items.length)found++;
+   }catch(_){errors.push('漏洞报告列表');}
+   text('artifact-note',errors.length?errors.join('、')+'暂时无法读取，请刷新重试。':found?(snapshot?.partial?'已有报告可查看；本次扫描包含未完成步骤。':active(snapshot?.status)?'已有报告可查看，扫描仍在进行。':'已生成的报告可阅读和下载。'):'尚未生成可阅读的报告，已保存的结果和日志仍可查看。');
+   if(manual)VulscanUI.notify(errors.length?'部分报告暂时无法读取，请重试。':'报告列表已更新。',{tone:errors.length?'error':'info',button,id:'artifacts'});
+  }finally{
+   artifactsLoading=false;button.disabled=false;button.setAttribute('aria-busy','false');button.textContent='刷新报告';
+   if(!artifactsChecked)checkArtifacts();
+  }
  }
+ $('refresh-artifacts').addEventListener('click',()=>{artifactsChecked=false;checkArtifacts(true);});
  const channels={snapshot:false,logs:false};
  function connection(){const good=channels.snapshot&&channels.logs;const n=$('connection-status');n.dataset.state=good?'connected':'reconnecting';n.textContent=good?'实时更新已连接':'连接中断，正在重连…';}
  function connect(){

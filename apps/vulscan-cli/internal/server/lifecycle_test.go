@@ -13,6 +13,62 @@ import (
 
 func formBody(s string) io.ReadCloser { return io.NopCloser(strings.NewReader(s)) }
 
+func TestRunJobRequiresValidSuccessEnvelopeAndClosesRunnerStages(t *testing.T) {
+	for _, tc := range []struct {
+		name, output, want string
+	}{
+		{"valid", `{"status":"success","data":{}}`, StatusDone},
+		{"empty", "", StatusError},
+		{"null", "null", StatusError},
+		{"malformed", "unfinished JSON", StatusError},
+		{"error", `{"status":"error","errors":["模型调用失败"]}`, StatusError},
+		{"unknown", `{"status":"unexpected"}`, StatusError},
+		{"contradictory", `{"status":"success","errors":["分析未完成"]}`, StatusError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			id := "aabbccddeeff1122"
+			out := filepath.Join(dir, id)
+			if err := os.MkdirAll(out, 0750); err != nil {
+				t.Fatal(err)
+			}
+			// Existing artifacts alone must never prove that this invocation succeeded.
+			for name, data := range map[string]string{"report.html": "saved report", "SUMMARY_REPORT.md": "saved summary", "meta.json": "{}"} {
+				if err := os.WriteFile(filepath.Join(out, name), []byte(data), 0640); err != nil {
+					t.Fatal(err)
+				}
+			}
+			response := filepath.Join(dir, "response.json")
+			if err := os.WriteFile(response, []byte(tc.output), 0600); err != nil {
+				t.Fatal(err)
+			}
+			script := filepath.Join(dir, "python-stub")
+			if err := os.WriteFile(script, []byte("#!/bin/sh\ncat \"$(dirname \"$0\")/response.json\"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s := &Server{outDir: dir, mgr: newManager(dir), pythonPath: script, sem: make(chan struct{}, 1)}
+			j := &Job{ID: id, Repo: dir, Status: StatusQueued, ctx: ctx, Cancel: cancel, done: make(chan struct{}), StartedAt: time.Now()}
+			j.runnerEvent("queue", "queued", "等待执行", "")
+			s.wg.Add(1)
+			s.runJob(j)
+			if j.Status != tc.want {
+				t.Fatalf("status=%s, want=%s; logs=%v", j.Status, tc.want, j.LogBuf)
+			}
+			snapshot := j.snapshotLocked()
+			for _, stage := range []string{"queue", "initialize"} {
+				if snapshot.Stages[stage].Status != "success" {
+					t.Fatalf("runner stage %s was not completed", stage)
+				}
+			}
+			if j.ReportPath == "" || j.SummaryPath == "" {
+				t.Fatal("saved partial artifacts were lost")
+			}
+		})
+	}
+}
+
 // While draining, handleStartScan must 503 without creating disk/manager state
 // and without leaking a WaitGroup count (which would make WaitShutdown hang).
 func TestDrainGateNoOrphanNoLeak(t *testing.T) {

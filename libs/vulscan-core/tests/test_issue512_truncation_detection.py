@@ -137,8 +137,10 @@ def test_summary_empty_and_truncated_names_the_cause(monkeypatch):
     try:
         gen.generate_summary_report({"results": [], "metadata": {}}, b)
         assert False, "the #209 guard should have raised"
-    except RuntimeError as e:
+    except llm_adapter.LLMResponseError as e:
         assert "stop_reason=max_tokens" in str(e)
+        assert e.stop_reason == "max_tokens"
+        assert e.input_tokens > 0 and e.output_tokens > 0
 
 
 def test_disclosure_truncation_banner(monkeypatch):
@@ -151,6 +153,21 @@ def test_disclosure_truncation_banner(monkeypatch):
             "explanation": "e"}
     text, _ = gen.generate_disclosure(vuln, "vuln", b)
     assert "因达到模型输出上限而被截断" in text
+
+
+def test_empty_disclosure_cannot_be_masked_by_saved_code_or_status_header():
+    import report.generator as gen
+    binding = _gen_binding(" \n ", "max_tokens")
+    vulnerability = {"stage2_verdict": "confirmed", "location": {"file": "a.c", "function": "copy"},
+                     "vulnerable_code_section": "## 原始代码\n\n```c\nint copy(void);\n```"}
+    try:
+        gen.generate_disclosure(vulnerability, "fixture", binding)
+    except llm_adapter.LLMResponseError as exc:
+        assert "生成为空" in str(exc)
+        assert exc.stop_reason == "max_tokens"
+        assert exc.input_tokens > 0 and exc.output_tokens > 0
+    else:
+        raise AssertionError("empty narrative was accepted as a complete vulnerability report")
 
 
 # --- the budget-drift pin ----------------------------------------------------

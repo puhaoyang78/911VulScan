@@ -16,8 +16,8 @@ _LABELS = {
     "vulnerable": "存在漏洞", "bypassable": "防护可绕过", "safe": "安全",
     "protected": "已防护", "inconclusive": "无法确定", "insufficient_context": "信息不足",
     # 模型复核（stage 2）
-    "confirmed": "已确认", "agreed": "复核一致", "disagreed": "复核改判",
-    "unverified": "未经复核",
+    "confirmed": "复核保留", "agreed": "复核一致", "disagreed": "复核后更正",
+    "unverified": "复核未完成",
     # 动态测试（容器内复现）
     "not_reproduced": "未复现", "blocked": "测试受阻", "skipped": "已跳过",
     "not tested": "未测试", "test error": "测试错误", "not reproduced": "未复现",
@@ -49,3 +49,13 @@ def display_label(value: object) -> str:
     """返回已知条目的中文说法；未知值原样保留，避免把标识符译坏。"""
     text = str(value) if value is not None else ""
     return _LABELS.get(text.strip().lower(), text)
+
+
+def dynamic_label(value: object) -> str:
+    """Dynamic results have their own meaning, separate from model review."""
+    text = str(value or "").strip()
+    return {
+        "CONFIRMED": "已复现", "NOT_REPRODUCED": "未复现", "BLOCKED": "测试受阻",
+        "INCONCLUSIVE": "无法确定", "ERROR": "测试错误", "SKIPPED": "已跳过",
+        "": "尚未记录动态测试",
+    }.get(text.upper(), "未知动态状态：" + text)

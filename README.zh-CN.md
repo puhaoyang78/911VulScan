@@ -4,7 +4,7 @@
 
 ## 本分支的变化
 
-- 新的中文网页工作台：任务概览、分步扫描表单、模型选择、实时日志、摘要、漏洞报告和披露材料。
+- 新的中文网页工作台：任务概览、分步扫描表单、模型选择、实时日志、摘要、扫描报告和单条漏洞报告。
 - 新安装默认使用 `deepseek-default`，所有七个扫描阶段使用 `deepseek-flash`；可选择 `deepseek-pro` 使用 `deepseek-v4-pro`。
 - 已有显式 `default_llm` 和旧版 Anthropic 配置继续生效，不自动改写用户配置。网页的“DeepSeek（默认）”是本次任务选择；“使用已有模型配置”沿用原配置。
 - 所有扫描模型调用增加简体中文叙述要求。报告标题、状态显示、摘要及修复建议采用中文；JSON 键、枚举、CWE/CVE、代码、文件路径和原始证据保持原样。
@@ -12,7 +12,7 @@
 
 ## 安装与启动
 
-需要 Go 1.26+、Python 3.11+；JavaScript/TypeScript 解析另需 Node.js。动态验证另需已经启动的 Docker Engine。
+需要 Go 1.26+、Python 3.11+ 和 Git；JavaScript/TypeScript 解析另需 Node.js。动态验证另需已经启动的 Docker Engine。补丁检查和阶段重放需要 Git 2.32+，以确保全局配置隔离生效。
 
 ```bash
 git clone --branch 911-dev https://github.com/puhaoyang78/911VulScan.git
@@ -100,7 +100,7 @@ export VULSCAN_PYTHON="$PWD/.venv/bin/python"
 - **可选的构建代理。** 网页扫描表单的“Docker 构建代理 IP / 代理端口”可填任意 HTTP（含 mixed）代理；两项都留空表示不启用代理，沿用 Docker 现有网络。CLI 对应 `--docker-proxy http://IP:端口`。代理只注入构建过程，不进入运行漏洞测试的容器；本机回环代理（如 mihomo 的 `127.0.0.1:7890`）经 Docker bridge 上的临时中继转发，代理地址在多次构建间保持稳定，避免代理端口变化导致依赖层缓存失效。
 - **共享工具链镜像。** C/C++ 的 GCC/G++ 与 libc 头文件预置为 `vulscan/toolchain-c:gcc12-<内容摘要>`，首次构建后由全部发现和后续运行复用；单条发现的构建只复制文件。以前每次发现都要重新下载约 63 MiB 的编译器包，一次超时不会留下任何缓存层，后续发现只能重复同样的下载。
 - **基础镜像按需准备。** `--build-arg` 只影响构建步骤里的 `RUN`，镜像拉取由 Docker 守护进程完成。程序在构建前解析 Dockerfile 的 `FROM`，只对缺失的镜像执行一次 `docker pull`；拉取失败会明确指向守护进程网络并停止模型重试，同时把本机已缓存的镜像告诉生成模型，优先复用。守护进程自身的代理配置（如 systemd drop-in）不在本程序的修改范围内。
-- **按仓库的依赖镜像。** Python/Node/Go 不再让每条发现各自安装一遍依赖：程序按仓库清单（`requirements.txt`、`package.json`/锁文件、`go.mod`/`go.sum`）构建一次 `vulscan/deps-<语言>:<清单摘要>`，测试镜像直接以它为基础，依赖已在标准位置（`/app/node_modules`、`/go/pkg/mod`、site-packages）。清单不变就复用同一镜像；构建失败只告警并退回逐条安装，不影响扫描。
+- **按仓库的依赖镜像。** Python/Node/Go 不再让每条发现各自安装一遍依赖：程序按运行时版本、构建配方和完整依赖清单（`requirements.txt`/静态 `pyproject.toml` 依赖、`package.json`/锁文件、`go.mod`/`go.sum`）构建一次 `vulscan/deps-<语言>:<内容摘要>`，测试镜像直接以它为基础，依赖已在标准位置（`/app/node_modules`、`/go/pkg/mod`、site-packages）。上述输入相同就复用同一镜像。本地路径依赖或依赖项目源码的安装步骤沿用逐条构建；构建超时、镜像网络错误或磁盘空间不足会停止依赖准备并明确报错。
 
 预检在开始生成测试之前检查 Docker 守护进程、buildx 与代理可达性，因此配置错误会立即以一条中文说明失败，而不是让每条发现各自耗尽构建预算。构建预算默认 900 秒、容器执行 120 秒、工具链 1800 秒，可用 `VULSCAN_DOCKER_BUILD_TIMEOUT`、`VULSCAN_DOCKER_RUN_TIMEOUT`、`VULSCAN_DOCKER_TOOLCHAIN_TIMEOUT` 覆盖。构建超时、容器执行超时和宿主环境错误都不再触发模型重试。
 
@@ -119,7 +119,7 @@ export VULSCAN_PYTHON="$PWD/.venv/bin/python"
 
 DVWA、DSVW、OWASP Juice Shop、各种 `damn-vulnerable-*` 把漏洞当作演示功能。旧版会把“这是教学演示”写进应用上下文的免报清单，第 1 阶段再原样读成“不要上报”，结果整份扫描零产出——靶场里真正的 SQL 注入、XSS、命令执行全被当成设计意图。
 
-现在扫描开始时先做一次可复现的判定：读取仓库 README 与目录名，命中“deliberately vulnerable”“靶场”“CTF”等信号就把应用上下文标记为靶场，并记录命中依据（写进 `application_context.json`）。标记为靶场后：
+现在扫描开始时先做一次可复现的判定：读取仓库 README 与目录名，命中“deliberately vulnerable”等明确声明刻意缺陷的信号就把应用上下文标记为靶场，并记录命中依据（写进 `application_context.json`）。普通“教学用途”声明不触发此规则。标记为靶场后：
 
 - 免报清单不再拼接，第 1 阶段提示词改为“这些缺陷仍按真实漏洞上报”，第 2 阶段只判断能否利用，不看作者意图；
 - “只报远程可利用”的收窄对该仓库失效——练习程序的本地缺陷同样是它的考点。

@@ -163,10 +163,10 @@ def test_rejected_and_safe_stay_dropped():
         assert v not in tax.DISCLOSURE_ELIGIBLE
 
 
-def test_dynamic_testable_behavior_preserved():
-    """dynamic_tester consolidation must NOT change its filter set."""
+def test_dynamic_testable_includes_incomplete_reviews():
+    """A review failure must leave a candidate eligible for real testing."""
     tax = _load_taxonomy()
-    assert set(tax.DYNAMIC_TESTABLE) == {"confirmed", "agreed", "vulnerable"}
+    assert set(tax.DYNAMIC_TESTABLE) == {"confirmed", "agreed", "vulnerable", "unverified"}
 
 
 def test_finding_verdict_order_preserved():

@@ -4,6 +4,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,59 @@ import (
 	"github.com/puhaoyang78/911VulScan/apps/vulscan-cli/internal/config"
 	uifiles "github.com/puhaoyang78/911VulScan/apps/vulscan-cli/ui"
 )
+
+func TestHomeDistinguishesCompletedPartialResults(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	tmpl, err := template.ParseFS(uifiles.FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{mgr: newManager(t.TempDir()), tmplIndex: tmpl}
+	j := &Job{ID: "partial-home", Repo: "fixture/partial", Status: StatusDone}
+	j.Snapshot = newJobSnapshot(j, false)
+	j.Snapshot.Partial = true
+	s.mgr.add(j)
+	w := httptest.NewRecorder()
+	s.handleIndex(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "结果不完整") || !strings.Contains(w.Body.String(), `data-status="done"`) {
+		t.Fatalf("partial completion lost from home: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestVulnerabilityReportLinksRoundTripAndUseOriginalFilename(t *testing.T) {
+	root := t.TempDir()
+	const id = "0123456789abcdef"
+	const filename = "DISCLOSURE_01_中文 # 说明.md"
+	const title = "路径检查缺失"
+	dir := filepath.Join(root, id)
+	if err := os.Mkdir(dir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, []byte("# 漏洞报告："+title+"\n\n## 影响\n\n测试内容。"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tmpl, err := template.ParseFS(uifiles.FS, "disclosure.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{outDir: root, mgr: newManager(root), tmplDisclosure: tmpl}
+	s.mgr.add(&Job{ID: id, Status: StatusDone, DisclosurePaths: []string{path, filepath.Join(dir, "missing.md")}})
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1/disclosures/"+id, nil))
+	var reports []disclosureInfo
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &reports) != nil || len(reports) != 1 {
+		t.Fatalf("report list contains missing or unreadable files: %d %s", w.Code, w.Body.String())
+	}
+	if reports[0].Label != title || reports[0].Name != filename || !strings.Contains(reports[0].URL, "%23") {
+		t.Fatalf("report title, filename or escaped URL lost: %+v", reports[0])
+	}
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1"+reports[0].URL, nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "<h1>"+title+"</h1>") || !strings.Contains(w.Body.String(), "filename:'"+filename+"'") {
+		t.Fatalf("report link cannot open the named document: %d %s", w.Code, w.Body.String())
+	}
+}
 
 func isolatedModelConfig(t *testing.T) {
 	t.Helper()
@@ -197,7 +251,7 @@ func TestChineseDashboardUsesSafeDefaultsAndNoSecretValues(t *testing.T) {
 	if !reflect.DeepEqual(budgets, []string{"30m", "1h", "2h", "4h", "8h", "24h"}) || !reflect.DeepEqual(defaults, []string{"2h"}) {
 		t.Fatalf("scan budgets = %v, defaults = %v", budgets, defaults)
 	}
-	for _, want := range []string{"总时间预算", "不是每个阶段的预计耗时", "不含排队", "辅助调用使用独立时间上限"} {
+	for _, want := range []string{"扫描累计用时的上限", "各阶段预计耗时见扫描详情", "不含排队、克隆、补充报告和清理", "辅助调用单独计时"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("scan budget lacks scope explanation %q", want)
 		}
@@ -394,10 +448,17 @@ fi
 		if !strings.Contains(line, "-P -m vulscan "+[]string{"scan", "report-data", "report"}[i]+" ") {
 			t.Errorf("unexpected subprocess order: %s", line)
 		}
-		if !strings.Contains(line, "--llm-config=deepseek-pro") {
+		if i == 1 {
+			if !strings.Contains(line, "--no-llm") || strings.Contains(line, "--llm-config") {
+				t.Errorf("HTML must project saved results without another model call: %s", line)
+			}
+			if !strings.HasSuffix(line, "|||legacy-env-must-stay-separate") {
+				t.Errorf("pure HTML projection received per-job credentials: %s", line)
+			}
+		} else if !strings.Contains(line, "--llm-config=deepseek-pro") {
 			t.Errorf("model profile not forwarded: %s", line)
 		}
-		if !strings.HasSuffix(line, "|fixture-deepseek-key|fixture-deepseek-key|legacy-env-must-stay-separate") {
+		if i != 1 && !strings.HasSuffix(line, "|fixture-deepseek-key|fixture-deepseek-key|legacy-env-must-stay-separate") {
 			t.Errorf("provider credentials cross-wired: %s", line)
 		}
 		if strings.Contains(strings.Split(line, "|")[0], "fixture-deepseek-key") {

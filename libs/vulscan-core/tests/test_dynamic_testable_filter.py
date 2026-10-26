@@ -9,6 +9,7 @@ DYNAMIC_TESTABLE (e.g. "rejected") get a Docker reproduction attempt anyway.
 import json
 import sys
 import types
+import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -48,7 +49,11 @@ def _fake_registry():
     return PhaseRegistry(bindings=bindings, config_name="filter-test-config")
 
 
-def test_non_testable_finding_is_not_dynamically_tested(tmp_path, monkeypatch):
+@pytest.mark.parametrize("eligible", ["confirmed", "agreed", "vulnerable", "unverified"])
+def test_non_testable_finding_is_not_dynamically_tested(tmp_path, monkeypatch, eligible):
+    monkeypatch.setattr("utilities.docker_build.preflight.verify_build_environment",
+                        lambda *a, **kw: {"server_version": "fixture", "proxy_description": "fixture"})
+    monkeypatch.setattr("utilities.docker_build.available_images", lambda runner: [])
     """A finding whose stage2_verdict is not in DYNAMIC_TESTABLE must be
     skipped by the execution loop, not handed to generate_test/Docker."""
     po = {
@@ -63,7 +68,7 @@ def test_non_testable_finding_is_not_dynamically_tested(tmp_path, monkeypatch):
                 "cwe_id": 79,
                 "cwe_name": "XSS",
                 "stage1_verdict": "vulnerable",
-                "stage2_verdict": "confirmed",   # in DYNAMIC_TESTABLE
+                "stage2_verdict": eligible,   # in DYNAMIC_TESTABLE
             },
             {
                 "id": "NOT-TESTABLE-1",

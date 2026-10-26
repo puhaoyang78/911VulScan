@@ -46,9 +46,6 @@ from utilities.llm import (
 load_dotenv()
 
 
-MAX_TOKENS = 4096
-
-
 def load_json(path: str) -> dict:
     """Load JSON file."""
     return read_json(path)
@@ -129,7 +126,7 @@ def _build_header_subtitle(
         units_total = diff.get("units_total_parsed")
         units_str = ""
         if units_in is not None and units_total is not None:
-            units_str = f" · {units_in}/{units_total} 个函数"
+            units_str = f" · {units_in}/{units_total} 项分析对象"
         return (
             f'<span class="incremental-badge">增量扫描</span> '
             f'{repo_name} · {html.escape(base)}..{html.escape(head)}{html.escape(units_str)} · '
@@ -206,8 +203,8 @@ def generate_remediation_guidance(findings: list) -> str:
     if not actionable:
         errored = sum(1 for f in findings if f['verdict'] == 'error')
         if errored:
-            return (f"<p>未确认任何漏洞，但有 {errored} 个函数分析出错，需要人工复核。</p>")
-        return "<p>未发现漏洞或安全问题，所有函数均安全或已有适当防护。</p>"
+            return f"<p>{errored} 项分析未完成，请检查错误记录。</p>"
+        return "<p>当前结果没有可直接生成修复建议的漏洞。</p>"
 
     # Build prompt
     findings_text = ""
@@ -221,14 +218,14 @@ def generate_remediation_guidance(findings: list) -> str:
 
     prompt = CHINESE_REPORT_INSTRUCTION + f"""Analyze these security findings and provide:
 
-1. **Executive Summary**: A brief overview of the security posture (2-3 sentences)
+1. **结果概述**: Summarize the recorded issues and affected code in 2-3 sentences.
 
-2. **Prioritized Action Items**: List specific remediation steps in order of urgency. For each item:
+2. **修复建议**: List specific remediation steps in order of urgency. For each item:
    - What to fix
    - Why it's important
    - How to fix it (concrete steps)
 
-3. **Quick Wins**: Any simple fixes that would immediately improve security
+Use only supported fixes. Omit empty or repetitive sections; do not add marketing-style headings.
 
 Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not include ```html markers.
 
@@ -245,7 +242,9 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
     probe_registry_or_raise(registry)
     binding = registry.get("report")
 
-    return simple_text(binding, prompt, max_tokens=MAX_TOKENS)
+    from report.generator import report_max_tokens
+
+    return simple_text(binding, prompt, max_tokens=report_max_tokens(binding))
 
 
 def _build_pipeline_costs_html(step_reports: list[dict]) -> str:
@@ -703,7 +702,7 @@ def generate_html_report(
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-value">{total_units}</div>
-                <div class="stat-label">函数</div>
+                <div class="stat-label">分析对象</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">{total_files}</div>
@@ -731,7 +730,7 @@ def generate_html_report(
             <h2>结果分布</h2>
             <div class="charts-grid">
                 <div class="chart-container">
-                    <div class="chart-title">按函数</div>
+                    <div class="chart-title">按分析对象</div>
                     <canvas id="unitChart"></canvas>
                 </div>
                 <div class="chart-container">
@@ -757,7 +756,7 @@ def generate_html_report(
                     </tr>
                     <tr>
                         <td><span class="verdict-badge" style="background-color: #6c757d">无法确定</span></td>
-                        <td>无法确定安全状态，建议人工复核风险。</td>
+                        <td>分析未得出明确结论，需进一步检查。</td>
                     </tr>
                     <tr>
                         <td><span class="verdict-badge" style="background-color: #28a745">已防护</span></td>
@@ -781,7 +780,7 @@ def generate_html_report(
         {_build_pipeline_costs_html(step_reports or [])}
 
         <section class="section">
-            <h2>全部漏洞</h2>
+            <h2>分析结果</h2>
             <table>
                 <thead>
                     <tr>

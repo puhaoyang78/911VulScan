@@ -1174,7 +1174,7 @@ def _remediation_for_unrecognized(actionable, error_rows):
     suppressed when unclassifiable rows exist (either the canonical
     error verdict or an off-enum spelling)."""
     if not actionable and not error_rows:
-        return "<p>未发现漏洞或安全问题，所有函数均安全或已有适当防护。</p>"
+        return "<p>当前结果没有可直接生成修复建议的漏洞。</p>"
     if not actionable and error_rows:
         n_err = sum(1 for f in error_rows if f.get("verdict") == "error")
         n_unknown = len(error_rows) - n_err
@@ -1525,10 +1525,12 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
                     cf, resolve_llm_config(cf, getattr(args, "llm_config", None))
                 )
                 tracker = get_global_tracker()
+                from report.generator import report_max_tokens
+                report_binding = registry.get("report")
                 remediation_html = simple_text(
-                    registry.get("report"),
+                    report_binding,
                     prompt,
-                    max_tokens=4096,
+                    max_tokens=report_max_tokens(report_binding),
                     tracker=tracker,
                 )
 
@@ -1562,7 +1564,7 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
             categories = [
                 {"verdict": "vulnerable", "color": "#dc3545", "description": "代码存在可利用的安全漏洞，且缺少有效防护，需要立即修复。"},
                 {"verdict": "bypassable", "color": "#fd7e14", "description": "已有安全控制可在特定条件下被绕过，需要检查并加强防护。"},
-                {"verdict": "inconclusive", "color": "#6c757d", "description": "无法确定安全状态，建议人工复核风险。"},
+                {"verdict": "inconclusive", "color": "#6c757d", "description": "分析未得出明确结论，需进一步检查。"},
                 {"verdict": "protected", "color": "#28a745", "description": "代码涉及潜在危险操作，但已有有效安全控制。"},
                 {"verdict": "safe", "color": "#20c997", "description": "代码不涉及安全敏感操作，或未发现安全风险。"},
             ]

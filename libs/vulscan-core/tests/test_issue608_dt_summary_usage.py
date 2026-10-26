@@ -130,7 +130,7 @@ def test_the_resumed_pass_start_carries_the_restored_spend(tmp_path,
         "repository": {"name": "t", "language": "python"},
         "application_type": "unknown",
         "findings": [{
-            "id": "f1", "name": "X", "short_name": "x",
+            "id": "f1", "identity_key": "stable-f1", "name": "X", "short_name": "x",
             "location": "a.py:1", "cwe_id": 79,
             "stage2_verdict": "confirmed", "vulnerable_code": "eval(x)",
             "attack_vector": "a", "steps_to_reproduce": "s",
@@ -143,7 +143,7 @@ def test_the_resumed_pass_start_carries_the_restored_spend(tmp_path,
     cp.mkdir()
     # the RESTORED attempt's prior spend — injected by the #333 loop
     (cp / "f1.json").write_text(_json.dumps({
-        "id": "f1", "status": "ERROR",
+        "id": "f1", "identity_key": "stable-f1", "status": "ERROR",
         "generation_cost_usd": 0.60,
         "generation_input_tokens": 1000, "generation_output_tokens": 500,
     }))

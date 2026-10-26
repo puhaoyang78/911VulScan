@@ -115,15 +115,28 @@ class TestCheckpointedFindingsAreNotDowngraded:
     discarding exploit evidence.
     """
 
-    def test_skip_check_runs_after_the_checkpoint_lookup(self):
-        import inspect
+    def test_skip_check_runs_after_the_checkpoint_lookup(self, tmp_path, monkeypatch):
+        import json
 
-        from utilities.dynamic_tester import run_dynamic_tests
+        from utilities import dynamic_tester as dynamic
+        from utilities.dynamic_tester.models import DynamicTestResult
 
-        src = inspect.getsource(run_dynamic_tests)
-        cp_idx = src.index("cp_data = checkpointed.get")
-        skip_idx = src.index("should_skip_for_language")
-        assert cp_idx < skip_idx, (
-            "the language-skip check must come AFTER the checkpoint hit, or a "
-            "previously CONFIRMED finding is downgraded to SKIPPED on resume"
-        )
+        pipeline = tmp_path / "pipeline.json"
+        pipeline.write_text(json.dumps({"repository": {"language": "zig"}, "findings": [{
+            "id": "F", "identity_key": "stable", "stage2_verdict": "confirmed",
+            "location": {"file": "app.zig"}}]}))
+        output = tmp_path / "output"
+        checkpoints = output / "dynamic_test_checkpoints"
+        checkpoints.mkdir(parents=True)
+        saved = DynamicTestResult("F", "CONFIRMED", "saved test", identity_key="stable")
+        (checkpoints / "F.json").write_text(json.dumps({**saved.to_dict(), "id": "F"}))
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("restored tests must not call a model or Docker")
+
+        monkeypatch.setattr(dynamic, "generate_test", forbidden)
+        monkeypatch.setattr("utilities.docker_build.preflight.verify_build_environment", forbidden)
+        results = dynamic.run_dynamic_tests(str(pipeline), str(output))
+        assert len(results) == 1
+        assert results[0].status == "CONFIRMED"
+        assert results[0].details == "saved test"

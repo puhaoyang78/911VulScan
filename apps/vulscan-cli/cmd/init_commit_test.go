@@ -22,7 +22,8 @@ func initCommitTestRepo(t *testing.T) (dir, first, head string) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run("init", "-q", "-b", "main")
+	run("init", "-q")
+	run("symbolic-ref", "HEAD", "refs/heads/main")
 	run("config", "user.email", "test@example.com")
 	run("config", "user.name", "Test")
 	run("config", "commit.gpgsign", "false")

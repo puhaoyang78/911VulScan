@@ -23,6 +23,52 @@ GENERATION = {
 }
 
 
+@pytest.mark.parametrize("old_identity,new_identity", [("old", "new"), ("", "")])
+def test_checkpoint_cannot_reassign_confirmation_to_a_different_finding(
+        tmp_path, monkeypatch, old_identity, new_identity):
+    import utilities.dynamic_tester as dynamic
+    from utilities.llm_client import TokenTracker
+
+    output = tmp_path / "output"
+    checkpoints = output / "dynamic_test_checkpoints"
+    checkpoints.mkdir(parents=True)
+    saved = DynamicTestResult("F", "CONFIRMED", "old output", identity_key=old_identity).to_dict()
+    saved["id"] = "F"
+    (checkpoints / "F.json").write_text(json.dumps(saved))
+    pipeline = tmp_path / "pipeline.json"
+    pipeline.write_text(json.dumps({"repository": {"language": "python"}, "findings": [{
+        "id": "F", "identity_key": new_identity, "stage2_verdict": "unverified",
+        "location": {"file": "app.py", "function": "handler"}}]}))
+    generated = []
+    monkeypatch.setattr("utilities.docker_build.preflight.verify_build_environment",
+        lambda *a, **kw: {"server_version": "fixture", "proxy_description": "fixture"})
+    monkeypatch.setattr("utilities.docker_build.available_images", lambda runner: [])
+    monkeypatch.setattr(dynamic, "get_global_tracker", lambda: TokenTracker())
+    monkeypatch.setattr(dynamic, "generate_test",
+        lambda finding, *a: generated.append(finding["id"]) or GENERATION)
+    execution = executor.DockerExecutionResult()
+    execution.stdout = '{"status":"NOT_REPRODUCED","details":"fixture","evidence":[]}'
+    execution.exit_code = 0
+    monkeypatch.setattr(dynamic, "run_single_container", lambda *a, **kw: execution)
+    registry = SimpleNamespace(get=lambda phase: object())
+    results = dynamic.run_dynamic_tests(str(pipeline), str(output), registry=registry)
+    assert generated == ["F"]
+    assert results[0].identity_key == new_identity
+    assert results[0].status == "NOT_REPRODUCED"
+    archived = list(output.glob("dynamic_test_checkpoints.superseded-*/F.json"))
+    assert len(archived) == 1
+    assert json.loads(archived[0].read_text())["status"] == "CONFIRMED"
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("unchanged saved results must not call a model or Docker")
+
+    monkeypatch.setattr(dynamic, "generate_test", forbidden)
+    monkeypatch.setattr("utilities.docker_build.preflight.verify_build_environment", forbidden)
+    restored = dynamic.run_dynamic_tests(str(pipeline), str(output), registry=registry)
+    assert restored[0].identity_key == new_identity
+    assert restored[0].status == "NOT_REPRODUCED"
+
+
 def test_records_actual_staging_and_commands_without_changing_execution(tmp_path, monkeypatch):
     source = tmp_path / "target.py"
     source.write_text("# controlled target\n", encoding="utf-8")
@@ -60,7 +106,7 @@ def test_records_actual_staging_and_commands_without_changing_execution(tmp_path
     assert result.status == "CONFIRMED"
     assert result.to_dict()["reproduction"] == receipt
     rendered = generate_report([result], "synthetic fixture")
-    for value in ("fixture HTTP 200", "--network none", "退出码 0", "非崩溃类漏洞", "proof.py"):
+    for value in ("fixture HTTP 200", "--network none", "Docker 退出码 0", "类型：HTTP 响应", "proof.py"):
         assert value in rendered
 
 
@@ -84,7 +130,7 @@ services:
     assert [c["stage"] for c in result.reproduction["commands"]] == ["build", "start", "observe", "cleanup"]
     assert result.reproduction["commands"][-2]["argv"][-4:] == ["logs", "--no-log-prefix", "-f", "test"]
     rendered = render_reproduction(collect_result({"id": "F"}, generation, result).to_dict())
-    assert "日志命令退出成功不代表容器或目标执行成功" in rendered
+    assert "日志命令的退出码仅表示日志读取状态" in rendered
 
 
 @pytest.mark.parametrize("timed_out,code", [(False, 1), (True, -1)])
@@ -161,7 +207,7 @@ def test_disclosure_inserts_verbatim_receipt_without_sending_it_to_llm():
              "content": "UNIQUE_STAGED_CONTENT"}]}, "evidence": [{"type": "command_output", "content": "UNIQUE_PROOF"}]}
     finding = {"stage2_verdict": "agreed", "dynamic_testing_attempted": block}
     text, _ = generator.generate_disclosure(finding, "fixture", binding)
-    assert text.count("### PoC 构建、触发与验证记录") == 1
+    assert text.count("### PoC 与测试记录") == 1
     assert "UNIQUE_STAGED_CONTENT" in text and "UNIQUE_PROOF" in text
     for value in ("UNIQUE_ARTIFACT", "UNIQUE_STAGED_CONTENT", "UNIQUE_PROOF"):
         assert value not in prompts[0]

@@ -31,6 +31,8 @@ def test_summary_prompt_has_three_tier_verified():
     assert "stage2" in prompt.lower() or "stage 2" in prompt.lower(), (
         "summary prompt must reference stage2_verdict for the middle tier"
     )
+    assert "stage2_verdict" in prompt and "模型复核状态" in prompt
+    assert "dynamic_testing.status" in prompt and "CONFIRMED" in prompt
 
 
 def test_disclosure_footer_is_evidence_tier_aware():

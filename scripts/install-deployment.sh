@@ -6,6 +6,8 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'EOF'
 Usage: scripts/install-deployment.sh [options]
+  --deploy          Ubuntu one-command install, verify and start vulscan.service.
+                    Includes Docker startup and frozen Docker on Ubuntu 20.04.
   (no options)       Install the application using existing dependencies, no sudo.
   --install-deps     Bootstrap missing dependencies on Ubuntu 20.04/22.04/24.04/26.04.
   --deps-only        With --install-deps, skip application installation.
@@ -15,7 +17,7 @@ Usage: scripts/install-deployment.sh [options]
   --start-docker    Also consent to installing/starting local Docker services.
   --allow-unsupported-docker  Opt into frozen Docker packages on Ubuntu 20.04.
   --help            Show this help.
-Python >=3.11 (venv/ensurepip), Go >=1.26, Node 20 or >=22, npm >=7 required.
+Python >=3.11 (venv/ensurepip), Go >=1.26, Node 20 or >=22, npm >=7 and Git >=2.32 required.
 Docker Engine/CLI, Compose v2+ and Buildx are checked separately; Docker is optional
 for application installation. --install-deps includes missing Docker components.
 Docker package scripts may start/enable services; fresh installation therefore
@@ -24,9 +26,10 @@ existing Engine install are user-local only; no --start-docker or frozen-engine
 opt-in is needed. No group/daemon/credential edits.
 EOF
 }
-BOOTSTRAP=0; DEPS_ONLY=0; CHECK=0; DRY=0; YES=0; START_DOCKER=0; ALLOW_OLD_DOCKER=0
+BOOTSTRAP=0; DEPS_ONLY=0; CHECK=0; DRY=0; YES=0; START_DOCKER=0; ALLOW_OLD_DOCKER=0; DEPLOY=0
 for arg in "$@"; do
     case "$arg" in
+        --deploy) DEPLOY=1; BOOTSTRAP=1; YES=1; START_DOCKER=1; ALLOW_OLD_DOCKER=1;;
         --install-deps) BOOTSTRAP=1;; --deps-only) DEPS_ONLY=1;;
         --check) CHECK=1;; --dry-run) DRY=1;; --yes) YES=1;;
         --allow-unsupported-docker) ALLOW_OLD_DOCKER=1;;
@@ -34,13 +37,14 @@ for arg in "$@"; do
         *) fail "Unknown option: $arg (see --help)";;
     esac
 done
+[ "$DEPLOY" = 0 ] || [ "$DEPS_ONLY$CHECK" = 00 ] || fail '--deploy cannot be combined with --deps-only or --check'
 [ "$DEPS_ONLY" = 0 ] || [ "$BOOTSTRAP" = 1 ] || fail '--deps-only requires --install-deps'
 [ "$START_DOCKER" = 0 ] || [ "$BOOTSTRAP" = 1 ] || fail '--start-docker requires --install-deps'
 [ "$YES" = 0 ] || [ "$BOOTSTRAP" = 1 ] || fail '--yes requires --install-deps'
 [ "$ALLOW_OLD_DOCKER" = 0 ] || [ "$BOOTSTRAP" = 1 ] || fail '--allow-unsupported-docker requires --install-deps'
 [ "$CHECK" = 0 ] || [ "$DRY" = 0 ] || fail 'Choose --check or --dry-run, not both'
 # App-local tools never replace /usr/bin or /usr/local binaries.
-PATH="$ROOT/.tools/go/bin:$ROOT/.tools/node/bin:$PATH"
+PATH="$ROOT/.tools/git/bin:$ROOT/.tools/go/bin:$ROOT/.tools/node/bin:$PATH"
 export PATH
 PYTHON=${PYTHON:-python3}
 if [ -x "$ROOT/.tools/python/bin/python3.12" ] && [ "$PYTHON" = python3 ]; then PYTHON="$ROOT/.tools/python/bin/python3.12"; fi
@@ -60,30 +64,34 @@ node_ok() {
     version_at_least "$nv" 20 0 && { [ "$nm" = 20 ] || version_at_least "$nv" 22 0; }
 }
 npm_ok() { npmv=$(npm --version 2>/dev/null) && version_at_least "$npmv" 7 0; }
+git_ok() { gitv=$(git --version 2>/dev/null | awk '{print $3}') && version_at_least "$gitv" 2 32; }
 engine_ok() { dockerd --version >/dev/null 2>&1 && docker --version >/dev/null 2>&1; }
 compose_ok() { docker compose version --short 2>/dev/null | grep -Eq '^v?([2-9]|[1-9][0-9]+)\.'; }
 buildx_ok() { docker buildx version >/dev/null 2>&1; }
 docker_ok() { engine_ok && compose_ok && buildx_ok; }
 package_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed$'; }
-NEED_PY=0; NEED_GO=0; NEED_NODE=0; NEED_DOCKER=0
+NEED_PY=0; NEED_GO=0; NEED_NODE=0; NEED_DOCKER=0; NEED_GIT=0
 NEED_ENGINE=0; NEED_COMPOSE=0; NEED_BUILDX=0; LOCAL_PLUGINS=0
 python_ok || NEED_PY=1
 go_ok || NEED_GO=1
+git_ok || NEED_GIT=1
 if ! node_ok || ! npm_ok; then NEED_NODE=1; fi
+if [ "$DEPLOY" = 1 ] && ! version_at_least "${nv:-0.0}" 22 0; then NEED_NODE=1; fi
 engine_ok || NEED_ENGINE=1
 compose_ok || NEED_COMPOSE=1
 buildx_ok || NEED_BUILDX=1
 if [ "$NEED_ENGINE$NEED_COMPOSE$NEED_BUILDX" != 000 ]; then NEED_DOCKER=1; fi
 if [ "$NEED_ENGINE" = 0 ] && [ "$NEED_COMPOSE$NEED_BUILDX" != 00 ]; then LOCAL_PLUGINS=1; fi
-printf 'Dependencies (0=ready, 1=missing/incompatible): Python=%s Go=%s Node/npm=%s Docker/Compose/Buildx=%s\n' "$NEED_PY" "$NEED_GO" "$NEED_NODE" "$NEED_DOCKER"
+printf 'Dependencies (0=ready, 1=missing/incompatible): Python=%s Go=%s Node/npm=%s Docker/Compose/Buildx=%s Git=%s\n' "$NEED_PY" "$NEED_GO" "$NEED_NODE" "$NEED_DOCKER" "$NEED_GIT"
 printf 'Docker components: Engine/CLI=%s Compose=%s Buildx=%s\n' "$NEED_ENGINE" "$NEED_COMPOSE" "$NEED_BUILDX"
 if [ "$CHECK" = 1 ]; then
-    [ "$NEED_PY$NEED_GO$NEED_NODE$NEED_DOCKER" = 0000 ] || exit 1
+    [ "$NEED_PY$NEED_GO$NEED_NODE$NEED_DOCKER$NEED_GIT" = 00000 ] || exit 1
     printf 'All dependency checks passed (Docker daemon access is checked only at runtime).\n'
     exit 0
 fi
-PACKAGES=''; PLATFORM_ERROR=''; DOCKER_CONFLICT=''; BUILD_PY=0; FOCAL_DOCKER=0
+PACKAGES=''; PLATFORM_ERROR=''; DOCKER_CONFLICT=''; BUILD_PY=0; BUILD_GIT=0; FOCAL_DOCKER=0
 if [ "$BOOTSTRAP" = 1 ]; then
+    [ "$NEED_GIT" = 0 ] || PACKAGES="$PACKAGES git"
     # Parse only data, never execute os-release as shell code. Override is for fixtures.
     OS_RELEASE=${VULSCAN_OS_RELEASE:-/etc/os-release}
     os_id=$(sed -n 's/^ID=//p' "$OS_RELEASE" | tr -d '"')
@@ -95,13 +103,22 @@ if [ "$BOOTSTRAP" = 1 ]; then
         *) PLATFORM_ERROR="Automatic bootstrap supports Ubuntu 20.04/22.04/24.04/26.04 only (found $os_id $os_version). On other systems, install Python >=3.11 with venv separately without changing system Python, plus Go >=1.26, Node 20 or >=22 and npm >=7; then run without --install-deps.";;
     esac
     printf 'Platform: %s %s / %s\n' "$os_id" "$os_version" "$machine"
+    if [ "$DEPLOY" = 1 ]; then
+        for pkg in ca-certificates curl build-essential pkg-config xz-utils; do
+            package_installed "$pkg" || PACKAGES="$PACKAGES $pkg"
+        done
+    fi
+    if [ "$NEED_GIT" = 1 ] && [ "$os_version" = 20.04 ]; then
+        BUILD_GIT=1
+        PACKAGES="$PACKAGES build-essential libcurl4-openssl-dev libexpat1-dev libssl-dev zlib1g-dev xz-utils perl"
+    fi
     if [ "$NEED_PY" = 1 ]; then
         case "$os_version" in
             20.04|22.04) BUILD_PY=1; PACKAGES="$PACKAGES build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev libffi-dev liblzma-dev xz-utils";;
-            *) PACKAGES="$PACKAGES python3 python3-venv";;
+            *) PACKAGES="$PACKAGES python3 python3-venv python3-dev";;
         esac
     fi
-    if [ "$NEED_GO" = 1 ] || [ "$NEED_NODE" = 1 ] || [ "$BUILD_PY" = 1 ] || { [ "$os_version" = 20.04 ] && [ "$NEED_ENGINE" = 1 ]; }; then
+    if [ "$NEED_GO" = 1 ] || [ "$NEED_NODE" = 1 ] || [ "$BUILD_PY" = 1 ] || [ "$BUILD_GIT" = 1 ] || { [ "$os_version" = 20.04 ] && [ "$NEED_ENGINE" = 1 ]; }; then
         PACKAGES="$PACKAGES ca-certificates"
         command -v curl >/dev/null 2>&1 || PACKAGES="$PACKAGES curl"
         command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum is required before bootstrap'
@@ -146,7 +163,8 @@ if [ "$BOOTSTRAP" = 1 ]; then
     fi
     printf '\nBootstrap plan:\n'
     [ -z "$PACKAGES" ] || printf '  sudo apt-get update; apt-get install --no-remove:%s\n  Uses configured APT repositories; ensure these are trusted Ubuntu repositories.\n' "$PACKAGES"
-    [ "$BUILD_PY" = 0 ] || printf '  Build checksum-pinned Python 3.12.15 from python.org into .tools/python (make altinstall; system Python unchanged).\n'
+    [ "$BUILD_PY" = 0 ] || printf '  Build checksum-pinned Python 3.12.16 from python.org into .tools/python (make altinstall; system Python unchanged).\n'
+    [ "$BUILD_GIT" = 0 ] || printf '  Build Git 2.56.x from kernel.org verified source into .tools/git using its supported NO_RUST build; system Git unchanged.\n'
     [ "$FOCAL_DOCKER" = 0 ] || printf '  WARNING: Docker no longer supports Ubuntu 20.04. Optional frozen official Focal packages: Engine/CLI 28.1.1, containerd 1.7.27, Compose 2.35.1, Buildx 0.23.0. No current security support; upgrade Ubuntu recommended. Requires --allow-unsupported-docker.\n'
     [ "$NEED_GO" = 0 ] || printf '  Download latest stable Go 1.26 patch from go.dev/dl metadata; verify SHA-256; install .tools/go.\n'
     [ "$NEED_NODE" = 0 ] || printf '  Download latest Node 22 LTS from nodejs.org; verify vendor SHA-256 manifest; install .tools/node (includes npm).\n'
@@ -154,17 +172,28 @@ if [ "$BOOTSTRAP" = 1 ]; then
     [ "$NEED_ENGINE" = 0 ] || printf '  Docker package scripts may START/ENABLE Docker/containerd services (requires --start-docker).\n'
     [ "$START_DOCKER" = 0 ] || printf '  Start existing/local docker.service using systemctl (no explicit enable or daemon changes).\n'
     printf '  No system Python replacement, Docker group changes, daemon configuration or credential changes.\n'
+    if [ "$DEPLOY" = 1 ]; then
+        printf '  Deployment also enables official Ubuntu universe if required, validates all parsers and Docker build/run, and enables/starts vulscan.service at http://127.0.0.1:8080.\n'
+        printf '  The service runs as the installing user with the Docker supplementary group. API credentials are entered in the web UI or configured separately.\n'
+    fi
 fi
 if [ "$DEPS_ONLY" = 0 ]; then printf 'Application plan: create .venv, pip install core, npm ci parser lock, build bin/vulscan-cli and launcher.\n'; fi
 [ -z "$PLATFORM_ERROR" ] || fail "$PLATFORM_ERROR"
 [ -z "$DOCKER_CONFLICT" ] || fail "$DOCKER_CONFLICT"
 if [ "$BOOTSTRAP" = 1 ]; then
-    for tool in python go node; do
-        case "$tool" in python) needed=$BUILD_PY;; go) needed=$NEED_GO;; node) needed=$NEED_NODE;; esac
+    for tool in python go node git; do
+        case "$tool" in python) needed=$BUILD_PY;; go) needed=$NEED_GO;; node) needed=$NEED_NODE;; git) needed=$BUILD_GIT;; esac
         if [ "$needed" = 1 ] && { [ -e "$ROOT/.tools/$tool" ] || [ -L "$ROOT/.tools/$tool" ]; }; then
             fail "Existing .tools/$tool is incompatible; move it aside manually before retrying (not replaced automatically)."
         fi
     done
+fi
+if [ "$DEPLOY" = 1 ]; then
+    SYSTEMD_DIR=${VULSCAN_SYSTEMD_DIR:-/etc/systemd/system}
+    unit="$SYSTEMD_DIR/vulscan.service"
+    if [ -L "$unit" ] || { [ -e "$unit" ] && ! grep -q '^# Managed by 911VulScan installer$' "$unit"; }; then
+        fail "Existing $unit is not managed by this installer; it was not overwritten."
+    fi
 fi
 [ "$DRY" = 0 ] || exit 0
 if [ "$BOOTSTRAP" = 1 ]; then
@@ -183,37 +212,88 @@ if [ "$BOOTSTRAP" = 1 ]; then
     privileged() {
         if [ "$(id -u)" = 0 ]; then "$@"; else sudo -- "$@"; fi
     }
+    if [ "$DEPLOY" = 1 ]; then
+        command -v systemctl >/dev/null 2>&1 && privileged systemctl show-environment >/dev/null || fail '--deploy requires Ubuntu booted with systemd; use application-only installation in containers.'
+    fi
     if [ -n "$PACKAGES" ]; then
         privileged apt-get update || fail 'APT update failed; check network and trusted Ubuntu repository configuration.'
         for pkg in $PACKAGES; do
             candidate=$(apt-cache policy "$pkg" | awk '/Candidate:/ {print $2}')
+            if [ "$DEPLOY" = 1 ] && { [ -z "$candidate" ] || [ "$candidate" = '(none)' ]; }; then
+                privileged env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-remove --no-install-recommends software-properties-common || fail 'Cannot prepare official Ubuntu universe repository.'
+                privileged add-apt-repository --yes universe || fail 'Cannot enable official Ubuntu universe repository.'
+                privileged apt-get update || fail 'APT update failed after enabling universe.'
+                candidate=$(apt-cache policy "$pkg" | awk '/Candidate:/ {print $2}')
+            fi
             [ -n "$candidate" ] && [ "$candidate" != '(none)' ] || fail "No APT candidate for $pkg. Enable the appropriate official Ubuntu universe/updates repositories yourself, then retry."
         done
         # --no-remove fails rather than silently removing conflicting packages.
         # shellcheck disable=SC2086
-        privileged apt-get install --yes --no-remove --no-install-recommends $PACKAGES || fail 'APT install failed; check package availability/conflicts. No fallback repositories or PPAs are added.'
+        privileged env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install --yes --no-remove --no-install-recommends $PACKAGES || fail 'APT install failed; check package availability/conflicts. No fallback repositories or PPAs are added.'
         if [ "$NEED_PY" = 1 ] && [ "$BUILD_PY" = 0 ]; then PYTHON=/usr/bin/python3; fi
     fi
-    if [ "$NEED_GO" = 1 ] || [ "$NEED_NODE" = 1 ] || [ "$BUILD_PY" = 1 ] || [ "$FOCAL_DOCKER" = 1 ] || [ "$LOCAL_PLUGINS" = 1 ]; then
+    if [ "$NEED_GO" = 1 ] || [ "$NEED_NODE" = 1 ] || [ "$BUILD_PY" = 1 ] || [ "$BUILD_GIT" = 1 ] || [ "$FOCAL_DOCKER" = 1 ] || [ "$LOCAL_PLUGINS" = 1 ]; then
         mkdir -p "$ROOT/.tools"
         TMP=$(mktemp -d "$ROOT/.tools/.bootstrap.XXXXXXXX")
         trap 'rm -rf -- "$TMP"; if [ -n "${PLUGIN_TMP:-}" ]; then rm -f -- "$PLUGIN_TMP"; fi' EXIT
         trap 'exit 129' HUP
         trap 'exit 130' INT
         trap 'exit 143' TERM
-        fetch() { curl --fail --show-error --silent --location --proto '=https' --proto-redir '=https' --connect-timeout 20 --max-time 600 --output "$2" "$1" || fail "Download failed: $1; no alternate mirror used."; }
+        fetch() {
+            fetch_url=$1; fetch_output=$2
+            for fetch_try in 1 2 3; do
+                set --
+                case "$fetch_url" in
+                    *.tar.gz|*.tar.xz|*.deb)
+                        if [ "$fetch_try" -gt 1 ] && [ -s "$fetch_output" ]; then set -- --continue-at -; fi;;
+                esac
+                fetch_code=0
+                fetch_http=$(curl "$@" --fail --show-error --silent --location --proto '=https' --proto-redir '=https' --connect-timeout 20 --max-time 600 --write-out '%{http_code}' --output "$fetch_output" "$fetch_url") || fetch_code=$?
+                case "$fetch_code:$fetch_http" in
+                    0:*) return 0;;
+                    6:*|7:*|18:*|28:*|52:*|55:*|56:*|92:*|22:408|22:429|22:500|22:502|22:503|22:504) :;;
+                    *) fail "Download failed: $fetch_url; curl=$fetch_code HTTP=$fetch_http; no alternate mirror used.";;
+                esac
+                [ "$fetch_try" -lt 3 ] || fail "Download failed after 3 attempts: $fetch_url; no alternate mirror used."
+                printf 'Transient download error; retry %s/3: %s\n' "$fetch_try" "$fetch_url" >&2
+                sleep "$fetch_try"
+            done
+        }
         if [ "$BUILD_PY" = 1 ]; then
             [ ! -e "$ROOT/.tools/python" ] || fail 'Existing .tools/python is incompatible; move it aside manually before retrying.'
-            file=Python-3.12.15.tar.xz
-            fetch "https://www.python.org/ftp/python/3.12.15/$file" "$TMP/$file"
-            (cd "$TMP"; printf '%s  %s\n' c2c4321961fab0fb999d66e0cecf521c2ab3994c7992873ea99e306c1094fd5a "$file" | sha256sum --check --status) || fail 'Python checksum mismatch; source not extracted.'
+            file=Python-3.12.16.tar.xz
+            fetch "https://www.python.org/ftp/python/3.12.16/$file" "$TMP/$file"
+            (cd "$TMP"; printf '%s  %s\n' b5796915dc45ff745cfb4e990a7e7c93d6f546328a102ce31448d69ebc37575c "$file" | sha256sum --check --status) || fail 'Python checksum mismatch; source not extracted.'
             tar -xJf "$TMP/$file" -C "$TMP"
-            (cd "$TMP/Python-3.12.15" && ./configure --prefix="$ROOT/.tools/python" --with-ensurepip=install && make -j2 && make altinstall) || fail 'Python source build failed. No system Python was changed; review build dependencies.'
+            (cd "$TMP/Python-3.12.16" && ./configure --prefix="$ROOT/.tools/python" --with-ensurepip=install && make -j2 && make altinstall) || fail 'Python source build failed. No system Python was changed; review build dependencies.'
             PYTHON="$ROOT/.tools/python/bin/python3.12"
             "$PYTHON" -c 'import ssl, sqlite3, bz2, lzma, ctypes, readline, venv, ensurepip' || fail 'Built Python lacks required standard-library modules.'
             "$PYTHON" -m venv "$TMP/python-venv-check" && "$TMP/python-venv-check/bin/python" -m pip --version || fail 'Built Python could not create a working venv with pip.'
         fi
         python_ok || fail 'Python >=3.11 with venv/ensurepip is still unavailable; check python3-venv or set PYTHON.'
+        if [ "$BUILD_GIT" = 1 ]; then
+            fetch 'https://www.kernel.org/pub/software/scm/git/sha256sums.asc' "$TMP/git-checksums"
+            "$PYTHON" - "$TMP/git-checksums" > "$TMP/git-selection" <<'PYGIT'
+import re, sys
+from pathlib import Path
+versions = []
+for line in Path(sys.argv[1]).read_text().splitlines():
+    m = re.fullmatch(r'([0-9a-f]{64})\s+(git-(2\.(\d+)\.(\d+))\.tar\.xz)', line)
+    # Keep a tested build contract; a new Git minor can add toolchain dependencies.
+    if m and int(m[4]) == 56:
+        versions.append(((int(m[4]), int(m[5])), m[2], m[1]))
+if not versions:
+    sys.exit('No stable Git 2.56.x archive in official kernel.org metadata.')
+_, filename, checksum = max(versions)
+print(filename); print(checksum)
+PYGIT
+            file=$(sed -n '1p' "$TMP/git-selection"); sha=$(sed -n '2p' "$TMP/git-selection")
+            fetch "https://www.kernel.org/pub/software/scm/git/$file" "$TMP/$file"
+            (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Git checksum mismatch; source not extracted.'
+            tar -xJf "$TMP/$file" -C "$TMP"
+            git_source="$TMP/${file%.tar.xz}"
+            (cd "$git_source" && make -j2 prefix="$ROOT/.tools/git" NO_TCLTK=YesPlease NO_GETTEXT=YesPlease NO_RUST=YesPlease all && make prefix="$ROOT/.tools/git" NO_TCLTK=YesPlease NO_GETTEXT=YesPlease NO_RUST=YesPlease install) || fail 'Git source build failed; system Git was not changed.'
+        fi
         if [ "$FOCAL_DOCKER" = 1 ]; then
             # Official retained distribution metadata provides exact .deb SHA-256.
             # No APT repository, trust key, daemon config, or package hold is changed.
@@ -245,7 +325,7 @@ PYDOCKER
                 fetch "https://download.docker.com/linux/ubuntu/$path" "$TMP/debs/$file"
                 (cd "$TMP/debs"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Docker package checksum mismatch; package not installed.'
             done < "$TMP/docker-selection"
-            privileged apt-get install --yes --no-remove --no-install-recommends "$TMP"/debs/*.deb || fail 'Frozen Docker package installation failed; no alternate repositories were added.'
+            privileged env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install --yes --no-remove --no-install-recommends "$TMP"/debs/*.deb || fail 'Frozen Docker package installation failed; no alternate repositories were added.'
         fi
         if [ "$LOCAL_PLUGINS" = 1 ]; then
             # Official standalone CLI plugins; do not touch engine packages or config.json.
@@ -335,31 +415,70 @@ PY
     fi
     python_ok || fail 'Python >=3.11 with venv/ensurepip remains unavailable.'
     hash -r
-    go_ok && node_ok && npm_ok && docker_ok || fail 'Post-install dependency validation failed; review command versions and original package provider.'
+    go_ok && node_ok && npm_ok && git_ok && docker_ok || fail 'Post-install dependency validation failed; review command versions and original package provider.'
     if [ "$START_DOCKER" = 1 ]; then
         command -v systemctl >/dev/null 2>&1 || fail 'systemctl unavailable; start Docker manually for this environment.'
         privileged systemctl start docker || fail 'Docker service could not start; inspect systemctl status docker. No daemon configuration was changed.'
     fi
     printf 'Dependencies ready. Docker access may require administrator-approved setup; no user was added to the root-equivalent docker group.\n'
 fi
+git_ok || fail 'Git >=2.32 is required to scan remote repositories; use --install-deps or install Git manually.'
 [ "$DEPS_ONLY" = 0 ] || exit 0
 python_ok || fail 'Python >=3.11 with venv/ensurepip required; use --install-deps or set PYTHON.'
 go_ok || fail 'Go >=1.26 required; use --install-deps or install Go manually.'
 node_ok && npm_ok || fail 'Node 20 or >=22 and npm >=7 required by parser lock; use --install-deps.'
 "$PYTHON" -m venv "$ROOT/.venv"
-"$ROOT/.venv/bin/python" -m pip install -r "$ROOT/libs/vulscan-core/requirements.txt"
-"$ROOT/.venv/bin/python" -m pip install --no-deps "$ROOT/libs/vulscan-core"
-(cd "$ROOT/libs/vulscan-core/parsers/javascript" && npm ci --engine-strict --no-audit --no-fund)
+# Ubuntu's ensurepip can predate resumable downloads. Upgrade only this venv;
+# bound transient network retries instead of retrying the entire installation.
+"$ROOT/.venv/bin/python" -m pip install --timeout 60 --retries 3 --upgrade 'pip>=25.3'
+"$ROOT/.venv/bin/python" -m pip install --timeout 60 --retries 3 --resume-retries 3 -r "$ROOT/libs/vulscan-core/requirements.txt"
+"$ROOT/.venv/bin/python" -m pip install --timeout 60 --retries 3 --resume-retries 3 --no-deps "$ROOT/libs/vulscan-core"
+"$ROOT/.venv/bin/python" -m pip check
+JS_PARSER_DIR=$("$ROOT/.venv/bin/python" -I -c 'from pathlib import Path; import core; print(Path(core.__file__).resolve().parent.parent / "parsers" / "javascript")')
+[ -n "$JS_PARSER_DIR" ] && [ -f "$JS_PARSER_DIR/package-lock.json" ] || fail 'Installed JavaScript parser lockfile is missing.'
+(cd "$JS_PARSER_DIR" && npm ci --engine-strict --no-audit --no-fund)
 mkdir -p "$ROOT/bin"
 (cd "$ROOT/apps/vulscan-cli" && GOTOOLCHAIN=local go build -buildvcs=false -trimpath -o "$ROOT/bin/vulscan-cli" ./main.go)
 cat > "$ROOT/bin/vulscan" <<'EOF'
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-export PATH="$ROOT/.tools/go/bin:$ROOT/.tools/node/bin:$PATH"
+export PATH="$ROOT/.tools/git/bin:$ROOT/.tools/go/bin:$ROOT/.tools/node/bin:$PATH"
 export VULSCAN_PYTHON="$ROOT/.venv/bin/python"
 export VULSCAN_PORTABLE_ROOT="$ROOT"
 exec "$ROOT/bin/vulscan-cli" "$@"
 EOF
 chmod 755 "$ROOT/bin/vulscan"
 printf '\nInstalled: %s/bin/vulscan\n' "$ROOT"
+if [ "$DEPLOY" = 1 ]; then
+    "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT"
+    service_user=$(id -un)
+    service_home=${HOME:?HOME is required for deployment}
+    unit_tmp=$(mktemp "$ROOT/.vulscan-service.XXXXXXXX")
+    trap 'rm -f -- "$unit_tmp"' EXIT
+    "$ROOT/.venv/bin/python" - "$ROOT" "$service_user" "$service_home" > "$unit_tmp" <<'PYUNIT'
+import sys
+root, user, home = sys.argv[1:]
+def q(value):
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
+def command(*args):
+    return ' '.join(q(arg).replace('$', '$$') for arg in args)
+print('# Managed by 911VulScan installer\n[Unit]\nDescription=911VulScan security scanning workbench\nAfter=network-online.target docker.service\nWants=network-online.target\nRequires=docker.service\nStartLimitIntervalSec=60\nStartLimitBurst=3\n\n[Service]\nType=simple')
+print('User=' + user + '\nSupplementaryGroups=docker')
+print('WorkingDirectory=' + root.replace('%', '%%'))
+print('Environment=' + q('HOME=' + home))
+print('Environment=' + q('PATH=' + root + '/.tools/git/bin:' + root + '/.tools/go/bin:' + root + '/.tools/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'))
+print('ExecStartPre=' + command(root + '/.venv/bin/python', root + '/scripts/check-deployment.py', '--root', root, '--docker'))
+print('ExecStart=' + command(root + '/bin/vulscan', 'serve', '--addr', '127.0.0.1:8080'))
+print('Restart=on-failure\nRestartSec=3\nTimeoutStopSec=120\nKillMode=mixed\nUMask=0027\n\n[Install]\nWantedBy=multi-user.target')
+PYUNIT
+    privileged install -d -m 0755 "$SYSTEMD_DIR"
+    privileged install -m 0644 "$unit_tmp" "$unit"
+    rm -f "$unit_tmp"; trap - EXIT
+    privileged systemctl daemon-reload
+    privileged systemctl enable --now docker
+    privileged systemctl enable --now vulscan || fail 'vulscan.service startup failed; inspect journalctl -u vulscan -n 80.'
+    "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT" --url http://127.0.0.1:8080 || fail 'Service startup check failed; inspect journalctl -u vulscan -n 80.'
+    privileged systemctl is-active --quiet vulscan || fail 'vulscan.service is not running; inspect journalctl -u vulscan -n 80.'
+    printf '\n911VulScan ready: http://127.0.0.1:8080\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nConfigure a model API key in the web form before scanning.\n'
+fi
