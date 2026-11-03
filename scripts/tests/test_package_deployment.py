@@ -25,6 +25,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn(packager.CORE + "core/ui_events.py", names)
         self.assertIn(packager.CLI + "internal/server/events.go", names)
         self.assertIn(packager.CLI + "internal/report/templates/document.gohtml", names)
+        self.assertIn("scripts/install-centos7.sh", names)
+        self.assertIn("scripts/stop-centos7.sh", names)
+        self.assertIn("scripts/centos7.Dockerfile", names)
 
     def test_development_excluded(self):
         for name in [".git/config", "CHANGELOG.md", "libs/vulscan-core/tests/test_scanner.py", "apps/vulscan-cli/cmd/root_test.go", "apps/vulscan-cli/internal/server/testdata/a.html", "libs/vulscan-core/core/__pycache__/a.pyc", "libs/vulscan-core/parsers/javascript/node_modules/a.js", "libs/vulscan-core/utilities/autopatcher/tools/run_cve_batch.py", "config/testdata/detection_parity.json"]:

@@ -48,6 +48,31 @@ Python 源码安装中断后，重新运行原命令即可续装到同一 `.tool
 
 **20.04 的 Docker 已停止上游支持。** `--deploy` 包含安装下文所列官方保留冻结版本的授权，会明确显示版本；需要仍受上游支持的 Docker 时应使用 22.04/24.04。已有完整 Docker 会复用，其他来源的冲突安装不会被强制移除。已有自行配置的 `vulscan.service` 也不会被覆盖。一键模式要求系统实际运行 systemd；容器环境可使用下述仅安装应用的方式。
 
+## CentOS Linux 7 一键部署
+
+CentOS Linux **7 / x86_64** 使用独立入口，适用于 `3.10.0-957.27.6…el7.x86_64` 这类内核（最低 `3.10.0-514.el7`）。在完整源码或部署包的根目录，以 root 执行：
+
+```sh
+bash scripts/install-centos7.sh
+```
+
+此入口保留宿主机系统 Python、OpenSSL、glibc 和内核，应用在 Ubuntu 24.04 用户空间的容器中构建和运行，包含 Python 3.12、Go 1.26、Node 22、Git、Compose 与 Buildx。宿主机缺少 Docker 时，使用 Docker 官方 CentOS 7 归档的 Engine/CLI **26.1.4**、containerd **1.6.33**；RPM 保持签名校验，CentOS 依赖使用官方 7.9.2009 Vault，仅为本次 yum 调用启用源。已有可用 Docker 20.10+ 会复用，其他来源的残缺安装不会被替换或降级。安装不改写 yum 源、Docker daemon 配置和已有凭据。
+
+服务仍为 `vulscan.service`，应用以无登录权限的 `vulscan` 账号运行，配置在 `/var/lib/vulscan/.config/vulscan`，扫描数据在 `/var/lib/vulscan/.vulscan`，Docker 配置在 `/var/lib/vulscan/.docker`。目录挂载在容器内的相同路径，重建镜像保留这些数据。服务通过 Docker 补充组访问 socket，不添加永久组成员、不放宽 socket 权限、不使用特权容器。应用镜像构建及应用容器使用宿主网络以保留回环地址和本机代理行为；安装时已有的 HTTP(S)_PROXY 通过 Docker 专用构建参数传入，不写入运行环境。网页只监听 `127.0.0.1:8080`，远程访问仍使用上文 SSH 转发。
+
+构建先完成再停止旧服务，更新前后均检查有无活动扫描；有任务时保留旧服务。新镜像必须通过非 root 解析器检查与 Docker 构建、Compose 运行、资源清理检查才能安装。启动后核对镜像 ID、进程 UID、实际程序内容与监听端口。systemd 使用 219 兼容语法，开机启动时先按正常停止流程回收本服务遗留的容器，等待删除完成后再运行 Docker 检查和新程序，避免容器名称冲突。其他容器不会因此被停止。
+
+```sh
+bash scripts/install-centos7.sh --dry-run   # 仅查看计划
+bash scripts/install-centos7.sh --check     # 复查已安装服务，不调用模型
+systemctl status vulscan
+journalctl -u vulscan -f
+```
+
+**CentOS 7 已于 2024-06-30 停止维护，以上 Docker 版本也没有当前安全维护。** 容器共享宿主机内核，不能把旧内核变成 Node 22 的官方支持平台；部署会实际运行解析器与 Docker 检查，兼容性失败时明确停止，不关闭 seccomp/SELinux、不升级或自动重启宿主机。若原 Docker 已启用容器 SELinux 隔离，需要管理员先配置访问 socket 的专用策略，脚本会报出原因而不关闭隔离。需要联网下载官方 RPM、Docker Hub 基础镜像、Ubuntu 包及语言依赖；下载失败可修复网络后重试原命令。
+
+来源：[CentOS 7 停止维护说明](https://www.redhat.com/en/topics/linux/centos-linux-eol)、[Docker 官方 EL7 归档](https://download.docker.com/linux/centos/7/x86_64/stable/Packages/)、[Node 22 平台要求](https://github.com/nodejs/node/blob/v22.x/BUILDING.md#platform-list)。
+
 ## 构建与启动（Linux/macOS）
 
 需要 Python 3.11+（含 venv/ensurepip）、Git 2.32+、Go 1.26+、Node.js 20 或 22+、npm 7+，以及依赖下载网络。安装器会用 `npm ci --engine-strict` 按解析器 package-lock 安装 JavaScript/TypeScript 依赖（Node 21 不符合锁文件要求）。Go 扫描会构建 Go 解析器。动态测试另需 Docker。离线部署需提前准备这些依赖；此包不是独立静态二进制。
@@ -69,7 +94,7 @@ sh scripts/install-deployment.sh
 
 ## Ubuntu 自动补齐依赖
 
-默认命令仍是**不使用 sudo 的应用安装**。`--check` 只检查本机依赖，缺失时返回非零；`--dry-run` 只显示计划，不下载、不创建文件、不执行 sudo。自动补齐支持 Ubuntu **20.04、22.04、24.04、26.04** 的 x86_64/arm64；其他发行版/架构请手动准备依赖。
+默认命令仍是**不使用 sudo 的应用安装**。`--check` 只检查本机依赖，缺失时返回非零；`--dry-run` 只显示计划，不下载、不创建文件、不执行 sudo。该入口自动补齐支持 Ubuntu **20.04、22.04、24.04、26.04** 的 x86_64/arm64；CentOS 7 使用上面的独立入口，其他发行版/架构请手动准备依赖。
 
 ```sh
 sh scripts/install-deployment.sh --check
