@@ -85,7 +85,10 @@ if [ "$1" = -m ]; then
 fi
 case "$1" in *check-deployment.py)
   echo "check $*" >> "$TEST_ROOT/actions"
-  case "$*" in *--idle-url*) [ "${ACTIVE_SCANS:-0}" = 0 ] || exit 2;; esac
+  case "$*" in
+    *--idle-url*) [ "${ACTIVE_SCANS:-0}" = 0 ] || exit 2;;
+    *--listen-port*) [ "${PORT_BUSY:-0}" = 0 ] || exit 2;;
+  esac
   exit 0;;
 esac
 exec "$REAL_PYTHON" "$@"
@@ -317,6 +320,72 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertLess(actions.index('--idle-url'), actions.index('service stop vulscan'))
         self.assertLess(actions.index('service stop vulscan'), actions.index('python -m venv'))
         self.assertLess(actions.index('service restart vulscan'), actions.rindex('--service-pid'))
+
+    def test_custom_port_is_used_and_preserved_on_repeat_deploy(self):
+        self.prepare_application()
+        self.assertIn('http://127.0.0.1:8081', self.run_script('--deploy', '--port', '8081'))
+        self.assertIn('--listen-port 8081', self.actions())
+        (self.root / 'actions').write_text('')
+        # The running service owns its port, so a repeated deployment checks
+        # that process and its queue instead of trying to bind the same port.
+        self.env['PORT_BUSY'] = '1'
+        self.run_script('--deploy')
+        actions = self.actions()
+        self.assertIn('--idle-url http://127.0.0.1:8081', actions)
+        self.assertIn('--url http://127.0.0.1:8081', actions)
+        self.assertNotIn('--listen-port', actions)
+        self.assertIn('"--addr" "127.0.0.1:8081"', (self.root / 'systemd/vulscan.service').read_text())
+
+    def test_changing_port_checks_old_queue_and_new_port_before_stop(self):
+        self.prepare_application()
+        self.run_script('--deploy', '--port', '8081')
+        (self.root / 'actions').write_text('')
+        self.run_script('--deploy', '--port', '8082')
+        actions = self.actions()
+        self.assertIn('--idle-url http://127.0.0.1:8081', actions)
+        self.assertIn('--url http://127.0.0.1:8082', actions)
+        self.assertLess(actions.index('--idle-url'), actions.index('--listen-port 8082'))
+        self.assertLess(actions.index('--listen-port 8082'), actions.index('service stop vulscan'))
+
+    def test_occupied_port_refuses_first_deployment_before_installing(self):
+        self.prepare_application()
+        self.env['PORT_BUSY'] = '1'
+        self.assertIn('port is unavailable', self.run_script('--deploy', success=False))
+        self.assertNotIn('service stop', self.actions())
+        self.assertNotIn('python -m venv', self.actions())
+        self.assertNotIn('apt ', self.actions())
+        self.assertFalse((self.root / 'systemd/vulscan.service').exists())
+
+    def test_occupied_replacement_port_preserves_running_service(self):
+        self.prepare_application()
+        self.run_script('--deploy', '--port', '8081')
+        unit = (self.root / 'systemd/vulscan.service').read_text()
+        (self.root / 'actions').write_text('')
+        self.env['PORT_BUSY'] = '1'
+        self.run_script('--deploy', '--port', '8082', success=False)
+        self.assertNotIn('service stop', self.actions())
+        self.assertNotIn('python -m venv', self.actions())
+        self.assertEqual((self.root / 'systemd/vulscan.service').read_text(), unit)
+        self.assertTrue((self.root / 'service-running').exists())
+
+    def test_stopped_service_also_checks_port_before_update(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        (self.root / 'service-running').unlink()
+        (self.root / 'actions').write_text('')
+        self.env['PORT_BUSY'] = '1'
+        self.run_script('--deploy', success=False)
+        self.assertIn('--listen-port 8080', self.actions())
+        self.assertNotIn('service stop', self.actions())
+        self.assertNotIn('python -m venv', self.actions())
+
+    def test_invalid_deployment_ports_have_no_side_effects(self):
+        for value in ('', '0', '1023', '65536', '-1', '8080/abc', '08081', '9' * 100):
+            with self.subTest(port=value):
+                self.run_script('--deploy', '--port', value, success=False)
+        self.run_script('--deploy', '--port', success=False)
+        self.run_script('--port', '8081', success=False)
+        self.assertEqual(self.actions(), '')
 
     def test_active_scans_refuse_update_without_stopping_or_installing(self):
         self.prepare_application()

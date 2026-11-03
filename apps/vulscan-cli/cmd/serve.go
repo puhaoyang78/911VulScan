@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,7 +36,7 @@ func init() {
 	serveCmd.Flags().StringVar(&serveExternalURL, "external-url", os.Getenv("VULSCAN_EXTERNAL_URL"), "浏览器访问地址，例如 https://scan.example.com（反向代理需保留 Host）")
 }
 
-func runServe(_ *cobra.Command, _ []string) {
+func runServe(cmd *cobra.Command, _ []string) {
 	rt, err := ensurePython()
 	if err != nil {
 		output.PrintError(err.Error())
@@ -68,6 +69,11 @@ func runServe(_ *cobra.Command, _ []string) {
 	defer stop()
 
 	url, err := srv.Start(ctx, serveAddr)
+	if err != nil && !cmd.Flags().Changed("addr") && errors.Is(err, syscall.EADDRINUSE) {
+		// Interactive default only: an explicit --addr is a fixed listener,
+		// including the address written into the systemd unit by the installer.
+		url, err = srv.Start(ctx, "127.0.0.1:0")
+	}
 	if err != nil {
 		output.PrintError("启动服务失败：" + err.Error())
 		os.Exit(2)

@@ -17,6 +17,7 @@ Usage: scripts/install-deployment.sh [options]
                     Includes Docker startup and frozen Docker on Ubuntu 20.04.
   --service-user USER  Account for --deploy (default: sudo caller/current user;
                     root-only installation creates the non-login vulscan user).
+  --port PORT       Port for --deploy (1024-65535; default: existing port or 8080).
   (no options)       Install the application using existing dependencies, no sudo.
   --install-deps     Bootstrap missing dependencies on Ubuntu 20.04/22.04/24.04/26.04.
   --deps-only        With --install-deps, skip application installation.
@@ -37,6 +38,7 @@ EOF
 }
 BOOTSTRAP=0; DEPS_ONLY=0; CHECK=0; DRY=0; YES=0; START_DOCKER=0; ALLOW_OLD_DOCKER=0; DEPLOY=0
 SERVICE_USER_OPTION=''
+DEPLOY_PORT=''
 while [ "$#" -gt 0 ]; do
     arg=$1; shift
     case "$arg" in
@@ -46,10 +48,12 @@ while [ "$#" -gt 0 ]; do
         --allow-unsupported-docker) ALLOW_OLD_DOCKER=1;;
         --start-docker) START_DOCKER=1;; --help|-h) usage; exit 0;;
         --service-user) [ "$#" -gt 0 ] || fail '--service-user requires an account name'; SERVICE_USER_OPTION=$1; shift;;
+        --port) [ "$#" -gt 0 ] && [ -n "$1" ] || fail '--port requires a port number'; DEPLOY_PORT=$1; shift;;
         *) fail "Unknown option: $arg (see --help)";;
     esac
 done
 [ -z "$SERVICE_USER_OPTION" ] || [ "$DEPLOY" = 1 ] || fail '--service-user requires --deploy'
+[ -z "$DEPLOY_PORT" ] || [ "$DEPLOY" = 1 ] || fail '--port requires --deploy'
 [ "$SERVICE_USER_OPTION" != root ] || fail '--service-user must name a non-root account'
 [ "$DEPLOY" = 0 ] || [ "$DEPS_ONLY$CHECK" = 00 ] || fail '--deploy cannot be combined with --deps-only or --check'
 [ "$DEPS_ONLY" = 0 ] || [ "$BOOTSTRAP" = 1 ] || fail '--deps-only requires --install-deps'
@@ -80,26 +84,37 @@ if [ "$DEPLOY" = 1 ]; then
         fail "Existing $unit is not managed by this installer; it was not overwritten."
     fi
     previous_user=''
-    previous_home=''; previous_docker_config=''
+    previous_home=''; previous_docker_config=''; previous_port=''
     if [ -f "$unit" ]; then
         previous_user=$(sed -n 's/^User=//p' "$unit")
         previous_env=$(python3 - "$unit" <<'PYENV'
 import shlex, sys
 from pathlib import Path
 values = {}
+port = ""
 for line in Path(sys.argv[1]).read_text().splitlines():
     if line.startswith("Environment="):
         for entry in shlex.split(line[len("Environment="):]):
             name, _, value = entry.partition("=")
             values[name] = value.replace("%%", "%")
+    elif line.startswith("ExecStart="):
+        args = shlex.split(line[len("ExecStart="):])
+        if "--addr" in args:
+            port = args[args.index("--addr") + 1].rpartition(":")[2]
 print(values.get("HOME", ""))
 print(values.get("DOCKER_CONFIG", ""))
+print(port)
 PYENV
         )
         previous_home=$(printf '%s\n' "$previous_env" | sed -n '1p')
         previous_docker_config=$(printf '%s\n' "$previous_env" | sed -n '2p')
+        previous_port=$(printf '%s\n' "$previous_env" | sed -n '3p')
         [ -n "$previous_user" ] && [ -n "$previous_home" ] || fail 'Managed service is missing User/HOME; inspect the existing unit before updating.'
     fi
+    DEPLOY_PORT=${DEPLOY_PORT:-${previous_port:-8080}}
+    case "$DEPLOY_PORT" in ''|*[!0-9]*|0*) fail '--port must be an integer between 1024 and 65535';; esac
+    [ "${#DEPLOY_PORT}" -le 5 ] && [ "$DEPLOY_PORT" -ge 1024 ] && [ "$DEPLOY_PORT" -le 65535 ] || fail '--port must be an integer between 1024 and 65535'
+    SERVICE_URL="http://127.0.0.1:$DEPLOY_PORT"
     service_user=$SERVICE_USER_OPTION
     if [ -z "$service_user" ]; then
         if [ -n "$previous_user" ] && [ "$previous_user" != root ]; then service_user=$previous_user
@@ -271,7 +286,7 @@ if [ "$BOOTSTRAP" = 1 ]; then
     printf '  No system Python replacement, Docker group changes, daemon configuration or credential changes.\n'
     if [ "$DEPLOY" = 1 ]; then
         [ "$CREATE_SERVICE_USER" = 0 ] || printf '  Create non-login service account %s with home %s.\n' "$service_user" "$service_home"
-        printf '  Deployment also enables official Ubuntu universe if required, validates all parsers and Docker build/run, and enables/restarts vulscan.service at http://127.0.0.1:8080.\n'
+        printf '  Deployment also enables official Ubuntu universe if required, validates all parsers and Docker build/run, and enables/restarts vulscan.service at %s.\n' "$SERVICE_URL"
         printf '  Active scans block updates. The service runs as %s with the Docker supplementary group; no socket permissions are changed.\n' "$service_user"
     fi
 fi
@@ -321,10 +336,12 @@ if [ "$BOOTSTRAP" = 1 ]; then
             service_run test -r "$service_home/.vulscan" && service_run test -w "$service_home/.vulscan" && service_run test -x "$service_home/.vulscan" || fail 'Existing scan data is not accessible to the service account; ownership and data were not changed.'
         fi
         stop_service=0
+        service_active=0
         if privileged systemctl is-active --quiet vulscan; then
+            service_active=1
             old_pid=$(privileged systemctl show --property=MainPID --value vulscan)
             old_uid=$(id -u "${previous_user:-$service_user}")
-            privileged python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --idle-url http://127.0.0.1:8080 --service-pid "$old_pid" --service-uid "$old_uid" || fail 'Update stopped before changing application files; wait for active scans or inspect the existing service.'
+            privileged python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --idle-url "http://127.0.0.1:${previous_port:-8080}" --service-pid "$old_pid" --service-uid "$old_uid" || fail 'Update stopped before changing application files; wait for active scans or inspect the existing service.'
             stop_service=1
         elif [ -f "$unit" ]; then
             state=$(privileged systemctl show --property=ActiveState --value vulscan)
@@ -332,6 +349,9 @@ if [ "$BOOTSTRAP" = 1 ]; then
                 inactive|failed) stop_service=1;;
                 *) fail 'Existing service is starting/stopping or has an unknown state; wait for it to settle before deploying. Application files were not changed.';;
             esac
+        fi
+        if [ "$service_active" = 0 ] || [ "$DEPLOY_PORT" != "${previous_port:-8080}" ]; then
+            python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --listen-port "$DEPLOY_PORT" || fail 'Deployment port is unavailable; choose another with --port. Existing services and application files were not changed.'
         fi
         if [ "$stop_service" = 1 ]; then
             printf 'Stopping the old service before updating application dependencies; scan results and settings are retained.\n'
@@ -578,9 +598,9 @@ if [ "$DEPLOY" = 1 ]; then
     service_run "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT"
     unit_tmp=$(mktemp "$ROOT/.vulscan-service.XXXXXXXX")
     trap 'rm -f -- "$unit_tmp"' EXIT
-    "$ROOT/.venv/bin/python" - "$ROOT" "$service_user" "$service_home" "$DOCKER_CONFIG" > "$unit_tmp" <<'PYUNIT'
+    "$ROOT/.venv/bin/python" - "$ROOT" "$service_user" "$service_home" "$DOCKER_CONFIG" "$DEPLOY_PORT" > "$unit_tmp" <<'PYUNIT'
 import sys
-root, user, home, docker_config = sys.argv[1:]
+root, user, home, docker_config, port = sys.argv[1:]
 def q(value):
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
 def command(*args):
@@ -592,7 +612,7 @@ print('Environment=' + q('HOME=' + home))
 print('Environment=' + q('DOCKER_CONFIG=' + docker_config))
 print('Environment=' + q('PATH=' + root + '/.tools/git/bin:' + root + '/.tools/go/bin:' + root + '/.tools/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'))
 print('ExecStartPre=' + command(root + '/.venv/bin/python', root + '/scripts/check-deployment.py', '--root', root, '--docker'))
-print('ExecStart=' + command(root + '/bin/vulscan', 'serve', '--addr', '127.0.0.1:8080'))
+print('ExecStart=' + command(root + '/bin/vulscan', 'serve', '--addr', '127.0.0.1:' + port))
 print('Restart=on-failure\nRestartSec=3\nTimeoutStartSec=300\nTimeoutStopSec=120\nKillMode=mixed\nUMask=0027\n\n[Install]\nWantedBy=multi-user.target')
 PYUNIT
     privileged install -d -m 0755 "$SYSTEMD_DIR"
@@ -606,7 +626,7 @@ PYUNIT
     privileged systemctl reset-failed vulscan
     privileged systemctl restart vulscan || fail 'vulscan.service startup failed; inspect journalctl -u vulscan -n 80.'
     service_pid=$(privileged systemctl show --property=MainPID --value vulscan)
-    privileged "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT" --url http://127.0.0.1:8080 --service-pid "$service_pid" --service-uid "$service_uid" || fail 'Service startup/version check failed; inspect journalctl -u vulscan -n 80.'
+    privileged "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT" --url "$SERVICE_URL" --service-pid "$service_pid" --service-uid "$service_uid" || fail 'Service startup/version check failed; inspect journalctl -u vulscan -n 80.'
     privileged systemctl is-active --quiet vulscan || fail 'vulscan.service is not running; inspect journalctl -u vulscan -n 80.'
-    printf '\n911VulScan ready: http://127.0.0.1:8080\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nNew users: register an account, then configure a personal model in User settings. Existing users can log in directly.\n'
+    printf '\n911VulScan ready: %s\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nNew users: register an account, then configure a personal model in User settings. Existing users can log in directly.\n' "$SERVICE_URL"
 fi

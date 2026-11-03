@@ -121,6 +121,7 @@ def main():
             else:
                 deploy = "env " + environment + installer
                 expected_user = "deployer"
+            service_url = "http://127.0.0.1:" + ("8081" if args.ubuntu == "24.04" else "8080")
 
             if args.ubuntu in ("20.04", "22.04"):
                 # Interrupt real CPython altinstall, then rerun the exact deploy
@@ -136,7 +137,9 @@ def main():
                     remote("sudo test -f /opt/911VulScan/.tools/python/.911vulscan-installing && echo keep | sudo tee /opt/911VulScan/.tools/python/deployment-preserved >/dev/null")
                 finally:
                     capture("interrupted", "cat /home/deployer/interrupted.log")
-            capture("first-deploy", deploy)
+            # Ubuntu 24.04 uses a non-default port. Subsequent deploy commands
+            # intentionally omit --port to verify persistence through reboot.
+            capture("first-deploy", deploy + (" --port 8081" if args.ubuntu == "24.04" else ""))
             if args.ubuntu in ("20.04", "22.04"):
                 remote("grep -qx keep /opt/911VulScan/.tools/python/deployment-preserved && test ! -f /opt/911VulScan/.tools/python/.911vulscan-installing")
 
@@ -146,7 +149,7 @@ def main():
             home = remote(f"getent passwd {expected_user} | cut -d: -f6", capture_output=True).stdout.strip()
             # The same helper must remain available after reboot clears /tmp.
             run('scp', *options, '-P', str(port), str(Path(__file__).with_name('web_session.py').resolve()), 'deployer@127.0.0.1:/var/tmp/vulscan-web-acceptance.py')
-            web_session = f"sudo -n runuser -u {shlex.quote(expected_user)} -- /opt/911VulScan/.venv/bin/python /var/tmp/vulscan-web-acceptance.py --url http://127.0.0.1:8080 --home {shlex.quote(home)}"
+            web_session = f"sudo -n runuser -u {shlex.quote(expected_user)} -- /opt/911VulScan/.venv/bin/python /var/tmp/vulscan-web-acceptance.py --url {service_url} --home {shlex.quote(home)}"
             capture('register-account', web_session + ' --register')
             first_pid = remote("systemctl show -p MainPID --value vulscan", capture_output=True).stdout.strip()
             first_hash = remote("sha256sum /opt/911VulScan/bin/vulscan-cli | cut -d' ' -f1", capture_output=True).stdout.strip()
@@ -178,7 +181,7 @@ def main():
             capture('authenticated-history', web_session + ' --expect-history deployment-history-fixture')
             remote("systemctl is-enabled --quiet vulscan && systemctl is-enabled --quiet docker")
             uid = remote(f"id -u {expected_user}", capture_output=True).stdout.strip()
-            verify = "sudo /opt/911VulScan/.venv/bin/python /opt/911VulScan/scripts/check-deployment.py --root /opt/911VulScan --url http://127.0.0.1:8080 --service-uid " + uid + " --service-pid $(systemctl show -p MainPID --value vulscan)"
+            verify = f"sudo /opt/911VulScan/.venv/bin/python /opt/911VulScan/scripts/check-deployment.py --root /opt/911VulScan --url {service_url} --service-uid " + uid + " --service-pid $(systemctl show -p MainPID --value vulscan)"
             capture("running-version", verify)
             remote("sudo systemctl kill --kill-who=main --signal=SIGKILL vulscan")
             restarted = 'until systemctl is-active --quiet vulscan && test "$(systemctl show -p MainPID --value vulscan)" -gt 0 && test "$(systemctl show -p MainPID --value vulscan)" != ' + second_pid + '; do sleep 2; done'

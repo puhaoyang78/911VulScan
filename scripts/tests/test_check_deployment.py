@@ -2,6 +2,7 @@
 import importlib.util
 import os
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -55,6 +56,17 @@ class DeploymentCheckTests(unittest.TestCase):
         self.body = '<strong id="stat-running">2</strong>'
         with self.assertRaisesRegex(RuntimeError, "仍有运行"):
             checker.check_idle(self.url, self.home)
+
+    def test_port_preflight_rejects_other_listener(self):
+        with self.assertRaisesRegex(RuntimeError, "--port"):
+            checker.check_port(self.server.server_port)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        checker.check_port(port)
+        for port in (0, 1023, 65536):
+            with self.subTest(port=port), self.assertRaises(ValueError):
+                checker.check_port(port)
 
     def test_unknown_and_duplicate_counts_cannot_authorize_update(self):
         for body in ('', '<strong id="stat-running">—</strong>', self.body * 2):

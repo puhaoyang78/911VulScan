@@ -646,8 +646,8 @@ func hostIsLoopback(host string) bool {
 	return false
 }
 
-// Start begins serving. An explicitly requested LAN listener must bind as
-// requested; only loopback mode may fall back to another local port.
+// Start binds the requested address. In particular, managed services must not
+// silently change ports when another application already owns their listener.
 func (s *Server) Start(ctx context.Context, addr string) (string, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -661,10 +661,6 @@ func (s *Server) Start(ctx context.Context, addr string) (string, error) {
 		network = "tcp4" // Keep the LAN listener IPv4-only and visible in /proc/net/tcp.
 	}
 	ln, err := net.Listen(network, addr)
-	if err != nil && hostIsLoopback(host) {
-		// Only loopback mode may fall back to another local port.
-		ln, err = net.Listen("tcp", "127.0.0.1:0")
-	}
 	if err != nil {
 		return "", fmt.Errorf("listen: %w", err)
 	}

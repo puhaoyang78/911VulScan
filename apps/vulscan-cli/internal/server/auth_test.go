@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -109,6 +112,36 @@ func TestExplicitLANListenerUsesIPv4(t *testing.T) {
 	}
 	if !strings.HasPrefix(addr, "http://0.0.0.0:") {
 		t.Errorf("LAN listener address = %q, want IPv4 wildcard", addr)
+	}
+	cancel()
+	srv.WaitShutdown()
+}
+
+func TestRequestedListenerNeverChangesOccupiedPort(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	srv := &Server{mgr: newManager(t.TempDir()), shutdownDone: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	url, err := srv.Start(ctx, listener.Addr().String())
+	if err == nil {
+		cancel()
+		srv.WaitShutdown()
+		t.Fatalf("occupied address silently changed to %q", url)
+	}
+	if url != "" || !errors.Is(err, syscall.EADDRINUSE) {
+		t.Fatalf("occupied address: url=%q err=%v", url, err)
+	}
+	// A failed bind must leave the same server usable for an explicit retry.
+	url, err = srv.Start(ctx, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(url, "http://127.0.0.1:") {
+		t.Errorf("retry listener = %q", url)
 	}
 	cancel()
 	srv.WaitShutdown()

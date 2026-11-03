@@ -102,6 +102,18 @@ def check_docker() -> None:
     print("Docker 构建、Compose 执行与资源清理：正常", flush=True)
 
 
+def check_port(port: int) -> None:
+    if not 1024 <= port <= 65535:
+        raise ValueError("部署端口必须在 1024–65535 之间。")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            listener.bind(("127.0.0.1", port))
+        except OSError as exc:
+            raise RuntimeError(f"端口 {port} 无法使用：{exc}；请用 --port 指定空闲端口，现有服务未停止。") from exc
+    print(f"部署端口：127.0.0.1:{port}，可用。", flush=True)
+
+
 def check_url(url: str) -> None:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + 60
@@ -183,8 +195,7 @@ def check_service(root: Path, pid: int, uid: int, url: str, proc: Path = Path("/
     expected = digest(root / "bin/vulscan-cli")
     if digest(process / "exe") != expected:
         raise RuntimeError("运行进程仍是旧程序，部署未通过版本校验。")
-    # A service can fall back to a different port when 8080 is occupied. Prove
-    # that the HTTP listener belongs to this MainPID, not an unrelated old UI.
+    # Prove that the HTTP listener belongs to this MainPID, not another service.
     parsed = urllib.parse.urlsplit(url)
     address = socket.inet_aton(parsed.hostname)[::-1].hex().upper()
     local_addrs = {f"{address}:{parsed.port:04X}", f"00000000:{parsed.port:04X}"}
@@ -207,12 +218,15 @@ def main() -> None:
     mode.add_argument("--docker", action="store_true")
     mode.add_argument("--url")
     mode.add_argument("--idle-url")
+    mode.add_argument("--listen-port", type=int)
     parser.add_argument("--service-pid", type=int)
     parser.add_argument("--service-uid", type=int)
     args = parser.parse_args()
     root = args.root.resolve()
     os.environ["PATH"] = os.pathsep.join(str(root / ".tools" / tool / "bin") for tool in ("git", "go", "node")) + os.pathsep + os.environ["PATH"]
-    if args.url:
+    if args.listen_port is not None:
+        check_port(args.listen_port)
+    elif args.url:
         check_url(args.url)
         if args.service_pid is not None:
             if args.service_uid is None:
