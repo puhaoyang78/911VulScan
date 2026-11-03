@@ -150,7 +150,13 @@ def test_timeout_stops_cli_and_descendant_producer(tmp_path, monkeypatch, manage
     out, err, status, timed = executor._run_command([sys.executable, "-c", code], 0.3)
     assert timed and status == -1
     pid = int(out.strip())
-    assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    # The OS may reap the child between checking its PID and reading its status.
+    # A missing process and a zombie are the same stopped states as before.
+    try:
+        child_status = psutil.Process(pid).status()
+    except psutil.NoSuchProcess:
+        child_status = None
+    assert child_status in (None, psutil.STATUS_ZOMBIE)
     assert not marker.exists()
     assert not list(registry.glob("*.producer.json"))
 
