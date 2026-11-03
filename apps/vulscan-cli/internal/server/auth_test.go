@@ -7,11 +7,11 @@ import (
 )
 
 // The securityHeaders middleware must reject a non-loopback Host on EVERY route
-// (DNS-rebinding guard), while a loopback Host passes through.
+// (DNS-rebinding guard), while loopback and private IP Hosts pass through.
 func TestMiddlewareRejectsRebindingHost(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	h := securityHeaders(ok)
-	for _, host := range []string{"evil.example.com", "evil.com:8080", "attacker.test", "127.0.0.1.evil.com:8080"} {
+	for _, host := range []string{"evil.example.com", "evil.com:8080", "attacker.test", "127.0.0.1.evil.com:8080", "10.10.249.210.evil.com:8080", "8.8.8.8:8080", "0.0.0.0:8080"} {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Host = host
 		rec := httptest.NewRecorder()
@@ -20,9 +20,8 @@ func TestMiddlewareRejectsRebindingHost(t *testing.T) {
 			t.Errorf("foreign Host %q = %d, want 403 (rebinding read not closed)", host, rec.Code)
 		}
 	}
-	// Any loopback bind must be accepted (not just 127.0.0.1), or the guard would
-	// 403 a server bound to 127.0.0.2; foreign names above still reject.
-	for _, host := range []string{"127.0.0.1:8080", "localhost:8080", "LOCALHOST:8080", "[::1]:8080", "127.0.0.2:8080", "127.0.0.9:8080"} {
+	// Loopback and private IPv4 literals pass; DNS names and public IPs do not.
+	for _, host := range []string{"127.0.0.1:8080", "localhost:8080", "LOCALHOST:8080", "[::1]:8080", "127.0.0.2:8080", "127.0.0.9:8080", "10.10.249.210:8080", "192.168.1.30:8080", "172.16.0.2:8080"} {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Host = host
 		rec := httptest.NewRecorder()
@@ -58,6 +57,15 @@ func TestSameOriginOKRejections(t *testing.T) {
 	}
 	if !sameOriginOK(mk("127.0.0.1:8080", "same-origin", "http://127.0.0.1:8080")) {
 		t.Error("legitimate same-origin request wrongly rejected")
+	}
+	if !sameOriginOK(mk("10.10.249.210:8080", "same-origin", "http://10.10.249.210:8080")) {
+		t.Error("LAN same-origin request wrongly rejected")
+	}
+	if sameOriginOK(mk("10.10.249.210:8080", "cross-site", "")) {
+		t.Error("cross-site LAN request accepted")
+	}
+	if sameOriginOK(mk("10.10.249.210:8080", "", "http://10.10.249.211:8080")) {
+		t.Error("foreign LAN Origin accepted")
 	}
 }
 
