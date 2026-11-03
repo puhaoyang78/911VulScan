@@ -531,11 +531,10 @@ func (s *Server) reportCSP(h http.HandlerFunc) http.HandlerFunc {
 // is inert on non-documents (JS/JSON/SSE — CSP governs document loads).
 func securityHeaders(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// DNS-rebinding guard for EVERY route (GET included): a non-loopback Host
-		// means the request was aimed at another name rebound to 127.0.0.1, so a
-		// remote page can't read the index (CSRF token + job list) or any report.
-		if !hostHeaderIsLoopback(r) {
-			http.Error(w, "无效的主机地址：仅支持本机访问", http.StatusForbidden)
+		// DNS-rebinding guard for EVERY route, including reads: only
+		// loopback and literal private IPv4 addresses can access the UI.
+		if !hostHeaderIsLocalNetwork(r) {
+			http.Error(w, "无效的主机地址：仅支持本机或内网 IP 访问", http.StatusForbidden)
 			return
 		}
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -605,23 +604,23 @@ func hostIsLoopback(host string) bool {
 	return false
 }
 
-// Start binds the server and begins serving.  Tries addr first, then falls
-// back to any available port on 127.0.0.1.  Returns the bound URL.
+// Start begins serving. An explicitly requested LAN listener must bind as
+// requested; only loopback mode may fall back to another local port.
 func (s *Server) Start(ctx context.Context, addr string) (string, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
 	}
-	if !hostIsLoopback(host) {
-		return "", fmt.Errorf("refusing to bind %q: the 911VulScan web UI is local-only and must listen on a loopback address (127.0.0.1 or localhost)", addr)
+	if !hostIsLoopback(host) && host != "0.0.0.0" {
+		return "", fmt.Errorf("refusing to bind %q: use a loopback address or explicitly bind 0.0.0.0 for LAN access", addr)
 	}
 	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		// Fall back to OS-assigned port.
+	if err != nil && hostIsLoopback(host) {
+		// Only loopback mode may fall back to another local port.
 		ln, err = net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return "", fmt.Errorf("listen: %w", err)
-		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("listen: %w", err)
 	}
 	url := "http://" + ln.Addr().String()
 	srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
@@ -761,12 +760,10 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// hostHeaderIsLoopback reports whether the request's Host is a loopback name.
-// The server binds loopback only, so a non-loopback Host means the request was
-// aimed at some other name that DNS-rebound to 127.0.0.1 — reject it. Enforced
-// for EVERY route by the securityHeaders middleware (not just mutations), so a
-// rebinding page can't read the index/reports/logs either.
-func hostHeaderIsLoopback(r *http.Request) bool {
+// hostHeaderIsLocalNetwork accepts loopback or an RFC 1918 IPv4 literal.
+// Hostnames and public addresses remain rejected to prevent DNS rebinding
+// from exposing the index, CSRF token, reports, or logs.
+func hostHeaderIsLocalNetwork(r *http.Request) bool {
 	h, _, err := net.SplitHostPort(r.Host)
 	if err != nil {
 		h = r.Host
@@ -778,16 +775,15 @@ func hostHeaderIsLoopback(r *http.Request) bool {
 	// allows the whole 127.0.0.0/8 for binding) isn't 403'd by its own Host check.
 	// A rebound name like "evil.com" is not an IP literal, so it stays rejected.
 	if ip := net.ParseIP(h); ip != nil {
-		return ip.IsLoopback()
+		return ip.IsLoopback() || (ip.To4() != nil && ip.IsPrivate())
 	}
 	return false
 }
 
 // sameOriginOK guards state-changing requests against CSRF: the Host must be
-// loopback (also enforced globally by the middleware) and any Origin/
-// Sec-Fetch-Site present must be same-origin.
+// loopback or a private IPv4 literal, and Origin/Sec-Fetch-Site must agree.
 func sameOriginOK(r *http.Request) bool {
-	if !hostHeaderIsLoopback(r) {
+	if !hostHeaderIsLocalNetwork(r) {
 		return false
 	}
 	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs == "cross-site" || sfs == "cross-origin" {
