@@ -1,11 +1,20 @@
 # CentOS 7 keeps its system Python/glibc. Only this application uses these tools.
-FROM node:22-bookworm-slim AS node
-FROM golang:1.26-alpine AS go
-FROM docker:26.1.4-cli AS dockercli
-FROM ubuntu:24.04
+FROM m.daocloud.io/docker.io/library/node:22-bookworm-slim AS node
+FROM m.daocloud.io/docker.io/library/golang:1.26-alpine AS go
+FROM m.daocloud.io/docker.io/library/docker:26.1.4-cli AS dockercli
+FROM m.daocloud.io/docker.io/library/ubuntu:24.04
 
-ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUNBUFFERED=1 DOCKER_HOST=unix:///var/run/docker.sock
-RUN apt-get update \
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUNBUFFERED=1 DOCKER_HOST=unix:///var/run/docker.sock \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+    NPM_CONFIG_REPLACE_REGISTRY_HOST=always \
+    GOPROXY=https://goproxy.cn GOSUMDB=sum.golang.google.cn
+# Only the container's Ubuntu sources are replaced; signed package checks remain enabled.
+RUN sed -i \
+      -e 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' \
+      -e 's|http://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' \
+      /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
        ca-certificates curl git python3 python3-venv python3-dev build-essential pkg-config \
     && rm -rf /var/lib/apt/lists/*
