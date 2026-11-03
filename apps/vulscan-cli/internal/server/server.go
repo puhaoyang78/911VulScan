@@ -614,7 +614,11 @@ func (s *Server) Start(ctx context.Context, addr string) (string, error) {
 	if !hostIsLoopback(host) && host != "0.0.0.0" {
 		return "", fmt.Errorf("refusing to bind %q: use a loopback address or explicitly bind 0.0.0.0 for LAN access", addr)
 	}
-	ln, err := net.Listen("tcp", addr)
+	network := "tcp"
+	if host == "0.0.0.0" {
+		network = "tcp4" // Keep the LAN listener IPv4-only and visible in /proc/net/tcp.
+	}
+	ln, err := net.Listen(network, addr)
 	if err != nil && hostIsLoopback(host) {
 		// Only loopback mode may fall back to another local port.
 		ln, err = net.Listen("tcp", "127.0.0.1:0")
