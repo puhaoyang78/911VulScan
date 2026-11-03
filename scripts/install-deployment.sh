@@ -17,7 +17,8 @@ Usage: scripts/install-deployment.sh [options]
                     Includes Docker startup and frozen Docker on Ubuntu 20.04.
   --service-user USER  Account for --deploy (default: sudo caller/current user;
                     root-only installation creates the non-login vulscan user).
-  --port PORT       Port for --deploy (1024-65535; default: existing port or 8080).
+  --port PORT       Optional fixed port for --deploy (1024-65535). By default,
+                    reuse the current port or select a free port, preferring 8080.
   (no options)       Install the application using existing dependencies, no sudo.
   --install-deps     Bootstrap missing dependencies on Ubuntu 20.04/22.04/24.04/26.04.
   --deps-only        With --install-deps, skip application installation.
@@ -39,6 +40,7 @@ EOF
 BOOTSTRAP=0; DEPS_ONLY=0; CHECK=0; DRY=0; YES=0; START_DOCKER=0; ALLOW_OLD_DOCKER=0; DEPLOY=0
 SERVICE_USER_OPTION=''
 DEPLOY_PORT=''
+AUTOMATIC_PORT=1
 while [ "$#" -gt 0 ]; do
     arg=$1; shift
     case "$arg" in
@@ -48,7 +50,7 @@ while [ "$#" -gt 0 ]; do
         --allow-unsupported-docker) ALLOW_OLD_DOCKER=1;;
         --start-docker) START_DOCKER=1;; --help|-h) usage; exit 0;;
         --service-user) [ "$#" -gt 0 ] || fail '--service-user requires an account name'; SERVICE_USER_OPTION=$1; shift;;
-        --port) [ "$#" -gt 0 ] && [ -n "$1" ] || fail '--port requires a port number'; DEPLOY_PORT=$1; shift;;
+        --port) [ "$#" -gt 0 ] && [ -n "$1" ] || fail '--port requires a port number'; DEPLOY_PORT=$1; AUTOMATIC_PORT=0; shift;;
         *) fail "Unknown option: $arg (see --help)";;
     esac
 done
@@ -286,7 +288,12 @@ if [ "$BOOTSTRAP" = 1 ]; then
     printf '  No system Python replacement, Docker group changes, daemon configuration or credential changes.\n'
     if [ "$DEPLOY" = 1 ]; then
         [ "$CREATE_SERVICE_USER" = 0 ] || printf '  Create non-login service account %s with home %s.\n' "$service_user" "$service_home"
-        printf '  Deployment also enables official Ubuntu universe if required, validates all parsers and Docker build/run, and enables/restarts vulscan.service at %s.\n' "$SERVICE_URL"
+        printf '  Deployment also enables official Ubuntu universe if required, validates all parsers and Docker build/run, and enables/restarts vulscan.service.\n'
+        if [ "$AUTOMATIC_PORT" = 1 ]; then
+            printf '  Select the web port automatically: reuse the running service port, otherwise prefer %s and choose a free port if occupied.\n' "$DEPLOY_PORT"
+        else
+            printf '  Fixed web address: %s.\n' "$SERVICE_URL"
+        fi
         printf '  Active scans block updates. The service runs as %s with the Docker supplementary group; no socket permissions are changed.\n' "$service_user"
     fi
 fi
@@ -337,11 +344,15 @@ if [ "$BOOTSTRAP" = 1 ]; then
         fi
         stop_service=0
         service_active=0
+        old_port=''
         if privileged systemctl is-active --quiet vulscan; then
             service_active=1
             old_pid=$(privileged systemctl show --property=MainPID --value vulscan)
             old_uid=$(id -u "${previous_user:-$service_user}")
-            privileged python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --idle-url "http://127.0.0.1:${previous_port:-8080}" --service-pid "$old_pid" --service-uid "$old_uid" || fail 'Update stopped before changing application files; wait for active scans or inspect the existing service.'
+            old_url=$(privileged python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --service-url --service-pid "$old_pid" --service-uid "$old_uid") || fail 'Cannot identify the current service listener; existing service and application files were not changed.'
+            old_port=${old_url##*:}
+            privileged python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --idle-url "$old_url" --service-pid "$old_pid" --service-uid "$old_uid" || fail 'Update stopped before changing application files; wait for active scans or inspect the existing service.'
+            if [ "$AUTOMATIC_PORT" = 1 ]; then DEPLOY_PORT=$old_port; fi
             stop_service=1
         elif [ -f "$unit" ]; then
             state=$(privileged systemctl show --property=ActiveState --value vulscan)
@@ -350,9 +361,15 @@ if [ "$BOOTSTRAP" = 1 ]; then
                 *) fail 'Existing service is starting/stopping or has an unknown state; wait for it to settle before deploying. Application files were not changed.';;
             esac
         fi
-        if [ "$service_active" = 0 ] || [ "$DEPLOY_PORT" != "${previous_port:-8080}" ]; then
-            python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --listen-port "$DEPLOY_PORT" || fail 'Deployment port is unavailable; choose another with --port. Existing services and application files were not changed.'
+        if [ "$service_active" = 0 ] || [ "$DEPLOY_PORT" != "$old_port" ]; then
+            if [ "$AUTOMATIC_PORT" = 1 ]; then
+                DEPLOY_PORT=$(python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --select-port "$DEPLOY_PORT") || fail 'Cannot select an available web port. Existing services and application files were not changed.'
+            else
+                python3 "$ROOT/scripts/check-deployment.py" --root "$ROOT" --listen-port "$DEPLOY_PORT" || fail 'Deployment port is unavailable; choose another with --port. Existing services and application files were not changed.'
+            fi
         fi
+        SERVICE_URL="http://127.0.0.1:$DEPLOY_PORT"
+        printf 'Web address selected: %s\n' "$SERVICE_URL"
         if [ "$stop_service" = 1 ]; then
             printf 'Stopping the old service before updating application dependencies; scan results and settings are retained.\n'
             privileged systemctl stop vulscan || fail 'Old service did not stop cleanly; application files were not changed. Inspect journalctl -u vulscan.'

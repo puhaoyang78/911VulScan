@@ -68,6 +68,13 @@ class DeploymentCheckTests(unittest.TestCase):
             with self.subTest(port=port), self.assertRaises(ValueError):
                 checker.check_port(port)
 
+    def test_automatic_port_avoids_other_service_and_preserves_free_preference(self):
+        preferred = self.server.server_port
+        selected = checker.check_port(preferred, automatic=True)
+        self.assertNotEqual(selected, preferred)
+        self.assertGreaterEqual(selected, 1024)
+        self.assertEqual(checker.check_port(selected, automatic=True), selected)
+
     def test_unknown_and_duplicate_counts_cannot_authorize_update(self):
         for body in ('', '<strong id="stat-running">—</strong>', self.body * 2):
             self.body = body
@@ -98,14 +105,30 @@ class DeploymentCheckTests(unittest.TestCase):
             (root / "bin").mkdir()
             binary = root / "bin/vulscan-cli"
             shutil.copyfile(Path(sys.executable).resolve(), binary)
+            self.assertEqual(checker.service_url(root, os.getpid(), os.getuid()), self.url)
             checker.check_service(root, os.getpid(), os.getuid(), self.url)
             with self.assertRaisesRegex(RuntimeError, "账号不一致"):
                 checker.check_service(root, os.getpid(), os.getuid() + 1, self.url)
+            with self.assertRaisesRegex(RuntimeError, "账号不一致"):
+                checker.service_url(root, os.getpid(), os.getuid() + 1)
             with self.assertRaisesRegex(RuntimeError, "端口不属于"):
                 checker.check_service(root, os.getpid(), os.getuid(), "http://127.0.0.1:1")
             binary.write_bytes(b"new program")
             with self.assertRaisesRegex(RuntimeError, "旧程序"):
                 checker.check_service(root, os.getpid(), os.getuid(), self.url)
+            with self.assertRaisesRegex(RuntimeError, "旧程序"):
+                checker.service_url(root, os.getpid(), os.getuid())
+
+    @unittest.skipUnless(Path("/proc/self/exe").exists(), "Linux /proc verification")
+    def test_ambiguous_process_listeners_refuse_automatic_discovery(self):
+        with tempfile.TemporaryDirectory() as folder, socket.socket() as extra:
+            root = Path(folder)
+            (root / "bin").mkdir()
+            shutil.copyfile(Path(sys.executable).resolve(), root / "bin/vulscan-cli")
+            extra.bind(("127.0.0.1", 0))
+            extra.listen()
+            with self.assertRaisesRegex(RuntimeError, "唯一"):
+                checker.service_url(root, os.getpid(), os.getuid())
 
 
 if __name__ == "__main__":

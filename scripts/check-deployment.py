@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -102,7 +103,7 @@ def check_docker() -> None:
     print("Docker 构建、Compose 执行与资源清理：正常", flush=True)
 
 
-def check_port(port: int) -> None:
+def check_port(port: int, *, automatic: bool = False) -> int:
     if not 1024 <= port <= 65535:
         raise ValueError("部署端口必须在 1024–65535 之间。")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -110,8 +111,11 @@ def check_port(port: int) -> None:
         try:
             listener.bind(("127.0.0.1", port))
         except OSError as exc:
-            raise RuntimeError(f"端口 {port} 无法使用：{exc}；请用 --port 指定空闲端口，现有服务未停止。") from exc
-    print(f"部署端口：127.0.0.1:{port}，可用。", flush=True)
+            if automatic and exc.errno == errno.EADDRINUSE:
+                listener.bind(("127.0.0.1", 0))
+            else:
+                raise RuntimeError(f"端口 {port} 无法使用：{exc}；请用 --port 指定空闲端口，现有服务未停止。") from exc
+        return listener.getsockname()[1]
 
 
 def check_url(url: str) -> None:
@@ -180,7 +184,7 @@ def check_idle(url: str, service_home: Path | None = None) -> None:
     print("现有服务没有活动扫描，可以更新。", flush=True)
 
 
-def check_service(root: Path, pid: int, uid: int, url: str, proc: Path = Path("/proc")) -> None:
+def service_listeners(root: Path, pid: int, uid: int, proc: Path) -> tuple[str, set[str]]:
     if pid <= 0:
         raise RuntimeError("systemd 没有报告有效的 MainPID。")
     process = proc / str(pid)
@@ -195,10 +199,6 @@ def check_service(root: Path, pid: int, uid: int, url: str, proc: Path = Path("/
     expected = digest(root / "bin/vulscan-cli")
     if digest(process / "exe") != expected:
         raise RuntimeError("运行进程仍是旧程序，部署未通过版本校验。")
-    # Prove that the HTTP listener belongs to this MainPID, not another service.
-    parsed = urllib.parse.urlsplit(url)
-    address = socket.inet_aton(parsed.hostname)[::-1].hex().upper()
-    local_addrs = {f"{address}:{parsed.port:04X}", f"00000000:{parsed.port:04X}"}
     sockets = set()
     for entry in (process / "fd").iterdir():
         try:
@@ -206,7 +206,32 @@ def check_service(root: Path, pid: int, uid: int, url: str, proc: Path = Path("/
         except FileNotFoundError:
             continue  # A different request can close a descriptor during inspection.
     listeners = [line.split() for line in (process / "net/tcp").read_text().splitlines()[1:]]
-    if not any(row[1] in local_addrs and row[3] == "0A" and f"socket:[{row[9]}]" in sockets for row in listeners):
+    return expected, {row[1] for row in listeners if row[3] == "0A" and f"socket:[{row[9]}]" in sockets}
+
+
+def service_url(root: Path, pid: int, uid: int, proc: Path = Path("/proc")) -> str:
+    _, listeners = service_listeners(root, pid, uid, proc)
+    # Discover only a unique listener owned by the verified application process.
+    # This also recovers older services that silently changed their loopback port.
+    urls = set()
+    for local in listeners:
+        address, port = local.split(":")
+        host = socket.inet_ntoa(bytes.fromhex(address)[::-1])
+        if host == "0.0.0.0":
+            host = "127.0.0.1"
+        if host.startswith("127."):
+            urls.add(f"http://{host}:{int(port, 16)}")
+    if len(urls) != 1:
+        raise RuntimeError("无法确认服务唯一的网页监听地址，未停止现有服务。")
+    return urls.pop()
+
+
+def check_service(root: Path, pid: int, uid: int, url: str, proc: Path = Path("/proc")) -> None:
+    expected, listeners = service_listeners(root, pid, uid, proc)
+    parsed = urllib.parse.urlsplit(url)
+    address = socket.inet_aton(parsed.hostname)[::-1].hex().upper()
+    local_addrs = {f"{address}:{parsed.port:04X}", f"00000000:{parsed.port:04X}"}
+    if not listeners & local_addrs:
         raise RuntimeError("网页端口不属于 systemd 服务进程，可能被旧服务占用。")
     print(f"实际运行程序：PID={pid} UID={uid} SHA-256={expected}，与安装程序一致。", flush=True)
 
@@ -219,13 +244,21 @@ def main() -> None:
     mode.add_argument("--url")
     mode.add_argument("--idle-url")
     mode.add_argument("--listen-port", type=int)
+    mode.add_argument("--select-port", type=int)
+    mode.add_argument("--service-url", action="store_true")
     parser.add_argument("--service-pid", type=int)
     parser.add_argument("--service-uid", type=int)
     args = parser.parse_args()
     root = args.root.resolve()
     os.environ["PATH"] = os.pathsep.join(str(root / ".tools" / tool / "bin") for tool in ("git", "go", "node")) + os.pathsep + os.environ["PATH"]
-    if args.listen_port is not None:
-        check_port(args.listen_port)
+    if args.service_url:
+        if args.service_pid is None or args.service_uid is None:
+            parser.error("--service-url requires --service-pid and --service-uid")
+        print(service_url(root, args.service_pid, args.service_uid), flush=True)
+    elif args.select_port is not None:
+        print(check_port(args.select_port, automatic=True), flush=True)
+    elif args.listen_port is not None:
+        print(f"部署端口：127.0.0.1:{check_port(args.listen_port)}，可用。", flush=True)
     elif args.url:
         check_url(args.url)
         if args.service_pid is not None:

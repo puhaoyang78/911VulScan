@@ -86,8 +86,20 @@ fi
 case "$1" in *check-deployment.py)
   echo "check $*" >> "$TEST_ROOT/actions"
   case "$*" in
+    *--service-url*)
+      "$REAL_PYTHON" - <<'PY'
+import os, shlex
+from pathlib import Path
+lines = (Path(os.environ['TEST_ROOT']) / 'systemd/vulscan.service').read_text().splitlines()
+args = shlex.split(next(line.removeprefix('ExecStart=') for line in lines if line.startswith('ExecStart=')))
+port = args[args.index('--addr') + 1].rsplit(':', 1)[1]
+print('http://127.0.0.1:' + os.environ.get('SERVICE_LISTEN_PORT', port))
+PY
+      exit;;
     *--idle-url*) [ "${ACTIVE_SCANS:-0}" = 0 ] || exit 2;;
     *--listen-port*) [ "${PORT_BUSY:-0}" = 0 ] || exit 2;;
+    *--select-port*)
+      if [ "${PORT_BUSY:-0}" = 1 ]; then echo "${AUTO_PORT:-43219}"; else for value do :; done; echo "$value"; fi;;
   esac
   exit 0;;
 esac
@@ -334,6 +346,7 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertIn('--idle-url http://127.0.0.1:8081', actions)
         self.assertIn('--url http://127.0.0.1:8081', actions)
         self.assertNotIn('--listen-port', actions)
+        self.assertNotIn('--select-port', actions)
         self.assertIn('"--addr" "127.0.0.1:8081"', (self.root / 'systemd/vulscan.service').read_text())
 
     def test_changing_port_checks_old_queue_and_new_port_before_stop(self):
@@ -350,7 +363,7 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
     def test_occupied_port_refuses_first_deployment_before_installing(self):
         self.prepare_application()
         self.env['PORT_BUSY'] = '1'
-        self.assertIn('port is unavailable', self.run_script('--deploy', success=False))
+        self.assertIn('port is unavailable', self.run_script('--deploy', '--port', '8080', success=False))
         self.assertNotIn('service stop', self.actions())
         self.assertNotIn('python -m venv', self.actions())
         self.assertNotIn('apt ', self.actions())
@@ -374,10 +387,56 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         (self.root / 'service-running').unlink()
         (self.root / 'actions').write_text('')
         self.env['PORT_BUSY'] = '1'
-        self.run_script('--deploy', success=False)
+        self.run_script('--deploy', '--port', '8080', success=False)
         self.assertIn('--listen-port 8080', self.actions())
         self.assertNotIn('service stop', self.actions())
         self.assertNotIn('python -m venv', self.actions())
+
+    def test_first_deployment_selects_a_free_port_automatically(self):
+        self.prepare_application()
+        self.env.update(PORT_BUSY='1', AUTO_PORT='43219')
+        self.assertIn('911VulScan ready: http://127.0.0.1:43219', self.run_script('--deploy'))
+        self.assertIn('--select-port 8080', self.actions())
+        self.assertIn('--url http://127.0.0.1:43219', self.actions())
+        self.assertIn('"127.0.0.1:43219"', (self.root / 'systemd/vulscan.service').read_text())
+        (self.root / 'actions').write_text('')
+        self.run_script('--deploy')
+        self.assertIn('--idle-url http://127.0.0.1:43219', self.actions())
+        self.assertNotIn('--select-port', self.actions())
+
+    def test_legacy_random_listener_is_detected_before_idle_check_and_preserved(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        self.env['SERVICE_LISTEN_PORT'] = '33711'
+        (self.root / 'actions').write_text('')
+        self.run_script('--deploy')
+        actions = self.actions()
+        self.assertLess(actions.index('--service-url'), actions.index('--idle-url'))
+        self.assertIn('--idle-url http://127.0.0.1:33711', actions)
+        self.assertIn('--url http://127.0.0.1:33711', actions)
+        self.assertNotIn('--select-port', actions)
+        self.assertIn('"127.0.0.1:33711"', (self.root / 'systemd/vulscan.service').read_text())
+
+    def test_stopped_service_selects_another_port_if_previous_port_is_occupied(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        (self.root / 'service-running').unlink()
+        (self.root / 'actions').write_text('')
+        self.env.update(PORT_BUSY='1', AUTO_PORT='43219')
+        self.run_script('--deploy')
+        self.assertLess(self.actions().index('--select-port 8080'), self.actions().index('service stop vulscan'))
+        self.assertIn('--url http://127.0.0.1:43219', self.actions())
+
+    def test_active_scans_on_legacy_random_port_still_block_deployment(self):
+        self.prepare_application()
+        self.run_script('--deploy')
+        self.env.update(SERVICE_LISTEN_PORT='33711', ACTIVE_SCANS='1')
+        (self.root / 'actions').write_text('')
+        self.run_script('--deploy', success=False)
+        self.assertIn('--idle-url http://127.0.0.1:33711', self.actions())
+        self.assertNotIn('service stop', self.actions())
+        self.assertNotIn('python -m venv', self.actions())
+        self.assertTrue((self.root / 'service-running').exists())
 
     def test_invalid_deployment_ports_have_no_side_effects(self):
         for value in ('', '0', '1023', '65536', '-1', '8080/abc', '08081', '9' * 100):
