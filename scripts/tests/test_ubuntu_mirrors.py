@@ -1,8 +1,8 @@
 """Real source-file transformations, without touching the host's APT settings."""
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 SCRIPT = Path(__file__).parents[1] / 'configure-ubuntu-mirrors.sh'
 

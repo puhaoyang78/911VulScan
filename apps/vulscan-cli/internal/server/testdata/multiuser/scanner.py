@@ -4,9 +4,9 @@ import datetime
 import hashlib
 import json
 import os
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 
 args = sys.argv[1:]
 if "scan" not in args:
@@ -28,7 +28,7 @@ trace = {"config": str(config), "key_sha256": hashlib.sha256(key.encode()).hexdi
 
 def emit(seq, kind, **fields):
     event = {"version": 1, "job_id": job_id, "seq": seq, "type": kind,
-             "time": datetime.datetime.now(datetime.timezone.utc).isoformat(), **fields}
+             "time": datetime.datetime.now(datetime.UTC).isoformat(), **fields}
     print("@vulscan-event " + json.dumps(event), file=sys.stderr, flush=True)
 
 emit(1, "discovery.started")
