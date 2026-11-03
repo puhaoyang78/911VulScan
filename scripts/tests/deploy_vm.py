@@ -137,6 +137,9 @@ def main():
             if actual != expected_user:
                 raise AssertionError(f"Expected {expected_user}, service actually runs as {actual}")
             home = remote(f"getent passwd {expected_user} | cut -d: -f6", capture_output=True).stdout.strip()
+            run('scp', *options, '-P', str(port), str(Path(__file__).with_name('web_session.py').resolve()), 'deployer@127.0.0.1:/tmp/vulscan-web-acceptance.py')
+            web_session = f"sudo -n runuser -u {shlex.quote(expected_user)} -- /opt/911VulScan/.venv/bin/python /tmp/vulscan-web-acceptance.py --url http://127.0.0.1:8080 --home {shlex.quote(home)}"
+            capture('initialize-account', web_session + ' --initialize')
             first_pid = remote("systemctl show -p MainPID --value vulscan", capture_output=True).stdout.strip()
             first_hash = remote("sha256sum /opt/911VulScan/bin/vulscan-cli | cut -d' ' -f1", capture_output=True).stdout.strip()
             remote(f"echo retained | sudo tee {home}/.vulscan/deployment-preserved >/dev/null")
@@ -160,7 +163,7 @@ def main():
             if first_pid == second_pid or first_hash == second_hash:
                 raise AssertionError("Redeployment did not restart or did not publish the changed program")
             remote(f"sudo grep -qx retained {home}/.vulscan/deployment-preserved && sudo grep -q auths {home}/docker-client/config.json")
-            remote("curl --noproxy '*' -fsS http://127.0.0.1:8080 | grep -q deployment-history-fixture")
+            capture('authenticated-history', web_session + ' --expect-history deployment-history-fixture')
             remote("systemctl is-enabled --quiet vulscan && systemctl is-enabled --quiet docker")
             uid = remote(f"id -u {expected_user}", capture_output=True).stdout.strip()
             verify = "sudo /opt/911VulScan/.venv/bin/python /opt/911VulScan/scripts/check-deployment.py --root /opt/911VulScan --url http://127.0.0.1:8080 --service-uid " + uid + " --service-pid $(systemctl show -p MainPID --value vulscan)"
@@ -172,7 +175,7 @@ def main():
             wait_boot(boot)
             capture("boot-recovery", "timeout 90 sh -c 'until systemctl is-active --quiet vulscan; do sleep 2; done' && " + verify)
             remote(f"sudo grep -qx retained {home}/.vulscan/deployment-preserved && sudo grep -q auths {home}/docker-client/config.json")
-            remote("curl --noproxy '*' -fsS http://127.0.0.1:8080 | grep -q deployment-history-fixture")
+            capture('boot-authenticated-history', web_session + ' --expect-history deployment-history-fixture')
             capture("systemd", "systemctl cat vulscan && systemctl status vulscan --no-pager && sudo journalctl -u vulscan --no-pager -n 80")
             print(f"PASS Ubuntu {args.ubuntu}: real --deploy, non-root account, redeploy/version, restart, reboot/data recovery" + (", interrupted Python retry" if args.ubuntu != "24.04" else ""), flush=True)
         except Exception:

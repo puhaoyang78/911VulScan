@@ -401,7 +401,7 @@ if [ "$BOOTSTRAP" = 1 ]; then
         fi
         python_ok || fail 'Python >=3.11 with venv/ensurepip is still unavailable; check python3-venv or set PYTHON.'
         if [ "$BUILD_GIT" = 1 ]; then
-            fetch 'https://mirrors.ustc.edu.cn/kernel.org/software/scm/git/sha256sums.asc' "$TMP/git-checksums"
+            fetch 'https://mirrors.nju.edu.cn/kernel.org/software/scm/git/sha256sums.asc' "$TMP/git-checksums"
             "$PYTHON" - "$TMP/git-checksums" > "$TMP/git-selection" <<'PYGIT'
 import re, sys
 from pathlib import Path
@@ -417,7 +417,7 @@ _, filename, checksum = max(versions)
 print(filename); print(checksum)
 PYGIT
             file=$(sed -n '1p' "$TMP/git-selection"); sha=$(sed -n '2p' "$TMP/git-selection")
-            fetch "https://mirrors.ustc.edu.cn/kernel.org/software/scm/git/$file" "$TMP/$file"
+            fetch "https://mirrors.nju.edu.cn/kernel.org/software/scm/git/$file" "$TMP/$file"
             (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Git checksum mismatch; source not extracted.'
             tar -xJf "$TMP/$file" -C "$TMP"
             git_source="$TMP/${file%.tar.xz}"

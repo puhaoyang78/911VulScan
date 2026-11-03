@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import http.cookiejar
 import json
 import os
 import re
@@ -87,7 +88,10 @@ assert not (root / "openant").exists()
                     output = log.read()
                     match = re.search(r"http://127\.0\.0\.1:\d+", output)
                     if match:
-                        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                        run(sys.executable, str(ROOT / 'scripts/tests/web_session.py'), '--url', match.group(), '--home', env['HOME'], '--initialize')
+                        jar = http.cookiejar.LWPCookieJar(str(Path(env['HOME']) / '.vulscan/deployment-acceptance.cookies'))
+                        jar.load(ignore_discard=True)
+                        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(jar))
                         with opener.open(match.group(), timeout=5) as response:
                             assert response.status == 200
                             assert "911VulScan" in response.read().decode()
@@ -98,6 +102,7 @@ assert not (root / "openant").exists()
                                              ("inter-latin-wght-5.2.5.woff2", "design"),
                                              ("jetbrains-mono-latin-400-5.2.5.woff2", "design"),
                                              ("workbench.css", "static"), ("shell.js", "static"), ("scan.js", "static"),
+                                             ("account.css", "static"), ("account.js", "static"),
                                              ("documents.js", "static"), ("reader.js", "static"), ("report.js", "static")):
                             with opener.open(match.group() + "/assets/" + name, timeout=5) as asset:
                                 assert asset.read() == (source / "apps/vulscan-cli/ui" / folder / name).read_bytes(), name

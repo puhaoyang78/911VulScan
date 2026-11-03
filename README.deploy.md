@@ -2,7 +2,7 @@
 
 部署包只含运行代码、构建依赖清单、运行时提示词、必要配置和许可证；开发仓库继续保留测试与 CI。
 
-Ubuntu 安装使用国内源：系统 APT 的官方 Ubuntu 地址切换为阿里云（同时兼容 `sources.list` 和 24.04 的 deb822 `.sources`），Python 包默认清华 PyPI，npm 使用 npmmirror，Go 模块使用 goproxy.cn 并保留校验数据库。Python 源码取自华为云，Git 源码取自中科大 kernel.org 镜像，Go 元数据取自 golang.google.cn、安装包取自阿里云，Node 22 取自 npmmirror，20.04 的冻结 Docker 包取自阿里云 Docker CE 镜像。现有自定义第三方 APT 仓库、签名配置和显式设置的包管理器环境变量保留；APT 签名、压缩包 SHA-256 和 npm 锁文件检查不关闭。仅补装独立 Docker 插件时，也从阿里云 Docker CE 包提取固定版本的官方插件并校验，不安装软件包、不执行维护脚本、不改现有 Engine。
+Ubuntu 安装使用国内源：系统 APT 的官方 Ubuntu 地址切换为阿里云（同时兼容 `sources.list` 和 24.04 的 deb822 `.sources`），Python 包默认清华 PyPI，npm 使用 npmmirror，Go 模块使用 goproxy.cn 并保留校验数据库。Python 源码取自华为云，Git 源码取自南京大学 kernel.org 镜像，Go 元数据取自 golang.google.cn、安装包取自阿里云，Node 22 取自 npmmirror，20.04 的冻结 Docker 包取自阿里云 Docker CE 镜像。现有自定义第三方 APT 仓库、签名配置和显式设置的包管理器环境变量保留；APT 签名、压缩包 SHA-256 和 npm 锁文件检查不关闭。仅补装独立 Docker 插件时，也从阿里云 Docker CE 包提取固定版本的官方插件并校验，不安装软件包、不执行维护脚本、不改现有 Engine。
 
 ## 全新 Ubuntu 服务器一键部署
 

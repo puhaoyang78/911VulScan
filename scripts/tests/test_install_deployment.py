@@ -587,7 +587,8 @@ exit 0
         self.env['GIT_VERSION'] = '2.25.1'
         self.full_download_fixtures()
         self.run_script('--install-deps', '--deps-only', '--yes', '--start-docker', '--allow-unsupported-docker')
-        self.assertIn('git/sha256sums.asc', self.actions())
+        self.assertIn('https://mirrors.nju.edu.cn/kernel.org/software/scm/git/sha256sums.asc', self.actions())
+        self.assertIn('https://mirrors.nju.edu.cn/kernel.org/software/scm/git/git-2.56.0.tar.xz', self.actions())
         self.assertIn('NO_TCLTK=YesPlease NO_GETTEXT=YesPlease NO_RUST=YesPlease install', self.actions())
         self.assertTrue((self.root / '.tools/git/bin/git').is_file())
 
