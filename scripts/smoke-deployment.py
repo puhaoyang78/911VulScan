@@ -88,7 +88,7 @@ assert not (root / "openant").exists()
                     output = log.read()
                     match = re.search(r"http://127\.0\.0\.1:\d+", output)
                     if match:
-                        run(sys.executable, str(ROOT / 'scripts/tests/web_session.py'), '--url', match.group(), '--home', env['HOME'], '--initialize')
+                        run(sys.executable, str(ROOT / 'scripts/tests/web_session.py'), '--url', match.group(), '--home', env['HOME'], '--register')
                         jar = http.cookiejar.LWPCookieJar(str(Path(env['HOME']) / '.vulscan/deployment-acceptance.cookies'))
                         jar.load(ignore_discard=True)
                         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(jar))

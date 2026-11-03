@@ -5,11 +5,10 @@
 {{if .Error}}<p class="account-feedback" role="alert">{{.Error}}</p>{{end}}
 <form method="post" action="/{{.Mode}}" data-account-form>
 <input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="{{.Next}}">
-{{if eq .Mode "setup"}}<label for="bootstrap">初始化口令</label><input id="bootstrap" name="bootstrap" type="password" required autocomplete="off" aria-describedby="bootstrap-hint"><p class="hint" id="bootstrap-hint">从服务账号目录下的 <code>.vulscan/webui/.access/bootstrap-token</code> 文件读取。已有扫描将归此管理员。</p>{{end}}
 <label for="username">账号</label><input id="username" name="username" value="{{.Username}}" required minlength="3" maxlength="32" pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{2,31}" autocomplete="username" autofocus aria-describedby="username-hint"><p class="hint" id="username-hint">3–32 位字母、数字或 ._-，不区分大小写。</p>
 <label for="password">密码</label><input id="password" name="password" type="password" required minlength="12" maxlength="128" autocomplete="{{if eq .Mode "login"}}current-password{{else}}new-password{{end}}" aria-describedby="password-hint"><p class="hint" id="password-hint">至少 12 位。{{if eq .Mode "login"}}登录状态保留 7 天。{{end}}</p>
 {{if ne .Mode "login"}}<label for="password-confirm">确认密码</label><input id="password-confirm" type="password" required minlength="12" maxlength="128" autocomplete="new-password" data-password-confirm="password">{{end}}
-<button class="btn btn-primary account-submit" type="submit">{{if eq .Mode "login"}}登录{{else if eq .Mode "setup"}}创建管理员{{else}}注册并登录{{end}}</button>
+<button class="btn btn-primary account-submit" type="submit">{{if eq .Mode "login"}}登录{{else}}注册并登录{{end}}</button>
 </form>
-{{if .Ready}}<div class="auth-switch">{{if eq .Mode "login"}}还没有账号？<a href="/register">创建账号</a>{{else}}已有账号？<a href="/login">登录</a>{{end}}</div>{{end}}
+<div class="auth-switch">{{if eq .Mode "login"}}还没有账号？<a href="/register">创建账号</a>{{else}}已有账号？<a href="/login">登录</a>{{end}}</div>
 </section><footer>911VulScan · 中文安全扫描工作台</footer></main></body></html>

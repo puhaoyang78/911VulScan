@@ -481,7 +481,7 @@ func (s *Server) Handler() http.Handler {
 	page := func(pattern string, handler http.HandlerFunc) {
 		mux.HandleFunc(pattern, s.noncedPage(s.authenticated(handler)))
 	}
-	for _, mode := range []string{"login", "register", "setup"} {
+	for _, mode := range []string{"login", "register"} {
 		mux.HandleFunc("GET /"+mode, s.noncedPage(s.handleAuth))
 		mux.HandleFunc("POST /"+mode, s.noncedPage(s.handleAuth))
 	}

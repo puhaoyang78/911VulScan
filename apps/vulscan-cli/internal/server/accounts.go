@@ -43,8 +43,9 @@ type loginSession struct {
 }
 
 type accountState struct {
-	Version  int                     `json:"version"`
-	AdminID  string                  `json:"admin_id"`
+	Version int `json:"version"`
+	// Retain the legacy owner on existing installations; registration never grants it.
+	AdminID  string                  `json:"admin_id,omitempty"`
 	Users    map[string]account      `json:"users"`
 	Sessions map[string]loginSession `json:"sessions"`
 }
@@ -52,13 +53,12 @@ type accountState struct {
 // One service process owns this store, like the existing job manager. Secrets
 // and sessions are atomically persisted before becoming visible to requests.
 type accountStore struct {
-	mu             sync.Mutex
-	state          accountState
-	dir            string
-	operatorToken  string
-	bootstrapToken string
-	passwordSlots  chan struct{}
-	requests       map[string]authWindow
+	mu            sync.Mutex
+	state         accountState
+	dir           string
+	operatorToken string
+	passwordSlots chan struct{}
+	requests      map[string]authWindow
 }
 type authWindow struct {
 	Start time.Time
@@ -129,37 +129,27 @@ func openAccounts(outDir string) (*accountStore, error) {
 		if a.state.Version != 1 || a.state.Users == nil || a.state.Sessions == nil {
 			return nil, errors.New("账号文件格式不支持")
 		}
-		if len(a.state.Users) > 0 && a.state.Users[a.state.AdminID].ID == "" {
-			return nil, errors.New("账号文件缺少初始化管理员")
+		if a.state.AdminID != "" && a.state.Users[a.state.AdminID].ID == "" {
+			return nil, errors.New("历史任务的归属账号不存在")
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	for _, name := range []string{"operator-token", "bootstrap-token"} {
-		if name == "bootstrap-token" && a.state.AdminID != "" {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		data, err := os.ReadFile(path)
-		if os.IsNotExist(err) {
-			data = []byte(secretToken())
-			err = writePrivateFile(path, data)
-		}
-		if err != nil {
-			return nil, err
-		}
-		token := strings.TrimSpace(string(data))
-		if len(token) != 64 {
-			return nil, fmt.Errorf("%s 格式无效", name)
-		}
-		if err := os.Chmod(path, 0600); err != nil {
-			return nil, err
-		}
-		if name == "operator-token" {
-			a.operatorToken = token
-		} else {
-			a.bootstrapToken = token
-		}
+	path := filepath.Join(dir, "operator-token")
+	data, err = os.ReadFile(path)
+	if os.IsNotExist(err) {
+		data = []byte(secretToken())
+		err = writePrivateFile(path, data)
+	}
+	if err != nil {
+		return nil, err
+	}
+	a.operatorToken = strings.TrimSpace(string(data))
+	if len(a.operatorToken) != 64 {
+		return nil, errors.New("operator-token 格式无效")
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return nil, err
 	}
 	return a, nil
 }
@@ -186,7 +176,11 @@ func (a *accountStore) updateLocked(change func(*accountState)) error {
 	return nil
 }
 
-func (a *accountStore) ready() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.state.AdminID != "" }
+func (a *accountStore) hasUsers() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.state.Users) > 0
+}
 func (a *accountStore) resolve(token string) *identity {
 	if len(token) != 64 {
 		return nil
@@ -246,8 +240,8 @@ func (s *Server) authenticated(h http.HandlerFunc) http.HandlerFunc {
 		if u == nil {
 			if r.Method == "GET" && strings.Contains(r.Header.Get("Accept"), "text/html") {
 				target := "/login"
-				if !s.accounts.ready() {
-					target = "/setup"
+				if !s.accounts.hasUsers() {
+					target = "/register"
 				}
 				http.Redirect(w, r, target+"?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 			} else {
@@ -346,20 +340,10 @@ func (a *accountStore) allowAuth(remote string) bool {
 
 type authPageData struct {
 	Mode, Title, CSRF, Nonce, Error, Username, Next string
-	Ready                                           bool
 }
 
 func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	mode := strings.TrimPrefix(r.URL.Path, "/")
-	ready := s.accounts.ready()
-	if !ready && mode != "setup" {
-		http.Redirect(w, r, "/setup", 303)
-		return
-	}
-	if ready && mode == "setup" {
-		http.Redirect(w, r, "/login", 303)
-		return
-	}
 	if r.Method == "POST" {
 		r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 		if err := r.ParseForm(); err != nil {
@@ -374,7 +358,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.ContainsAny(next, "\\\r\n") {
 		next = "/"
 	}
-	d := authPageData{Mode: mode, Title: map[string]string{"login": "登录工作台", "register": "创建账号", "setup": "初始化管理员"}[mode], CSRF: s.guestCSRF(w, r), Nonce: nonceFrom(r), Ready: ready, Next: next}
+	d := authPageData{Mode: mode, Title: map[string]string{"login": "登录工作台", "register": "创建账号"}[mode], CSRF: s.guestCSRF(w, r), Nonce: nonceFrom(r), Next: next}
 	code := 200
 	if r.Method == "POST" {
 		r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
@@ -426,48 +410,30 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 				code = 500
 			}
 		} else {
-			if mode == "setup" && subtle.ConstantTimeCompare([]byte(r.FormValue("bootstrap")), []byte(s.accounts.bootstrapToken)) != 1 {
-				d.Error = "初始化口令错误。"
-				code = 400
-			} else {
-				u := account{ID: secretToken()[:32], Username: d.Username, Salt: secretToken(), CreatedAt: time.Now().UTC()}
-				u.PasswordHash = passwordKey(password, u.Salt)
-				s.accounts.mu.Lock()
-				if (mode == "setup") != (s.accounts.state.AdminID == "") {
-					d.Error = "初始化状态已变化，请刷新页面。"
+			u := account{ID: secretToken()[:32], Username: d.Username, Salt: secretToken(), CreatedAt: time.Now().UTC()}
+			u.PasswordHash = passwordKey(password, u.Salt)
+			s.accounts.mu.Lock()
+			for _, existing := range s.accounts.state.Users {
+				if existing.Username == u.Username {
+					d.Error = "该账号已注册。"
 					code = 409
 				}
-				for _, existing := range s.accounts.state.Users {
-					if existing.Username == u.Username {
-						d.Error = "该账号已注册。"
-						code = 409
-					}
+			}
+			if code == 200 {
+				err = s.createUserConfig(u.ID)
+				if err == nil {
+					err = s.accounts.updateLocked(func(st *accountState) { st.Users[u.ID] = u })
 				}
-				if code == 200 {
-					if mode == "setup" {
-						err = s.importAdminConfig(u.ID)
-					} else {
-						err = s.createUserConfig(u.ID)
-					}
-					if err == nil {
-						err = s.accounts.updateLocked(func(st *accountState) {
-							st.Users[u.ID] = u
-							if mode == "setup" {
-								st.AdminID = u.ID
-							}
-						})
-					}
-					if err != nil {
-						d.Error = "账号保存失败，请检查磁盘和权限。"
-						code = 500
-					}
+				if err != nil {
+					d.Error = "账号保存失败，请检查磁盘和权限。"
+					code = 500
 				}
-				s.accounts.mu.Unlock()
-				if code == 200 {
-					if err = s.issueSession(w, u); err != nil {
-						d.Error = "账号已创建，请重新登录。"
-						code = 500
-					}
+			}
+			s.accounts.mu.Unlock()
+			if code == 200 {
+				if err = s.issueSession(w, u); err != nil {
+					d.Error = "账号已创建，请重新登录。"
+					code = 500
 				}
 			}
 		}
@@ -602,11 +568,4 @@ func (s *Server) ConfigureExternalURL(raw string) error {
 	}
 	s.externalURL = u.Scheme + "://" + u.Host
 	return nil
-}
-
-func (s *Server) BootstrapPath() string {
-	if s.accounts.ready() {
-		return ""
-	}
-	return filepath.Join(s.accounts.dir, "bootstrap-token")
 }

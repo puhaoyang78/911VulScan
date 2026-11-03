@@ -18,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/puhaoyang78/911VulScan/apps/vulscan-cli/internal/config"
 )
 
 const testPassword = "Strong-test-password-2026"
@@ -57,7 +59,7 @@ func httpCall(t *testing.T, c *http.Client, method, uri string, form url.Values,
 	}
 	return resp.StatusCode, string(data), resp.Header
 }
-func signIn(t *testing.T, c *http.Client, base, mode, name, bootstrap string) {
+func signIn(t *testing.T, c *http.Client, base, mode, name string) {
 	t.Helper()
 	code, body, _ := httpCall(t, c, "GET", base+"/"+mode, nil, "")
 	if code != 200 {
@@ -67,7 +69,7 @@ func signIn(t *testing.T, c *http.Client, base, mode, name, bootstrap string) {
 	if len(m) != 2 {
 		t.Fatal("missing guest CSRF")
 	}
-	values := url.Values{"username": {name}, "password": {testPassword}, "csrf": {m[1]}, "bootstrap": {bootstrap}}
+	values := url.Values{"username": {name}, "password": {testPassword}, "csrf": {m[1]}}
 	code, body, _ = httpCall(t, c, "POST", base+"/"+mode, values, "")
 	if code != 303 {
 		t.Fatalf("%s: %d %s", mode, code, body)
@@ -92,6 +94,106 @@ func userModel(t *testing.T, c *http.Client, base, key string) {
 	code, body, _ = httpCall(t, c, "GET", base+"/settings", nil, "")
 	if code != 200 || strings.Contains(body, key) || !strings.Contains(body, "已保存密钥") {
 		t.Fatalf("settings exposed key or failed: %d", code)
+	}
+}
+
+func TestDirectRegistrationWithoutAdministrator(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("DEEPSEEK_API_KEY", "operator-environment-key")
+	if err := config.Save(&config.Config{APIKey: "operator-cli-private-key"}); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	const legacyID = "1111222233334444"
+	legacyDir := filepath.Join(root, legacyID)
+	if err := os.MkdirAll(legacyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"repo":"unowned-private-history","status":"done"}`)
+	if err := os.WriteFile(filepath.Join(legacyDir, "meta.json"), legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New("unused", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := httptest.NewServer(s.Handler())
+	defer func() { service.Close() }()
+	alice, bob := realClient(t), realClient(t)
+	req, _ := http.NewRequest("GET", service.URL+"/", nil)
+	req.Header.Set("Accept", "text/html")
+	response, err := alice.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 303 || response.Header.Get("Location") != "/register?next=%2F" {
+		t.Fatal("first visit did not open registration")
+	}
+	code, body, _ := httpCall(t, alice, "GET", service.URL+"/register", nil, "")
+	if code != 200 || !strings.Contains(body, "注册并登录") || strings.Contains(body, "初始化口令") || strings.Contains(body, "创建管理员") {
+		t.Fatal("registration still requires administrator setup")
+	}
+	for _, method := range []string{"GET", "POST"} {
+		code, _, _ = httpCall(t, alice, method, service.URL+"/setup", nil, "")
+		if code != 404 {
+			t.Fatal("obsolete administrator setup is still reachable")
+		}
+	}
+	var registrations sync.WaitGroup
+	for name, client := range map[string]*http.Client{"alice": alice, "bob": bob} {
+		registrations.Add(1)
+		go func() { defer registrations.Done(); signIn(t, client, service.URL, "register", name) }()
+	}
+	registrations.Wait()
+	if s.accounts.state.AdminID != "" || len(s.accounts.state.Users) != 2 {
+		t.Fatal("registration created an administrator or lost a concurrent account")
+	}
+	for _, client := range []*http.Client{alice, bob} {
+		if currentAccount(t, client, service.URL)["admin"] != false {
+			t.Fatal("registration granted legacy administrator access")
+		}
+		code, body, _ = httpCall(t, client, "GET", service.URL+"/", nil, "")
+		if code != 200 || strings.Contains(body, "unowned-private-history") {
+			t.Fatal("unowned history leaked to a new registration")
+		}
+		for _, path := range []string{"/scan/", "/report/", "/summary/", "/disclosures/"} {
+			code, _, _ = httpCall(t, client, "GET", service.URL+path+legacyID, nil, "")
+			if code != 404 {
+				t.Fatalf("unowned history exposed at %s: %d", path, code)
+			}
+		}
+		u := s.accounts.resolve(sessionValue(t, client, service.URL))
+		cfg, err := config.LoadFrom(u.ConfigPath)
+		if err != nil || cfg.APIKey != "" || len(cfg.ProviderNames()) != 0 {
+			t.Fatal("registration inherited the service model configuration")
+		}
+	}
+	if _, err = os.Stat(filepath.Join(s.accounts.dir, "bootstrap-token")); !os.IsNotExist(err) {
+		t.Fatal("fresh registration still creates an initialization token")
+	}
+	// Stale tokens from the old release no longer control service startup.
+	if err = os.WriteFile(filepath.Join(s.accounts.dir, "bootstrap-token"), []byte("obsolete"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	service.Close()
+	restarted, err := New("unused", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service = httptest.NewServer(restarted.Handler())
+	for name, client := range map[string]*http.Client{"alice": alice, "bob": bob} {
+		if currentAccount(t, client, service.URL)["username"] != name {
+			t.Fatal("account or session lost after restarting without an administrator")
+		}
+	}
+	if saved, err := os.ReadFile(filepath.Join(legacyDir, "meta.json")); err != nil || string(saved) != string(legacy) {
+		t.Fatal("unowned history was changed or removed")
+	}
+	operator, err := config.Load()
+	if err != nil || operator.APIKey != "operator-cli-private-key" {
+		t.Fatal("registration changed the service configuration")
 	}
 }
 
@@ -130,11 +232,24 @@ func TestMultiUserConcurrentHTTPAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Existing installations retain their already-created legacy owner. New
+	// registrations below must neither replace that owner nor inherit its data.
+	legacyUser := account{ID: secretToken()[:32], Username: "admin", Salt: secretToken(), CreatedAt: time.Now().UTC()}
+	legacyUser.PasswordHash = passwordKey(testPassword, legacyUser.Salt)
+	if err = s.createUserConfig(legacyUser.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.accounts.updateLocked(func(st *accountState) {
+		st.Users[legacyUser.ID] = legacyUser
+		st.AdminID = legacyUser.ID
+	}); err != nil {
+		t.Fatal(err)
+	}
 	service := httptest.NewServer(s.Handler())
 	defer func() { service.Close() }()
 	base := service.URL
 	admin := realClient(t)
-	signIn(t, admin, base, "setup", "admin", s.accounts.bootstrapToken)
+	signIn(t, admin, base, "login", "admin")
 	code, _, _ := httpCall(t, admin, "GET", base+"/scan/"+legacyID, nil, "")
 	if code != 200 {
 		t.Fatal("legacy task not inherited")
@@ -143,7 +258,7 @@ func TestMultiUserConcurrentHTTPAndRestart(t *testing.T) {
 	var registrations sync.WaitGroup
 	for name, client := range map[string]*http.Client{"alice": alice, "bob": bob} {
 		registrations.Add(1)
-		go func() { defer registrations.Done(); signIn(t, client, base, "register", name, "") }()
+		go func() { defer registrations.Done(); signIn(t, client, base, "register", name) }()
 	}
 	registrations.Wait()
 	userModel(t, alice, base, "alice-private-model-key")
@@ -268,6 +383,10 @@ func TestMultiUserConcurrentHTTPAndRestart(t *testing.T) {
 	}
 	service = httptest.NewServer(recovered.Handler())
 	base = service.URL
+	code, _, _ = httpCall(t, admin, "GET", base+"/scan/"+legacyID, nil, "")
+	if code != 200 {
+		t.Fatal("existing legacy owner lost access after restart")
+	}
 	// The listener may change port; host-only session cookies remain valid.
 	for i, c := range clients {
 		if currentAccount(t, c, base)["username"] != []string{"alice", "bob"}[i] {
@@ -343,16 +462,16 @@ func TestAccountSecurityAndSessionRevocation(t *testing.T) {
 	defer service.Close()
 	base := service.URL
 	client := realClient(t)
-	// No public first-registrant administrator, no login CSRF or session fixation.
-	code, _, _ := httpCall(t, client, "POST", base+"/setup", url.Values{"username": {"attacker"}, "password": {testPassword}}, "")
-	if code != 403 || s.accounts.ready() {
-		t.Fatal("unguarded bootstrap")
+	// Direct registration still rejects login CSRF and session fixation.
+	code, _, _ := httpCall(t, client, "POST", base+"/register", url.Values{"username": {"attacker"}, "password": {testPassword}}, "")
+	if code != 403 || s.accounts.hasUsers() {
+		t.Fatal("registration accepted without CSRF")
 	}
-	signIn(t, client, base, "setup", "admin", s.accounts.bootstrapToken)
+	signIn(t, client, base, "register", "member")
 	second := realClient(t)
-	signIn(t, second, base, "login", "ADMIN", "")
+	signIn(t, second, base, "login", "MEMBER")
 	for _, c := range []*http.Client{client, second} {
-		if currentAccount(t, c, base)["username"] != "admin" {
+		if currentAccount(t, c, base)["username"] != "member" {
 			t.Fatal("case insensitive account failed")
 		}
 	}
@@ -404,7 +523,7 @@ func TestAccountSecurityAndSessionRevocation(t *testing.T) {
 	if code != 401 {
 		t.Fatal("password change did not revoke other session")
 	}
-	if currentAccount(t, client, base)["username"] != "admin" {
+	if currentAccount(t, client, base)["username"] != "member" {
 		t.Fatal("current session unexpectedly revoked")
 	}
 	oldCookie := sessionValue(t, client, base)
@@ -419,7 +538,7 @@ func TestAccountSecurityAndSessionRevocation(t *testing.T) {
 	if restarted.accounts.resolve(oldCookie) != nil {
 		t.Fatal("logout resurrected on restart")
 	}
-	for _, name := range []string{"accounts.json", "operator-token", "bootstrap-token"} {
+	for _, name := range []string{"accounts.json", "operator-token"} {
 		info, err := os.Stat(filepath.Join(s.accounts.dir, name))
 		if err != nil || info.Mode().Perm() != 0600 {
 			t.Fatalf("secret permissions: %s %v", name, err)
@@ -466,12 +585,13 @@ func TestHTTPSCookieAndAuthStoreFailure(t *testing.T) {
 	}
 	client := realClient(t)
 	client.Transport = service.Client().Transport
-	signIn(t, client, service.URL, "setup", "admin", s.accounts.bootstrapToken)
-	if currentAccount(t, client, service.URL)["username"] != "admin" {
+	signIn(t, client, service.URL, "register", "member")
+	if currentAccount(t, client, service.URL)["username"] != "member" {
 		t.Fatal("TLS session failed")
 	}
 	w := httptest.NewRecorder()
-	if err = s.issueSession(w, s.accounts.state.Users[s.accounts.state.AdminID]); err != nil {
+	u := s.accounts.resolve(sessionValue(t, client, service.URL))
+	if err = s.issueSession(w, u.User); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range w.Result().Cookies() {

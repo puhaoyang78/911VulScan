@@ -74,9 +74,6 @@ func runServe(_ *cobra.Command, _ []string) {
 	}
 
 	fmt.Println("911VulScan 中文工作台已启动：", url)
-	if path := srv.BootstrapPath(); path != "" {
-		fmt.Println("首次访问请创建管理员；初始化口令文件：", path)
-	}
 	openBrowser(url)
 	fmt.Println("按 Ctrl+C 停止服务。")
 

@@ -14,7 +14,7 @@ usage() {
 CentOS 7 与 Docker 26.1.4 均已停止维护。容器不升级宿主机内核；旧内核的
 运行兼容性由部署检查验证，不等同于 Node.js 官方支持或完整扫描验收。
 不替换系统 Python、OpenSSL、glibc，不关闭 SELinux、防火墙或容器安全限制。
-CentOS 7 网页监听 0.0.0.0:8080，可通过服务器内网 IP 访问；首次访问初始化管理员，之后使用个人账号登录。
+CentOS 7 网页监听 0.0.0.0:8080，可通过服务器内网 IP 访问；新用户直接注册，已有账号登录。
 EOF
 }
 MODE=deploy
@@ -292,4 +292,4 @@ for ((waited=0; waited<60; waited++)); do
     sleep 1
 done
 verify "$image"
-printf '\n部署完成：监听 0.0.0.0:8080，请通过 http://服务器内网IP:8080 访问\n服务：systemctl status vulscan\n日志：journalctl -u vulscan -f\n复查：bash %s/scripts/install-centos7.sh --check\n首次访问请初始化管理员，再在用户设置中填写模型 API Key；已有账号直接登录。\n初始化口令文件：%s/.vulscan/webui/.access/bootstrap-token\n' "$ROOT" "$HOME_DIR"
+printf '\n部署完成：监听 0.0.0.0:8080，请通过 http://服务器内网IP:8080 访问\n服务：systemctl status vulscan\n日志：journalctl -u vulscan -f\n复查：bash %s/scripts/install-centos7.sh --check\n新用户直接注册账号，再在用户设置中填写模型 API Key；已有账号直接登录。\n' "$ROOT"

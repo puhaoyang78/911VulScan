@@ -56,26 +56,6 @@ func modelEnvironment(r *http.Request, cfg *config.Config, overrides map[string]
 func (s *Server) createUserConfig(id string) error {
 	return config.SaveTo(&config.Config{}, s.accounts.configPath(id))
 }
-func (s *Server) importAdminConfig(id string) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	// Existing CLI configuration belongs solely to the bootstrap administrator.
-	// Ordinary registration always starts with an empty provider namespace.
-	if p, ok := cfg.GetProvider("deepseek"); !ok || p.APIKey == "" {
-		if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
-			p.Type = "deepseek"
-			p.APIKey = key
-			if p.BaseURL == "" {
-				p.BaseURL = os.Getenv("DEEPSEEK_BASE_URL")
-			}
-			phases := modelPhases("deepseek", "deepseek-flash")
-			cfg.WriteLLMConfig("web-deepseek", phases, map[string]config.ProviderEntry{"deepseek": p}, false)
-		}
-	}
-	return config.SaveTo(cfg, s.accounts.configPath(id))
-}
 func modelPhases(provider, model string) map[string]config.LLMPhaseRef {
 	phases := map[string]config.LLMPhaseRef{}
 	for _, name := range []string{"analyze", "enhance", "verify", "report", "dynamic_test", "llm_reach", "app_context"} {

@@ -193,7 +193,7 @@ func TestBrowserSmokeAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("node", script, srv.URL, s.accounts.bootstrapToken)
+	cmd := exec.Command("node", script, srv.URL)
 	cmd.Dir = filepath.Dir(script)
 	cmd.Env = browserEnv
 	out, err := cmd.CombinedOutput()

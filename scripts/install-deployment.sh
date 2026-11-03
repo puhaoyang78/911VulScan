@@ -608,5 +608,5 @@ PYUNIT
     service_pid=$(privileged systemctl show --property=MainPID --value vulscan)
     privileged "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT" --url http://127.0.0.1:8080 --service-pid "$service_pid" --service-uid "$service_uid" || fail 'Service startup/version check failed; inspect journalctl -u vulscan -n 80.'
     privileged systemctl is-active --quiet vulscan || fail 'vulscan.service is not running; inspect journalctl -u vulscan -n 80.'
-    printf '\n911VulScan ready: http://127.0.0.1:8080\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nFirst visit: initialize the administrator, then configure a personal model in User settings.\nBootstrap token file: %s/.vulscan/webui/.access/bootstrap-token (existing users sign in normally).\n' "$service_home"
+    printf '\n911VulScan ready: http://127.0.0.1:8080\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nNew users: register an account, then configure a personal model in User settings. Existing users can log in directly.\n'
 fi

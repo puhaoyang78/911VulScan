@@ -2,7 +2,7 @@ import {chromium} from 'playwright';
 import {mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 
-const [base, bootstrap] = process.argv.slice(2);
+const [base] = process.argv.slice(2);
 const launch = process.env.VULSCAN_BROWSER_EXECUTABLE ? {executablePath:process.env.VULSCAN_BROWSER_EXECUTABLE}
   : process.env.VULSCAN_BROWSER_CHANNEL ? {channel:process.env.VULSCAN_BROWSER_CHANNEL} : {};
 const browser = await chromium.launch(launch);
@@ -27,15 +27,15 @@ async function visit(page,path) {
   const response = await page.goto(base+path);
   if (!response.ok() || !response.headers()['content-security-policy']?.includes("script-src 'self' 'nonce-")) throw new Error('Page/CSP failure '+path);
 }
-async function register(page,name,mode='/register') {
-  await visit(page,mode);
-  if (mode==='/setup') await page.getByLabel('初始化口令',{exact:true}).fill(bootstrap);
+async function register(page,name) {
+  await visit(page,'/register');
+  if (await page.getByLabel('初始化口令',{exact:true}).count() || await page.getByRole('button',{name:'创建管理员',exact:true}).count()) throw new Error('Registration requires administrator setup');
   await page.getByLabel('账号',{exact:true}).fill(name);
   await page.getByLabel('密码',{exact:true}).fill(password);
   await page.getByLabel('确认密码',{exact:true}).fill(password);
   const invalid=await page.locator('form').evaluate(form=>[...form.elements].filter(el=>el.willValidate&&!el.checkValidity()).map(el=>({name:el.name,message:el.validationMessage})));
   if(invalid.length) throw new Error('Form validation: '+JSON.stringify(invalid));
-  try { await Promise.all([page.waitForURL(base+'/'),page.getByRole('button',{name:mode==='/setup'?'创建管理员':'注册并登录',exact:true}).click()]); } catch(error) { console.error(page.url(),await page.locator('body').innerText()); throw error; }
+  try { await Promise.all([page.waitForURL(base+'/'),page.getByRole('button',{name:'注册并登录',exact:true}).click()]); } catch(error) { console.error(page.url(),await page.locator('body').innerText()); throw error; }
   await page.locator('[data-account-nav] .account-name').filter({hasText:name}).waitFor();
 }
 async function noOverflow(page) {
@@ -43,13 +43,14 @@ async function noOverflow(page) {
   if (widths.body>widths.window+1 || widths.violations.length) throw new Error('Overflow/CSP: '+JSON.stringify(widths));
 }
 try {
-  const admin=await context(); const p0=await admin.newPage();
-  await register(p0,'browser-admin','/setup');
-  if (!await p0.getByText('legacy-private-browser-project',{exact:true}).count()) throw new Error('Legacy task missing for admin');
   const alice=await context(); const a=await alice.newPage();
   const bob=await context(); const b=await bob.newPage();
+  await visit(a,'/');
+  if (a.url()!==base+'/register?next=%2F') throw new Error('First visit did not open registration');
   await Promise.all([register(a,'browser-alice'),register(b,'browser-bob')]);
   for (const page of [a,b]) {
+    const account=await (await page.request.get(base+'/account')).json();
+    if (account.admin!==false) throw new Error('Registration granted legacy administrator access');
     if (await page.getByText('legacy-private-browser-project',{exact:true}).count()) throw new Error('Legacy leak');
     await page.getByRole('navigation',{name:'账号',exact:true}).getByRole('link',{name:'用户设置',exact:true}).click();
     await page.getByRole('heading',{name:'用户设置',exact:true}).waitFor();
@@ -98,5 +99,5 @@ try {
   await a.getByLabel('密码',{exact:true}).fill('Updated-browser-password-2026');
   await a.getByRole('button',{name:'登录',exact:true}).click();await a.waitForURL(base+'/');await noOverflow(a);
   if (errors.length) throw new Error(errors.join('\n'));
-  console.log('ACCOUNTS-BROWSER OK: real setup/register/login/logout, two contexts, persistent cookies, isolated model settings, password confirmation/change, 4 viewport widths, light/dark, keyboard, 0 CSP/external-network errors');
+  console.log('ACCOUNTS-BROWSER OK: direct register/login/logout, two initial registrations, private legacy data, persistent cookies, isolated model settings, password confirmation/change, 4 viewport widths, light/dark, keyboard, 0 CSP/external-network errors');
 } finally {for (const ctx of contexts) await ctx.close();await browser.close();}

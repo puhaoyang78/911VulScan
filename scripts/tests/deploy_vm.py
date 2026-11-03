@@ -147,11 +147,15 @@ def main():
             # The same helper must remain available after reboot clears /tmp.
             run('scp', *options, '-P', str(port), str(Path(__file__).with_name('web_session.py').resolve()), 'deployer@127.0.0.1:/var/tmp/vulscan-web-acceptance.py')
             web_session = f"sudo -n runuser -u {shlex.quote(expected_user)} -- /opt/911VulScan/.venv/bin/python /var/tmp/vulscan-web-acceptance.py --url http://127.0.0.1:8080 --home {shlex.quote(home)}"
-            capture('initialize-account', web_session + ' --initialize')
+            capture('register-account', web_session + ' --register')
             first_pid = remote("systemctl show -p MainPID --value vulscan", capture_output=True).stdout.strip()
             first_hash = remote("sha256sum /opt/911VulScan/bin/vulscan-cli | cut -d' ' -f1", capture_output=True).stdout.strip()
             remote(f"echo retained | sudo tee {home}/.vulscan/deployment-preserved >/dev/null")
-            record = json.dumps({"id": "deadc0de", "repo": "deployment-history-fixture", "status": "done", "started_at": "2026-10-26T00:00:00Z"})
+            lookup_owner = f"import json; from pathlib import Path; data=json.loads(Path({home + '/.vulscan/webui/.access/accounts.json'!r}).read_text()); print(next(u['id'] for u in data['users'].values() if u['username']=='deployment-user'))"
+            owner_id = remote(f"sudo -n runuser -u {shlex.quote(expected_user)} -- /opt/911VulScan/.venv/bin/python -c " + shlex.quote(lookup_owner), capture_output=True).stdout.strip()
+            if len(owner_id) != 32 or any(c not in '0123456789abcdef' for c in owner_id):
+                raise AssertionError('Registered deployment account has no valid ID')
+            record = json.dumps({"id": "deadc0de", "owner_id": owner_id, "repo": "deployment-history-fixture", "status": "done", "started_at": "2026-10-26T00:00:00Z"})
             remote(f"sudo install -d -o {expected_user} -g {expected_user} {home}/.vulscan/webui/deadc0de && printf '%s' " + shlex.quote(record) + f" | sudo tee {home}/.vulscan/webui/deadc0de/meta.json >/dev/null && sudo chown {expected_user}:{expected_user} {home}/.vulscan/webui/deadc0de/meta.json")
             # Preserve a real Docker client config when its path changes.
             remote(f"sudo install -d -o {expected_user} -g {expected_user} {home}/docker-client && echo '{{\"auths\":{{}}}}' | sudo tee {home}/docker-client/config.json >/dev/null && sudo chown {expected_user}:{expected_user} {home}/docker-client/config.json")
