@@ -169,7 +169,7 @@ def check_service(root: Path, pid: int, uid: int, url: str, proc: Path = Path("/
     # that the HTTP listener belongs to this MainPID, not an unrelated old UI.
     parsed = urllib.parse.urlsplit(url)
     address = socket.inet_aton(parsed.hostname)[::-1].hex().upper()
-    local = f"{address}:{parsed.port:04X}"
+    local_addrs = {f"{address}:{parsed.port:04X}", f"00000000:{parsed.port:04X}"}
     sockets = set()
     for entry in (process / "fd").iterdir():
         try:
@@ -177,7 +177,7 @@ def check_service(root: Path, pid: int, uid: int, url: str, proc: Path = Path("/
         except FileNotFoundError:
             continue  # A different request can close a descriptor during inspection.
     listeners = [line.split() for line in (process / "net/tcp").read_text().splitlines()[1:]]
-    if not any(row[1] == local and row[3] == "0A" and f"socket:[{row[9]}]" in sockets for row in listeners):
+    if not any(row[1] in local_addrs and row[3] == "0A" and f"socket:[{row[9]}]" in sockets for row in listeners):
         raise RuntimeError("网页端口不属于 systemd 服务进程，可能被旧服务占用。")
     print(f"实际运行程序：PID={pid} UID={uid} SHA-256={expected}，与安装程序一致。", flush=True)
 
