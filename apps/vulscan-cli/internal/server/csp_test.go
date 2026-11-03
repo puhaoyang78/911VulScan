@@ -57,7 +57,7 @@ func TestCSPPoliciesPerRoute(t *testing.T) {
 		tmplIndex:    tmplIndex,
 		tmplScan:     tmplScan,
 	}
-	h := s.Handler()
+	h := testHandler(t, s)
 	get := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Host = "localhost:8080" // the rebinding guard 403s non-loopback Hosts

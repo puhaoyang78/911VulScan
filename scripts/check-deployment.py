@@ -108,7 +108,7 @@ def check_url(url: str) -> None:
     error = "服务尚未响应"
     while time.monotonic() < deadline:
         try:
-            with opener.open(url, timeout=3) as response:
+            with opener.open(urllib.request.Request(url, headers={"Accept": "text/html"}), timeout=3) as response:
                 if response.status == 200 and "911VulScan" in response.read().decode("utf-8"):
                     print("网页服务：" + url + "，正常", flush=True)
                     return
@@ -119,7 +119,25 @@ def check_url(url: str) -> None:
     raise RuntimeError("网页服务未就绪：" + error)
 
 
-def check_idle(url: str) -> None:
+def check_idle(url: str, service_home: Path | None = None) -> None:
+    # New services keep the global queue private. Deployment runs as the service
+    # account, so only it can read this local operator credential. Old services
+    # without the file retain their original live-page check during upgrades.
+    token_path = (service_home or Path.home()) / ".vulscan/webui/.access/operator-token"
+    if token_path.exists():
+        token = token_path.read_text().strip()
+        if len(token) != 64:
+            raise RuntimeError("部署凭据无效，未停止服务。")
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        request = urllib.request.Request(url.rstrip("/") + "/internal/status", headers={"Authorization": "Bearer " + token})
+        with opener.open(request, timeout=5) as response:
+            state = json.loads(response.read(65536))
+        if state.get("application") != "911VulScan" or type(state.get("running")) is not int or state["running"] < 0:
+            raise RuntimeError("无法确认现有服务的活动任务，未停止服务或更新程序。")
+        if state["running"]:
+            raise RuntimeError("仍有运行、排队或取消中的扫描，请等待任务结束后重新部署；现有服务与扫描未改变。")
+        print("现有服务没有活动扫描，可以更新。", flush=True)
+        return
     # The shipped 2c94b52 workbench already exposes this count. Read the exact
     # field rather than infer running work from saved (possibly stale) files.
     class RunningCount(HTMLParser):
@@ -201,11 +219,17 @@ def main() -> None:
                 parser.error("--service-pid requires --service-uid")
             check_service(root, args.service_pid, args.service_uid, args.url)
     elif args.idle_url:
+        service_home = None
         if args.service_pid is not None:
             if args.service_uid is None:
                 parser.error("--service-pid requires --service-uid")
             check_service(root, args.service_pid, args.service_uid, args.idle_url)
-        check_idle(args.idle_url)
+            environment = (Path("/proc") / str(args.service_pid) / "environ").read_bytes().split(b"\0")
+            homes = [entry[5:].decode() for entry in environment if entry.startswith(b"HOME=")]
+            if len(homes) != 1 or not Path(homes[0]).is_absolute():
+                raise RuntimeError("无法确认服务主目录，未停止服务。")
+            service_home = Path(homes[0])
+        check_idle(args.idle_url, service_home)
     elif args.docker:
         check_docker()
     else:

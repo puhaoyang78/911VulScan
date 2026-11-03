@@ -37,7 +37,13 @@ func TestScanBudgetValidationAndPersistence(t *testing.T) {
 					t.Fatalf("invalid accepted: %d %s", w.Code, w.Body)
 				}
 				entries, _ := os.ReadDir(s.outDir)
-				if len(s.mgr.all()) != 0 || len(entries) != 0 {
+				unexpectedFiles := 0
+				for _, entry := range entries {
+					if entry.Name() != ".access" {
+						unexpectedFiles++
+					}
+				}
+				if len(s.mgr.all()) != 0 || unexpectedFiles != 0 {
 					t.Fatal("invalid input created work")
 				}
 				return

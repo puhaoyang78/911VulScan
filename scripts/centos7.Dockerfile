@@ -26,7 +26,7 @@ COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/ /usr/local/lib/dock
 COPY apps/vulscan-cli/ apps/vulscan-cli/
 COPY libs/vulscan-core/ libs/vulscan-core/
 COPY config/languages.json config/models.json config/
-COPY scripts/install-deployment.sh scripts/check-deployment.py scripts/
+COPY scripts/install-deployment.sh scripts/check-deployment.py scripts/configure-ubuntu-mirrors.sh scripts/select-docker-packages.py scripts/
 ENV PATH=/opt/911VulScan/.tools/go/bin:/opt/911VulScan/.tools/node/bin:$PATH
 RUN sh scripts/install-deployment.sh \
     && .venv/bin/python scripts/check-deployment.py --root /opt/911VulScan

@@ -206,7 +206,7 @@ func TestUIPagesLoadNoExternalScripts(t *testing.T) {
 	for _, s := range uiVendorScripts {
 		vendored[s.name] = true
 	}
-	for _, page := range []string{"index.html", "scan.html", "summary.html", "disclosure.html"} {
+	for _, page := range []string{"index.html", "scan.html", "summary.html", "disclosure.html", "auth.html", "settings.html"} {
 		s := readPage(t, page)
 		var srcTags []string
 		for _, m := range uiAnyScriptSrc.FindAllStringSubmatch(s, -1) {
@@ -287,7 +287,7 @@ func TestUIPagesLoadNoExternalScripts(t *testing.T) {
 // relative order while breaking rendering, so the position is pinned
 // alongside the order.
 func TestUIHTMLScriptsVersionedAndOrdered(t *testing.T) {
-	want := []string{"shell.js"}
+	want := []string{"shell.js", "account.js"}
 	for _, s := range uiVendorScripts {
 		want = append(want, s.name)
 	}

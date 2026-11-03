@@ -2,6 +2,13 @@
 # Run from any directory; keep this installation tree together.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# Installation-local defaults; explicit operator settings remain authoritative.
+: "${PIP_INDEX_URL:=https://pypi.tuna.tsinghua.edu.cn/simple}"
+: "${NPM_CONFIG_REGISTRY:=https://registry.npmmirror.com}"
+: "${NPM_CONFIG_REPLACE_REGISTRY_HOST:=always}"
+: "${GOPROXY:=https://goproxy.cn}"
+: "${GOSUMDB:=sum.golang.google.cn}"
+export PIP_INDEX_URL NPM_CONFIG_REGISTRY NPM_CONFIG_REPLACE_REGISTRY_HOST GOPROXY GOSUMDB
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'EOF'
@@ -58,7 +65,7 @@ privileged() {
 }
 service_run() {
     if [ "$DEPLOY" = 1 ] && [ "$(id -u)" != "$service_uid" ]; then
-        privileged runuser -u "$service_user" -- env HOME="$service_home" DOCKER_CONFIG="$DOCKER_CONFIG" PATH="$PATH" "$@"
+        privileged runuser -u "$service_user" -- env HOME="$service_home" DOCKER_CONFIG="$DOCKER_CONFIG" PATH="$PATH" PIP_INDEX_URL="$PIP_INDEX_URL" NPM_CONFIG_REGISTRY="$NPM_CONFIG_REGISTRY" NPM_CONFIG_REPLACE_REGISTRY_HOST="$NPM_CONFIG_REPLACE_REGISTRY_HOST" GOPROXY="$GOPROXY" GOSUMDB="$GOSUMDB" "$@"
     elif [ "$DEPLOY" = 1 ]; then
         env HOME="$service_home" DOCKER_CONFIG="$DOCKER_CONFIG" "$@"
     else
@@ -252,13 +259,13 @@ if [ "$BOOTSTRAP" = 1 ]; then
         fi
     fi
     printf '\nBootstrap plan:\n'
-    [ -z "$PACKAGES" ] || printf '  sudo apt-get update; apt-get install --no-remove:%s\n  Uses configured APT repositories; ensure these are trusted Ubuntu repositories.\n' "$PACKAGES"
-    [ "$BUILD_PY" = 0 ] || printf '  Build checksum-pinned Python 3.12.16 from python.org into .tools/python (make altinstall; system Python unchanged).\n'
-    [ "$BUILD_GIT" = 0 ] || printf '  Build Git 2.56.x from kernel.org verified source into .tools/git using its supported NO_RUST build; system Git unchanged.\n'
+    [ -z "$PACKAGES" ] || printf '  sudo apt-get update; apt-get install --no-remove:%s\n  Use Aliyun Ubuntu mirrors; preserve suites, components, Ubuntu signatures and third-party sources.\n' "$PACKAGES"
+    [ "$BUILD_PY" = 0 ] || printf '  Build checksum-pinned Python 3.12.16 from Huawei Cloud mirror into .tools/python (make altinstall; system Python unchanged).\n'
+    [ "$BUILD_GIT" = 0 ] || printf '  Build Git 2.56.x from USTC verified source into .tools/git using its supported NO_RUST build; system Git unchanged.\n'
     [ "$FOCAL_DOCKER" = 0 ] || printf '  WARNING: Docker no longer supports Ubuntu 20.04. Optional frozen official Focal packages: Engine/CLI 28.1.1, containerd 1.7.27, Compose 2.35.1, Buildx 0.23.0. No current security support; upgrade Ubuntu recommended. Requires --allow-unsupported-docker.\n'
-    [ "$NEED_GO" = 0 ] || printf '  Download latest stable Go 1.26 patch from go.dev/dl metadata; verify SHA-256; install .tools/go.\n'
-    [ "$NEED_NODE" = 0 ] || printf '  Download latest Node 22 LTS from nodejs.org; verify vendor SHA-256 manifest; install .tools/node (includes npm).\n'
-    [ "$LOCAL_PLUGINS" = 0 ] || printf '  Add only missing Docker CLI plugins (Compose=%s Buildx=%s) to %s; verify official release SHA-256. Existing Engine and working plugins stay unchanged. No sudo/service changes for plugins.\n' "$NEED_COMPOSE" "$NEED_BUILDX" "$PLUGIN_DIR"
+    [ "$NEED_GO" = 0 ] || printf '  Download latest stable Go 1.26 patch from golang.google.cn metadata and Aliyun archives; verify SHA-256; install .tools/go.\n'
+    [ "$NEED_NODE" = 0 ] || printf '  Download latest Node 22 LTS from npmmirror; verify vendor SHA-256 manifest; install .tools/node (includes npm).\n'
+    [ "$LOCAL_PLUGINS" = 0 ] || printf '  Add only missing Docker CLI plugins (Compose=%s Buildx=%s) to %s; verify Docker package SHA-256 from the Aliyun mirror. Existing Engine and working plugins stay unchanged. No sudo/service changes for plugins.\n' "$NEED_COMPOSE" "$NEED_BUILDX" "$PLUGIN_DIR"
     [ "$NEED_ENGINE" = 0 ] || printf '  Docker package scripts may START/ENABLE Docker/containerd services (requires --start-docker).\n'
     [ "$START_DOCKER" = 0 ] || printf '  Start existing/local docker.service using systemctl (no explicit enable or daemon changes).\n'
     printf '  No system Python replacement, Docker group changes, daemon configuration or credential changes.\n'
@@ -334,6 +341,7 @@ if [ "$BOOTSTRAP" = 1 ]; then
         fi
     fi
     if [ -n "$PACKAGES" ]; then
+        privileged /bin/sh "$ROOT/scripts/configure-ubuntu-mirrors.sh" "${VULSCAN_APT_DIR:-/etc/apt}" || fail 'Cannot configure the Ubuntu mirror; source trust settings were not relaxed.'
         privileged apt-get update || fail 'APT update failed; check network and trusted Ubuntu repository configuration.'
         for pkg in $PACKAGES; do
             candidate=$(apt-cache policy "$pkg" | awk '/Candidate:/ {print $2}')
@@ -382,7 +390,7 @@ if [ "$BOOTSTRAP" = 1 ]; then
             mkdir -p "$ROOT/.tools/python"
             : > "$ROOT/.tools/python/.911vulscan-installing"
             file=Python-3.12.16.tar.xz
-            fetch "https://www.python.org/ftp/python/3.12.16/$file" "$TMP/$file"
+            fetch "https://repo.huaweicloud.com/python/3.12.16/$file" "$TMP/$file"
             (cd "$TMP"; printf '%s  %s\n' b5796915dc45ff745cfb4e990a7e7c93d6f546328a102ce31448d69ebc37575c "$file" | sha256sum --check --status) || fail 'Python checksum mismatch; source not extracted.'
             tar -xJf "$TMP/$file" -C "$TMP"
             (cd "$TMP/Python-3.12.16" && ./configure --prefix="$ROOT/.tools/python" --with-ensurepip=install && make -j2 && make altinstall) || fail 'Python source build failed. No system Python was changed; review build dependencies.'
@@ -393,7 +401,7 @@ if [ "$BOOTSTRAP" = 1 ]; then
         fi
         python_ok || fail 'Python >=3.11 with venv/ensurepip is still unavailable; check python3-venv or set PYTHON.'
         if [ "$BUILD_GIT" = 1 ]; then
-            fetch 'https://www.kernel.org/pub/software/scm/git/sha256sums.asc' "$TMP/git-checksums"
+            fetch 'https://mirrors.ustc.edu.cn/kernel.org/software/scm/git/sha256sums.asc' "$TMP/git-checksums"
             "$PYTHON" - "$TMP/git-checksums" > "$TMP/git-selection" <<'PYGIT'
 import re, sys
 from pathlib import Path
@@ -409,7 +417,7 @@ _, filename, checksum = max(versions)
 print(filename); print(checksum)
 PYGIT
             file=$(sed -n '1p' "$TMP/git-selection"); sha=$(sed -n '2p' "$TMP/git-selection")
-            fetch "https://www.kernel.org/pub/software/scm/git/$file" "$TMP/$file"
+            fetch "https://mirrors.ustc.edu.cn/kernel.org/software/scm/git/$file" "$TMP/$file"
             (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Git checksum mismatch; source not extracted.'
             tar -xJf "$TMP/$file" -C "$TMP"
             git_source="$TMP/${file%.tar.xz}"
@@ -418,66 +426,43 @@ PYGIT
         if [ "$FOCAL_DOCKER" = 1 ]; then
             # Official retained distribution metadata provides exact .deb SHA-256.
             # No APT repository, trust key, daemon config, or package hold is changed.
-            fetch "https://download.docker.com/linux/ubuntu/dists/focal/stable/binary-$ARCH/Packages.gz" "$TMP/docker-Packages.gz"
-            "$PYTHON" - "$TMP/docker-Packages.gz" "$ARCH" "$NEED_COMPOSE" "$NEED_BUILDX" > "$TMP/docker-selection" <<'PYDOCKER'
-import gzip, re, sys
-pins = {'docker-ce': '28.1.1', 'docker-ce-cli': '28.1.1', 'containerd.io': '1.7.27'}
-if sys.argv[3] == '1': pins['docker-compose-plugin'] = '2.35.1'
-if sys.argv[4] == '1': pins['docker-buildx-plugin'] = '0.23.0'
-found = {}
-for block in gzip.open(sys.argv[1], 'rt').read().split('\n\n'):
-    fields = dict(line.split(': ', 1) for line in block.splitlines() if ': ' in line and not line.startswith(' '))
-    name = fields.get('Package')
-    if name not in pins or fields.get('Architecture') != sys.argv[2]: continue
-    version = fields.get('Version', '').split(':')[-1]
-    if not re.match(re.escape(pins[name]) + r'(?=[-~+]|$)', version): continue
-    path, sha = fields.get('Filename', ''), fields.get('SHA256', '')
-    if not re.fullmatch(r'dists/focal/pool/stable/' + sys.argv[2] + r'/[A-Za-z0-9_.+%~:-]+\.deb', path) or not re.fullmatch('[0-9a-f]{64}', sha):
-        sys.exit('Invalid filename/checksum in official Docker metadata.')
-    if not path.rsplit('/', 1)[-1].startswith(name + '_'):
-        sys.exit('Unexpected package filename in official Docker metadata.')
-    found[name] = (path, sha)
-if set(found) != set(pins): sys.exit('Pinned unsupported Focal Docker packages unavailable; upgrade Ubuntu or install Docker manually.')
-for name in pins: print(*found[name])
-PYDOCKER
+            fetch "https://mirrors.aliyun.com/docker-ce/linux/ubuntu/dists/focal/stable/binary-$ARCH/Packages.gz" "$TMP/docker-Packages.gz"
+            set -- docker-ce=28.1.1 docker-ce-cli=28.1.1 containerd.io=1.7.27
+            [ "$NEED_COMPOSE" = 0 ] || set -- "$@" docker-compose-plugin=2.35.1
+            [ "$NEED_BUILDX" = 0 ] || set -- "$@" docker-buildx-plugin=0.23.0
+            "$PYTHON" "$ROOT/scripts/select-docker-packages.py" "$TMP/docker-Packages.gz" "$ARCH" focal "$@" > "$TMP/docker-selection"
             mkdir "$TMP/debs"
             while read -r path sha; do
                 file=${path##*/}
-                fetch "https://download.docker.com/linux/ubuntu/$path" "$TMP/debs/$file"
+                fetch "https://mirrors.aliyun.com/docker-ce/linux/ubuntu/$path" "$TMP/debs/$file"
                 (cd "$TMP/debs"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Docker package checksum mismatch; package not installed.'
             done < "$TMP/docker-selection"
             privileged env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install --yes --no-remove --no-install-recommends "$TMP"/debs/*.deb || fail 'Frozen Docker package installation failed; no alternate repositories were added.'
         fi
         if [ "$LOCAL_PLUGINS" = 1 ]; then
-            # Official standalone CLI plugins; do not touch engine packages or config.json.
-            # Buildx documents Engine >=19.03; CLI validation below does not
-            # claim daemon/build compatibility. Plugin updates are explicit.
-            for plugin in compose buildx; do
-                case "$plugin" in
-                    compose)
-                        [ "$NEED_COMPOSE" = 1 ] || continue
-                        case "$ARCH" in amd64) plugin_arch=x86_64;; arm64) plugin_arch=aarch64;; esac
-                        file="docker-compose-linux-$plugin_arch"
-                        base='https://github.com/docker/compose/releases/download/v5.5.1'
-                        manifest=checksums.txt;;
-                    buildx)
-                        [ "$NEED_BUILDX" = 1 ] || continue
-                        file="buildx-v0.38.1.linux-$ARCH"
-                        base='https://github.com/docker/buildx/releases/download/v0.38.1'
-                        manifest=checksums.txt;;
-                esac
-                fetch "$base/$manifest" "$TMP/$plugin-checksums.txt"
-                sha=$(awk -v name="$file" '$2 == name || $2 == "*" name {print $1}' "$TMP/$plugin-checksums.txt")
-                [ "${#sha}" = 64 ] && printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{64}$' || fail "Missing or invalid $plugin SHA-256 in official release manifest."
-                fetch "$base/$file" "$TMP/$file"
+            # Extract only the official standalone Go binaries from mirrored
+            # Docker packages. No dpkg install, maintainer scripts or Engine changes.
+            command -v dpkg-deb >/dev/null 2>&1 || fail 'dpkg-deb is required to extract Docker CLI plugins.'
+            set --
+            [ "$NEED_COMPOSE" = 0 ] || set -- "$@" docker-compose-plugin=5.5.1
+            [ "$NEED_BUILDX" = 0 ] || set -- "$@" docker-buildx-plugin=0.38.1
+            fetch "https://mirrors.aliyun.com/docker-ce/linux/ubuntu/dists/noble/stable/binary-$ARCH/Packages.gz" "$TMP/plugin-Packages.gz"
+            "$PYTHON" "$ROOT/scripts/select-docker-packages.py" "$TMP/plugin-Packages.gz" "$ARCH" noble "$@" > "$TMP/plugin-selection"
+            while read -r path sha; do
+                file=${path##*/}
+                case "$file" in docker-compose-plugin_*) plugin=compose;; docker-buildx-plugin_*) plugin=buildx;; *) fail 'Unexpected Docker plugin package.';; esac
+                fetch "https://mirrors.aliyun.com/docker-ce/linux/ubuntu/$path" "$TMP/$file"
                 (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail "$plugin checksum mismatch; plugin not installed."
+                dpkg-deb --extract "$TMP/$file" "$TMP/$plugin-package" || fail 'Docker plugin package extraction failed.'
+                plugin_binary="$TMP/$plugin-package/usr/libexec/docker/cli-plugins/docker-$plugin"
+                [ -f "$plugin_binary" ] && [ ! -L "$plugin_binary" ] || fail 'Expected regular Docker plugin binary is missing.'
                 service_run mkdir -p "$PLUGIN_DIR"
                 # Stage in the same filesystem; hard-link publication refuses replacement
                 # even if another process created the destination after our preflight.
                 PLUGIN_TMP=$(service_run mktemp "$PLUGIN_DIR/.$plugin.XXXXXXXX")
                 # The bootstrap directory is private to the installer; publish
                 # only the verified executable to the service-owned temporary.
-                service_run tee "$PLUGIN_TMP" < "$TMP/$file" >/dev/null
+                service_run tee "$PLUGIN_TMP" < "$plugin_binary" >/dev/null
                 service_run chmod 755 "$PLUGIN_TMP"
                 if ! service_run ln -T "$PLUGIN_TMP" "$PLUGIN_DIR/docker-$plugin"; then
                     service_run rm -f "$PLUGIN_TMP"
@@ -485,11 +470,11 @@ PYDOCKER
                 fi
                 service_run rm -f "$PLUGIN_TMP"
                 docker "$plugin" version >/dev/null 2>&1 || fail "Installed plugin $PLUGIN_DIR/docker-$plugin failed Docker CLI validation; inspect its platform compatibility and Docker plugin discovery. No Engine or working plugin was replaced."
-            done
+            done < "$TMP/plugin-selection"
         fi
         if [ "$NEED_GO" = 1 ]; then
             [ ! -e "$ROOT/.tools/go" ] || fail 'Existing .tools/go is incompatible; move it aside manually before retrying (not replaced automatically).'
-            fetch 'https://go.dev/dl/?mode=json' "$TMP/go.json"
+            fetch 'https://golang.google.cn/dl/?mode=json' "$TMP/go.json"
             "$PYTHON" - "$TMP/go.json" "$ARCH" > "$TMP/go-selection" <<'PY'
 import json, re, sys
 releases = json.load(open(sys.argv[1]))
@@ -507,14 +492,14 @@ _, name, sha = max(candidates)
 print(name); print(sha)
 PY
             file=$(sed -n '1p' "$TMP/go-selection"); sha=$(sed -n '2p' "$TMP/go-selection")
-            fetch "https://go.dev/dl/$file" "$TMP/$file"
+            fetch "https://mirrors.aliyun.com/golang/$file" "$TMP/$file"
             (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Go checksum mismatch; archive not extracted.'
             tar -xzf "$TMP/$file" -C "$TMP"
             mv "$TMP/go" "$ROOT/.tools/go"
         fi
         if [ "$NEED_NODE" = 1 ]; then
             [ ! -e "$ROOT/.tools/node" ] || fail 'Existing .tools/node is incompatible; move it aside manually before retrying (not replaced automatically).'
-            fetch 'https://nodejs.org/dist/index.json' "$TMP/node.json"
+            fetch 'https://registry.npmmirror.com/-/binary/node/index.json' "$TMP/node.json"
             node_version=$("$PYTHON" - "$TMP/node.json" <<'PY'
 import json, re, sys
 versions = [r['version'] for r in json.load(open(sys.argv[1])) if r.get('lts') and re.fullmatch(r'v22\.\d+\.\d+', r.get('version', ''))]
@@ -524,10 +509,10 @@ print(max(versions, key=lambda v: tuple(map(int, v[1:].split('.')))))
 PY
             )
             file="node-$node_version-linux-$NODE_ARCH.tar.gz"
-            fetch "https://nodejs.org/dist/$node_version/SHASUMS256.txt" "$TMP/SHASUMS256.txt"
+            fetch "https://registry.npmmirror.com/-/binary/node/$node_version/SHASUMS256.txt" "$TMP/SHASUMS256.txt"
             sha=$(awk -v name="$file" '$2 == name {print $1}' "$TMP/SHASUMS256.txt")
             [ "${#sha}" = 64 ] && printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{64}$' || fail 'Missing or invalid Node SHA-256 in vendor manifest.'
-            fetch "https://nodejs.org/dist/$node_version/$file" "$TMP/$file"
+            fetch "https://registry.npmmirror.com/-/binary/node/$node_version/$file" "$TMP/$file"
             (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Node checksum mismatch; archive not extracted.'
             mkdir "$TMP/node"
             tar -xzf "$TMP/$file" --strip-components=1 -C "$TMP/node"
@@ -575,6 +560,13 @@ cat > "$ROOT/bin/vulscan" <<'EOF'
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# Installation-local defaults; explicit operator settings remain authoritative.
+: "${PIP_INDEX_URL:=https://pypi.tuna.tsinghua.edu.cn/simple}"
+: "${NPM_CONFIG_REGISTRY:=https://registry.npmmirror.com}"
+: "${NPM_CONFIG_REPLACE_REGISTRY_HOST:=always}"
+: "${GOPROXY:=https://goproxy.cn}"
+: "${GOSUMDB:=sum.golang.google.cn}"
+export PIP_INDEX_URL NPM_CONFIG_REGISTRY NPM_CONFIG_REPLACE_REGISTRY_HOST GOPROXY GOSUMDB
 export PATH="$ROOT/.tools/git/bin:$ROOT/.tools/go/bin:$ROOT/.tools/node/bin:$PATH"
 export VULSCAN_PYTHON="$ROOT/.venv/bin/python"
 export VULSCAN_PORTABLE_ROOT="$ROOT"
@@ -616,5 +608,5 @@ PYUNIT
     service_pid=$(privileged systemctl show --property=MainPID --value vulscan)
     privileged "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT" --url http://127.0.0.1:8080 --service-pid "$service_pid" --service-uid "$service_uid" || fail 'Service startup/version check failed; inspect journalctl -u vulscan -n 80.'
     privileged systemctl is-active --quiet vulscan || fail 'vulscan.service is not running; inspect journalctl -u vulscan -n 80.'
-    printf '\n911VulScan ready: http://127.0.0.1:8080\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nConfigure a model API key in the web form before scanning.\n'
+    printf '\n911VulScan ready: http://127.0.0.1:8080\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nFirst visit: initialize the administrator, then configure a personal model in User settings.\nBootstrap token file: %s/.vulscan/webui/.access/bootstrap-token (existing users sign in normally).\n' "$service_home"
 fi

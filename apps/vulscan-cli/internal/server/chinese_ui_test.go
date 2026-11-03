@@ -60,7 +60,7 @@ func TestVulnerabilityReportLinksRoundTripAndUseOriginalFilename(t *testing.T) {
 	s := &Server{outDir: root, mgr: newManager(root), tmplDisclosure: tmpl}
 	s.mgr.add(&Job{ID: id, Status: StatusDone, DisclosurePaths: []string{path, filepath.Join(dir, "missing.md")}})
 	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1/disclosures/"+id, nil))
+	testHandler(t, s).ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1/disclosures/"+id, nil))
 	var reports []disclosureInfo
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &reports) != nil || len(reports) != 1 {
 		t.Fatalf("report list contains missing or unreadable files: %d %s", w.Code, w.Body.String())
@@ -69,7 +69,7 @@ func TestVulnerabilityReportLinksRoundTripAndUseOriginalFilename(t *testing.T) {
 		t.Fatalf("report title, filename or escaped URL lost: %+v", reports[0])
 	}
 	w = httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1"+reports[0].URL, nil))
+	testHandler(t, s).ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1"+reports[0].URL, nil))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "<h1>"+title+"</h1>") || !strings.Contains(w.Body.String(), "filename:'"+filename+"'") {
 		t.Fatalf("report link cannot open the named document: %d %s", w.Code, w.Body.String())
 	}
@@ -226,12 +226,12 @@ func TestChineseDashboardUsesSafeDefaultsAndNoSecretValues(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Host = "localhost"
 	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
+	testHandler(t, s).ServeHTTP(w, r)
 	if w.Code != 200 {
 		t.Fatalf("dashboard = %d", w.Code)
 	}
 	body := w.Body.String()
-	for _, want := range []string{`lang="zh-CN"`, "911VulScan", "安全扫描工作台", "最近扫描", `value="deepseek" selected`, "deepseek-v4-pro", `id="stat-running">1`, `id="stat-done">1`, `id="stat-attention">1`, "DEEPSEEK_API_KEY"} {
+	for _, want := range []string{`lang="zh-CN"`, "911VulScan", "安全扫描工作台", "最近扫描", `value="deepseek" selected`, "deepseek-v4-pro", `id="stat-running">1`, `id="stat-done">1`, `id="stat-attention">1`, "用户设置"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q", want)
 		}

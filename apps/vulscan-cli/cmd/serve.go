@@ -28,9 +28,11 @@ var serveCmd = &cobra.Command{
 }
 
 var serveAddr string
+var serveExternalURL string
 
 func init() {
 	serveCmd.Flags().StringVar(&serveAddr, "addr", "127.0.0.1:8080", "监听地址")
+	serveCmd.Flags().StringVar(&serveExternalURL, "external-url", os.Getenv("VULSCAN_EXTERNAL_URL"), "浏览器访问地址，例如 https://scan.example.com（反向代理需保留 Host）")
 }
 
 func runServe(_ *cobra.Command, _ []string) {
@@ -57,6 +59,10 @@ func runServe(_ *cobra.Command, _ []string) {
 		output.PrintError("初始化服务失败：" + err.Error())
 		os.Exit(2)
 	}
+	if err := srv.ConfigureExternalURL(serveExternalURL); err != nil {
+		output.PrintError(err.Error())
+		os.Exit(2)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -68,6 +74,9 @@ func runServe(_ *cobra.Command, _ []string) {
 	}
 
 	fmt.Println("911VulScan 中文工作台已启动：", url)
+	if path := srv.BootstrapPath(); path != "" {
+		fmt.Println("首次访问请创建管理员；初始化口令文件：", path)
+	}
 	openBrowser(url)
 	fmt.Println("按 Ctrl+C 停止服务。")
 

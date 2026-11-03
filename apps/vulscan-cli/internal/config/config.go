@@ -84,7 +84,11 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	return LoadFrom(path)
+}
 
+// LoadFrom uses an explicit configuration path without changing process state.
+func LoadFrom(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -119,7 +123,11 @@ func Save(cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	return SaveTo(cfg, path)
+}
 
+// SaveTo retains the CLI's atomic write and permissions for Web user settings.
+func SaveTo(cfg *Config, path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)

@@ -2,6 +2,8 @@
 
 部署包只含运行代码、构建依赖清单、运行时提示词、必要配置和许可证；开发仓库继续保留测试与 CI。
 
+Ubuntu 安装使用国内源：系统 APT 的官方 Ubuntu 地址切换为阿里云（同时兼容 `sources.list` 和 24.04 的 deb822 `.sources`），Python 包默认清华 PyPI，npm 使用 npmmirror，Go 模块使用 goproxy.cn 并保留校验数据库。Python 源码取自华为云，Git 源码取自中科大 kernel.org 镜像，Go 元数据取自 golang.google.cn、安装包取自阿里云，Node 22 取自 npmmirror，20.04 的冻结 Docker 包取自阿里云 Docker CE 镜像。现有自定义第三方 APT 仓库、签名配置和显式设置的包管理器环境变量保留；APT 签名、压缩包 SHA-256 和 npm 锁文件检查不关闭。仅补装独立 Docker 插件时，也从阿里云 Docker CE 包提取固定版本的官方插件并校验，不安装软件包、不执行维护脚本、不改现有 Engine。
+
 ## 全新 Ubuntu 服务器一键部署
 
 Ubuntu **20.04、22.04、24.04**（也支持 26.04），x86_64/arm64，使用 root 或具有 sudo 权限的用户执行：
@@ -58,7 +60,7 @@ bash scripts/install-centos7.sh
 
 此入口保留宿主机系统 Python、OpenSSL、glibc 和内核，应用在 Ubuntu 24.04 用户空间的容器中构建和运行，包含 Python 3.12、Go 1.26、Node 22、Git、Compose 与 Buildx。宿主机缺少 Docker 时，使用 Docker 官方 CentOS 7 归档的 Engine/CLI **26.1.4**、containerd **1.6.33**；RPM 保持签名校验，CentOS 依赖使用官方 7.9.2009 Vault，仅为本次 yum 调用启用源。已有可用 Docker 20.10+ 会复用，其他来源的残缺安装不会被替换或降级。安装不改写 yum 源、Docker daemon 配置和已有凭据。
 
-服务仍为 `vulscan.service`，应用以无登录权限的 `vulscan` 账号运行，配置在 `/var/lib/vulscan/.config/vulscan`，扫描数据在 `/var/lib/vulscan/.vulscan`，Docker 配置在 `/var/lib/vulscan/.docker`。目录挂载在容器内的相同路径，重建镜像保留这些数据。服务通过 Docker 补充组访问 socket，不添加永久组成员、不放宽 socket 权限、不使用特权容器。应用镜像构建及应用容器使用宿主网络以保留回环地址和本机代理行为；安装时已有的 HTTP(S)_PROXY 通过 Docker 专用构建参数传入，不写入运行环境。网页只监听 `127.0.0.1:8080`，远程访问仍使用上文 SSH 转发。
+服务仍为 `vulscan.service`，应用以无登录权限的 `vulscan` 账号运行，数据在 `/var/lib/vulscan/.vulscan`，Docker 配置在 `/var/lib/vulscan/.docker`。目录挂载在容器内的相同路径，重建镜像保留这些数据。服务通过 Docker 补充组访问 socket，不添加永久组成员、不放宽 socket 权限、不使用特权容器。应用镜像构建及应用容器使用宿主网络以保留回环地址和本机代理行为；安装时已有的 HTTP(S)_PROXY 通过 Docker 专用构建参数传入，不写入运行环境。网页绑定 `0.0.0.0:8080`，通过 `http://服务器内网IP:8080` 访问并登录；防火墙开放范围由服务器管理员配置。
 
 构建先完成再停止旧服务，更新前后均检查有无活动扫描；有任务时保留旧服务。新镜像必须通过非 root 解析器检查与 Docker 构建、Compose 运行、资源清理检查才能安装。启动后核对镜像 ID、进程 UID、实际程序内容与监听端口。systemd 使用 219 兼容语法，开机启动时先按正常停止流程回收本服务遗留的容器，等待删除完成后再运行 Docker 检查和新程序，避免容器名称冲突。其他容器不会因此被停止。
 
@@ -72,6 +74,44 @@ journalctl -u vulscan -f
 **CentOS 7 已于 2024-06-30 停止维护，以上 Docker 版本也没有当前安全维护。** 容器共享宿主机内核，不能把旧内核变成 Node 22 的官方支持平台；部署会实际运行解析器与 Docker 检查，兼容性失败时明确停止，不关闭 seccomp/SELinux、不升级或自动重启宿主机。若原 Docker 已启用容器 SELinux 隔离，需要管理员先配置访问 socket 的专用策略，脚本会报出原因而不关闭隔离。需要联网下载官方 RPM、Docker Hub 基础镜像、Ubuntu 包及语言依赖；下载失败可修复网络后重试原命令。
 
 来源：[CentOS 7 停止维护说明](https://www.redhat.com/en/topics/linux/centos-linux-eol)、[Docker 官方 EL7 归档](https://download.docker.com/linux/centos/7/x86_64/stable/Packages/)、[Node 22 平台要求](https://github.com/nodejs/node/blob/v22.x/BUILDING.md#platform-list)。
+
+## 多用户工作台与 HTTPS
+
+首次打开工作台进入“初始化管理员”。从**服务账号**主目录读取一次性初始化口令；CentOS 7 部署执行：
+
+```sh
+sudo cat /var/lib/vulscan/.vulscan/webui/.access/bootstrap-token
+```
+
+填写口令、账号和至少 12 位的密码创建管理员。普通用户随后在登录页注册。管理员初始化前不开放普通注册，已有匿名任务仅对该管理员可见；不会迁移或删除原任务目录。已有 CLI 模型配置仅复制给初始化管理员，其他用户在“用户设置”单独配置服务商、模型与 API 密钥。扫描页输入的临时密钥仍仅用于该任务。
+
+账号与会话保存在 `~/.vulscan/webui/.access/accounts.json`，个人模型配置在该目录下的 `users/<用户ID>/vulscan/config.json`；目录权限 0700、敏感文件 0600。备份整个服务账号的 `.vulscan`，并保留文件所有权与权限。密码使用带独立随机盐的 PBKDF2-HMAC-SHA256（600,000 次），会话凭据只存摘要，登录保持 7 天，退出即时撤销；修改密码会撤销其他会话。所有任务页面、接口、SSE、报告和下载都检查任务归属。共享的四个执行槽位和原扫描、Docker 清理流程保持一致。
+
+普通账号只扫描 HTTP(S) 仓库，不读取服务账号的 Git 凭据或服务器本机项目路径；本机路径扫描仅限初始化管理员。共享服务器的 Web 账号用于受信任的内网团队，Docker 动态测试仍采用现有隔离方式；账号权限隔离不等同于为任意不受信任代码提供宿主机隔离。
+
+内网 IP 的 HTTP 访问可直接使用登录功能；HTTP 不加密密码与密钥，公网或域名部署使用 HTTPS 反向代理，并显式固定外部地址：
+
+```sh
+./bin/vulscan serve --addr 127.0.0.1:8080 --external-url https://scan.example.com
+```
+
+代理需保留原始 `Host`，关闭 SSE 响应缓冲并允许长连接。服务不信任客户端传来的 `X-Forwarded-*`，配置 HTTPS 外部地址后 Cookie 自动启用 `Secure`，同时保留 `HttpOnly`、`SameSite=Lax` 和每会话 CSRF 校验。CSP 不增加外网权限。
+
+systemd 部署可用 `sudo systemctl edit vulscan` 添加下列配置；CentOS 7 容器入口也会接收此变量，重新部署保留 drop-in。待扫描结束后重启服务：
+
+```ini
+[Service]
+Environment=VULSCAN_EXTERNAL_URL=https://scan.example.com
+```
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl restart vulscan
+```
+
+重复部署通过仅允许本机访问的 `/internal/status` 检查所有用户的活动任务，使用服务账号目录里的独立部署凭据，不依赖某个用户的首页计数；有任务或无法确认状态时拒绝停止服务。初始化口令和部署凭据均不对 Web 用户提供。
+
+实现参考 [AutoCVE 用户配置与归属检查](https://github.com/larlarua/AutoCVE/tree/main/backend/app)，沿用本项目的 Go 模板、原生 JavaScript、SSE 和文件存储，没有引入数据库或新的 Web 运行服务。
 
 ## 构建与启动（Linux/macOS）
 

@@ -41,7 +41,7 @@ func TestMarkdownJSONScriptBreakout(t *testing.T) {
 		tmplSum:        tmplSum,
 		tmplDisclosure: tmplDisclosure,
 	}
-	h := s.Handler()
+	h := testHandler(t, s)
 
 	// The hostile payload: every shape that could terminate or hijack the
 	// script element, plus the JSON/JS punctuation that could close the

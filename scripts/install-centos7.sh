@@ -14,7 +14,7 @@ usage() {
 CentOS 7 与 Docker 26.1.4 均已停止维护。容器不升级宿主机内核；旧内核的
 运行兼容性由部署检查验证，不等同于 Node.js 官方支持或完整扫描验收。
 不替换系统 Python、OpenSSL、glibc，不关闭 SELinux、防火墙或容器安全限制。
-CentOS 7 网页监听 0.0.0.0:8080，可通过服务器内网 IP 访问；不提供网页登录认证。
+CentOS 7 网页监听 0.0.0.0:8080，可通过服务器内网 IP 访问；首次访问初始化管理员，之后使用个人账号登录。
 EOF
 }
 MODE=deploy
@@ -62,7 +62,7 @@ CentOS 7 部署计划：内核 $kernel
   4. 验证全部解析器、Docker 构建/运行/清理；有活动扫描时拒绝更新。
   5. 启用并重启 vulscan.service，校验镜像、实际进程与监听端口；地址 http://服务器内网IP:8080。
 不升级内核/系统 Python/glibc，不删除已有镜像/容器，不改 Docker socket 权限。
-应用容器使用宿主网络（服务仅绑定回环地址）与 Docker socket，二阶段测试仍由原实现执行。
+应用容器使用宿主网络（服务绑定内网 IPv4）与 Docker socket，二阶段测试仍由原实现执行。
 注意：CentOS 7 与 Docker 26.1.4 已停止维护；容器仍使用宿主机内核。
 EOF
     exit 0
@@ -264,7 +264,7 @@ Environment=DOCKER_CONTEXT=
 Environment=VULSCAN_IMAGE=$image
 ExecStartPre=$STOPPER $DOCKER $CONTAINER
 ExecStartPre=$DOCKER run --rm --network host --user $uid:$gid --group-add $socket_gid --env HOME=$HOME_DIR --env USER=vulscan --env DOCKER_CONFIG=$HOME_DIR/.docker --env TMPDIR=$HOME_DIR/tmp --volume $HOME_DIR:$HOME_DIR --volume $DOCKER_SOCKET:/var/run/docker.sock --entrypoint ${checker[0]} \${VULSCAN_IMAGE} ${checker[1]} --root $APP_ROOT --docker
-ExecStart=$DOCKER run --rm --name $CONTAINER --label $LABEL=centos7 --network host --user $uid:$gid --group-add $socket_gid --env HOME=$HOME_DIR --env USER=vulscan --env DOCKER_CONFIG=$HOME_DIR/.docker --env TMPDIR=$HOME_DIR/tmp --volume $HOME_DIR:$HOME_DIR --volume $DOCKER_SOCKET:/var/run/docker.sock \${VULSCAN_IMAGE}
+ExecStart=$DOCKER run --rm --name $CONTAINER --label $LABEL=centos7 --network host --user $uid:$gid --group-add $socket_gid --env HOME=$HOME_DIR --env USER=vulscan --env DOCKER_CONFIG=$HOME_DIR/.docker --env TMPDIR=$HOME_DIR/tmp --env VULSCAN_EXTERNAL_URL --volume $HOME_DIR:$HOME_DIR --volume $DOCKER_SOCKET:/var/run/docker.sock \${VULSCAN_IMAGE}
 ExecStop=$STOPPER $DOCKER $CONTAINER
 Restart=on-failure
 RestartSec=3
@@ -292,4 +292,4 @@ for ((waited=0; waited<60; waited++)); do
     sleep 1
 done
 verify "$image"
-printf '\n部署完成：监听 0.0.0.0:8080，请通过 http://服务器内网IP:8080 访问\n服务：systemctl status vulscan\n日志：journalctl -u vulscan -f\n复查：bash %s/scripts/install-centos7.sh --check\n请在网页填写模型 API Key。\n' "$ROOT"
+printf '\n部署完成：监听 0.0.0.0:8080，请通过 http://服务器内网IP:8080 访问\n服务：systemctl status vulscan\n日志：journalctl -u vulscan -f\n复查：bash %s/scripts/install-centos7.sh --check\n首次访问请初始化管理员，再在用户设置中填写模型 API Key；已有账号直接登录。\n初始化口令文件：%s/.vulscan/webui/.access/bootstrap-token\n' "$ROOT" "$HOME_DIR"

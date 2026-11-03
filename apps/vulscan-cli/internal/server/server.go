@@ -54,6 +54,7 @@ const (
 // jobMeta is the on-disk metadata written immediately on job creation, and
 // (per #320) amended at terminal time with the job's final status.
 type jobMeta struct {
+	OwnerID            string `json:"owner_id,omitempty"`
 	IncludeIntentional bool   `json:"include_intentional,omitempty"`
 	DockerProxy        string `json:"docker_proxy,omitempty"`
 	ScanTimeout        string `json:"scan_timeout,omitempty"`
@@ -68,6 +69,7 @@ type jobMeta struct {
 
 // Job represents a single scan job.
 type Job struct {
+	OwnerID  string // immutable account ID; empty legacy jobs belong to the initial administrator
 	Snapshot *jobSnapshot
 	mu       sync.Mutex
 	ID       string
@@ -262,6 +264,11 @@ func (m *manager) cancelAll() {
 
 // Server is the web UI HTTP server.
 type Server struct {
+	accounts       *accountStore
+	externalURL    string
+	tmplAuth       *template.Template
+	tmplSettings   *template.Template
+	settingsMu     sync.Mutex
 	pythonPath     string
 	outDir         string
 	mgr            *manager
@@ -316,6 +323,18 @@ func New(pythonPath, outDir string) (*Server, error) {
 		csrfToken:      hex.EncodeToString(tokBytes),
 		shutdownDone:   make(chan struct{}),
 	}
+	s.accounts, err = openAccounts(outDir)
+	if err != nil {
+		return nil, fmt.Errorf("初始化账号存储: %w", err)
+	}
+	s.tmplAuth, err = template.ParseFS(uifiles.FS, "auth.html")
+	if err != nil {
+		return nil, err
+	}
+	s.tmplSettings, err = template.ParseFS(uifiles.FS, "settings.html")
+	if err != nil {
+		return nil, err
+	}
 	s.recoverJobs()
 	return s, nil
 }
@@ -346,6 +365,7 @@ func (s *Server) recoverJobs() {
 		if data, err := os.ReadFile(filepath.Join(jobDir, "meta.json")); err == nil {
 			var m jobMeta
 			if json.Unmarshal(data, &m) == nil {
+				job.OwnerID = m.OwnerID
 				job.Repo = m.Repo
 				job.Ref = m.Ref
 				job.StartedAt = m.StartedAt
@@ -457,28 +477,47 @@ func inferRepoURL(jobDir string) string {
 // Handler returns the HTTP handler for the server.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	private := func(pattern string, handler http.HandlerFunc) { mux.HandleFunc(pattern, s.authenticated(handler)) }
+	page := func(pattern string, handler http.HandlerFunc) {
+		mux.HandleFunc(pattern, s.noncedPage(s.authenticated(handler)))
+	}
+	for _, mode := range []string{"login", "register", "setup"} {
+		mux.HandleFunc("GET /"+mode, s.noncedPage(s.handleAuth))
+		mux.HandleFunc("POST /"+mode, s.noncedPage(s.handleAuth))
+	}
+	mux.HandleFunc("GET /internal/status", s.handleOperatorStatus)
+	private("GET /account", s.handleMe)
+	private("POST /logout", s.handleLogout)
+	page("GET /settings", s.handleSettings)
+	page("POST /settings", s.handleSettings)
 	// #578 follow-up 1a: route and CSP policy are declared on the SAME
 	// line. The three policy shapes are per-route wrappers; the middleware
 	// below carries a RESTRICTIVE DEFAULT for everything unwrapped — a
 	// future HTML route registered without a wrapper renders scriptless
 	// and unstyled (loud), never silently CSP-less.
-	mux.HandleFunc("GET /{$}", s.noncedPage(s.handleIndex))
-	mux.HandleFunc("POST /scan", s.handleStartScan)
+	page("GET /{$}", s.handleIndex)
+	private("POST /scan", s.handleStartScan)
 	mux.HandleFunc("GET /assets/{name}", s.handleAsset)
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	mux.HandleFunc("GET /refs", s.handleRefs)
-	mux.HandleFunc("GET /scan/{id}", s.noncedPage(s.handleScanPage))
-	mux.HandleFunc("GET /scan/{id}/logs", s.handleScanLogs)
-	mux.HandleFunc("GET /scan/{id}/logs.txt", s.handleLogDownload)
-	mux.HandleFunc("GET /scan/{id}/snapshot", s.handleSnapshot)
-	mux.HandleFunc("GET /scan/{id}/events", s.handleSnapshotEvents)
-	mux.HandleFunc("GET /report/{id}", s.reportCSP(s.handleReport))
-	mux.HandleFunc("GET /summary/{id}", s.noncedPage(s.handleSummary))
-	mux.HandleFunc("GET /disclosures/{id}", s.handleDisclosureList)
-	mux.HandleFunc("GET /disclosure/{id}/{filename}", s.noncedPage(s.handleDisclosure))
-	mux.HandleFunc("DELETE /scan/{id}", s.handleDeleteScan)
-	mux.HandleFunc("POST /scan/{id}/cancel", s.handleCancelScan)
-	return securityHeaders(mux)
+	private("GET /refs", s.handleRefs)
+	page("GET /scan/{id}", s.handleScanPage)
+	private("GET /scan/{id}/logs", s.handleScanLogs)
+	private("GET /scan/{id}/logs.txt", s.handleLogDownload)
+	private("GET /scan/{id}/snapshot", s.handleSnapshot)
+	private("GET /scan/{id}/events", s.handleSnapshotEvents)
+	mux.HandleFunc("GET /report/{id}", s.reportCSP(s.authenticated(s.handleReport)))
+	page("GET /summary/{id}", s.handleSummary)
+	private("GET /disclosures/{id}", s.handleDisclosureList)
+	page("GET /disclosure/{id}/{filename}", s.handleDisclosure)
+	private("DELETE /scan/{id}", s.handleDeleteScan)
+	private("POST /scan/{id}/cancel", s.handleCancelScan)
+	h := securityHeaders(mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.externalURL != "" {
+			r = r.WithContext(context.WithValue(r.Context(), externalOriginKey{}, s.externalURL))
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // noncedPage wraps an HTML template handler with the per-response nonce
@@ -539,7 +578,10 @@ func securityHeaders(h http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		// Native same-origin form POSTs need an Origin header. no-referrer
+		// makes Chromium send Origin: null; same-origin still suppresses
+		// referrers to every external site without breaking CSRF checks.
+		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
@@ -701,14 +743,18 @@ type indexData struct {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	cfg, _ := config.Load()
+	cfg, err := modelConfigFor(r)
+	if err != nil {
+		http.Error(w, "无法读取个人模型配置", 500)
+		return
+	}
 	apiKeySource := ""
 	if cfg != nil {
 		if p, ok := cfg.GetProvider("deepseek"); ok && p.Type == "deepseek" && p.APIKey != "" {
 			apiKeySource = "已有模型配置"
 		}
 	}
-	if apiKeySource == "" && os.Getenv("DEEPSEEK_API_KEY") != "" {
+	if who(r) == nil && apiKeySource == "" && os.Getenv("DEEPSEEK_API_KEY") != "" {
 		apiKeySource = "环境变量 DEEPSEEK_API_KEY"
 	}
 
@@ -725,6 +771,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	jobs := s.mgr.all()
 	views := make([]*jobView, 0, len(jobs))
 	for _, j := range jobs {
+		if who(r) != nil && !s.owns(r, j) {
+			continue
+		}
 		j.mu.Lock()
 		v := &jobView{
 			ID:         j.ID,
@@ -745,8 +794,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasAPIKey:        apiKeySource != "",
 		LLMConfigs:       profiles,
 		APIKeySource:     apiKeySource,
-		CSRF:             s.csrfToken,
+		CSRF:             s.csrfFor(r),
 		Nonce:            nonceFrom(r),
+	}
+	if who(r) != nil {
+		d.DeepSeekEndpoint = "https://api.deepseek.com"
+		if p, ok := cfg.GetProvider("deepseek"); ok && p.BaseURL != "" {
+			parsed, e := url.Parse(p.BaseURL)
+			if e == nil && parsed.Host != "" {
+				d.DeepSeekEndpoint = parsed.Scheme + "://" + parsed.Host
+			}
+		}
 	}
 	for _, v := range views {
 		switch v.Status {
@@ -768,6 +826,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 // Hostnames and public addresses remain rejected to prevent DNS rebinding
 // from exposing the index, CSRF token, reports, or logs.
 func hostHeaderIsLocalNetwork(r *http.Request) bool {
+	if origin, _ := r.Context().Value(externalOriginKey{}).(string); origin != "" {
+		u, err := url.Parse(origin)
+		if err == nil && strings.EqualFold(r.Host, u.Host) {
+			return true
+		}
+		// Operator checks still use the local listener through loopback.
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if !hostIsLoopback(host) {
+			return false
+		}
+	}
 	h, _, err := net.SplitHostPort(r.Host)
 	if err != nil {
 		h = r.Host
@@ -795,7 +864,15 @@ func sameOriginOK(r *http.Request) bool {
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {
 		u, err := url.Parse(origin)
-		if err != nil || u.Host != r.Host {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		if external, _ := r.Context().Value(externalOriginKey{}).(string); external != "" {
+			parsed, _ := url.Parse(external)
+			scheme = parsed.Scheme
+		}
+		if err != nil || u.Host != r.Host || u.Scheme != scheme || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 			return false
 		}
 	}
@@ -866,12 +943,20 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "表单格式无效，请刷新后重试", http.StatusBadRequest)
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(r.FormValue("csrf")), []byte(s.csrfToken)) != 1 {
+	token := r.Header.Get("X-CSRF-Token")
+	if token == "" {
+		token = r.FormValue("csrf")
+	}
+	if subtle.ConstantTimeCompare([]byte(token), []byte(s.csrfFor(r))) != 1 {
 		http.Error(w, "安全令牌失效或缺失，请刷新页面后重试", http.StatusForbidden)
 		return
 	}
 
 	repo := strings.TrimSpace(r.FormValue("repo"))
+	if u := who(r); u != nil && !u.Admin && !strings.HasPrefix(repo, "https://") && !strings.HasPrefix(repo, "http://") {
+		http.Error(w, "请使用 HTTP(S) 远程仓库地址；服务器本机路径仅限管理员扫描", 400)
+		return
+	}
 	if repo == "" {
 		http.Error(w, "请填写仓库地址或项目路径", http.StatusBadRequest)
 		return
@@ -955,13 +1040,25 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write meta.json immediately.
-	meta := jobMeta{ID: id, Repo: repo, Ref: ref, StartedAt: time.Now().UTC(), LLMConfig: llmConfig, ScanTimeout: scanTimeoutValue(scanTimeout), DockerProxy: dockerProxy, IncludeIntentional: includeIntentional}
-	if data, err := json.Marshal(meta); err == nil {
-		_ = os.WriteFile(filepath.Join(jobDir, "meta.json"), data, 0640)
+	ownerID := ""
+	if u := who(r); u != nil {
+		ownerID = u.User.ID
+	}
+	meta := jobMeta{OwnerID: ownerID, ID: id, Repo: repo, Ref: ref, StartedAt: time.Now().UTC(), LLMConfig: llmConfig, ScanTimeout: scanTimeoutValue(scanTimeout), DockerProxy: dockerProxy, IncludeIntentional: includeIntentional}
+	if err := writePrivateJSON(filepath.Join(jobDir, "meta.json"), meta); err != nil {
+		s.wg.Done()
+		os.RemoveAll(jobDir)
+		http.Error(w, "无法保存任务，请检查磁盘和权限", 500)
+		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	baseContext := context.Background()
+	if u := who(r); u != nil && !u.Admin {
+		baseContext = context.WithValue(baseContext, restrictedGitKey{}, filepath.Dir(filepath.Dir(u.ConfigPath)))
+	}
+	ctx, cancel := context.WithCancel(baseContext)
 	job := &Job{
+		OwnerID:            ownerID,
 		ID:                 id,
 		Repo:               repo,
 		Ref:                ref,
@@ -1012,7 +1109,7 @@ func deepSeekEndpointOrigin(cfg *config.Config) string {
 // ONLY a DeepSeek key. Existing profiles use their own configured credentials.
 // No secret is written to disk, put in argv, or sent back to the browser.
 func scanModelSettings(r *http.Request) (string, map[string]string, error) {
-	cfg, err := config.Load()
+	cfg, err := modelConfigFor(r)
 	if err != nil {
 		return "", nil, fmt.Errorf("无法读取模型配置，请检查 911VulScan 配置文件")
 	}
@@ -1028,7 +1125,7 @@ func scanModelSettings(r *http.Request) (string, map[string]string, error) {
 		if name != "" && name != "deepseek-default" && name != "deepseek-pro" && name != "vulscan-default" && !cfg.LLMConfigExists(name) {
 			return "", nil, fmt.Errorf("所选模型配置不存在，请刷新页面后重试")
 		}
-		return name, map[string]string{"VULSCAN_DEEPSEEK_API_KEY_OVERRIDE": ""}, nil
+		return name, modelEnvironment(r, cfg, map[string]string{"VULSCAN_DEEPSEEK_API_KEY_OVERRIDE": ""}), nil
 	}
 	if provider != "deepseek" {
 		return "", nil, fmt.Errorf("不支持的模型来源")
@@ -1052,14 +1149,14 @@ func scanModelSettings(r *http.Request) (string, map[string]string, error) {
 			key = p.APIKey
 		}
 	}
-	if key == "" {
+	if key == "" && who(r) == nil {
 		key = os.Getenv("DEEPSEEK_API_KEY")
 	}
 	env := map[string]string{"VULSCAN_LOCAL_CLAUDE": "false", "VULSCAN_DEEPSEEK_API_KEY_OVERRIDE": pastedKey}
 	if key != "" {
 		env["DEEPSEEK_API_KEY"] = key
 	}
-	return profile, env, nil
+	return profile, modelEnvironment(r, cfg, env), nil
 }
 
 type scanPageData struct {
@@ -1088,7 +1185,7 @@ func (s *Server) handleScanPage(w http.ResponseWriter, r *http.Request) {
 	job.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmplScan.Execute(w, scanPageData{ID: id, Repo: repo, LLMConfig: llmConfig, ScanTimeout: scanTimeout, CSRF: s.csrfToken, Nonce: nonceFrom(r)}); err != nil {
+	if err := s.tmplScan.Execute(w, scanPageData{ID: id, Repo: repo, LLMConfig: llmConfig, ScanTimeout: scanTimeout, CSRF: s.csrfFor(r), Nonce: nonceFrom(r)}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -1154,6 +1251,9 @@ func (s *Server) handleScanLogs(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
+		}
+		if !s.sessionAlive(r) {
+			return
 		}
 
 		job.mu.Lock()
@@ -1520,7 +1620,7 @@ func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(s.csrfToken)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(s.csrfFor(r))) != 1 {
 		http.Error(w, "安全令牌失效或缺失，请刷新页面后重试", http.StatusForbidden)
 		return
 	}
@@ -1552,7 +1652,7 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(s.csrfToken)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(s.csrfFor(r))) != 1 {
 		http.Error(w, "安全令牌失效或缺失，请刷新页面后重试", http.StatusForbidden)
 		return
 	}
@@ -1587,8 +1687,11 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := os.RemoveAll(filepath.Join(s.outDir, id)); err != nil {
+		http.Error(w, "任务文件删除失败，请检查目录权限后重试", 500)
+		return
+	}
 	s.mgr.remove(id)
-	_ = os.RemoveAll(filepath.Join(s.outDir, id))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -2322,6 +2425,13 @@ func (s *Server) handleRefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if u := who(r); u != nil && !u.Admin {
+		if !strings.HasPrefix(repo, "http://") && !strings.HasPrefix(repo, "https://") {
+			http.Error(w, "请使用 HTTP(S) 远程仓库地址", 400)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), restrictedGitKey{}, filepath.Dir(filepath.Dir(u.ConfigPath))))
+	}
 	if repo == "" {
 		http.Error(w, "请先填写仓库地址", http.StatusBadRequest)
 		return
@@ -2352,6 +2462,7 @@ func listRefs(ctx context.Context, repo string) ([]refOption, error) {
 		"-c", "protocol.ext.allow=never",
 		"-c", "http.followRedirects=false",
 		"ls-remote", "--tags", "--heads", "--refs", "--", repo)
+	restrictGit(ctx, cmd)
 	setProcGroupKill(cmd)
 	out, err := cmd.Output()
 	if err != nil {
@@ -2388,6 +2499,7 @@ func listRefs(ctx context.Context, repo string) ([]refOption, error) {
 // exit into an error that names the operation the operator asked for.
 func runGit(ctx context.Context, args []string, op string, onLog func(string)) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	restrictGit(ctx, cmd)
 	// Run git in its own process group and SIGKILL the whole group on cancel, so
 	// helpers (git-remote-https, ssh) are killed too — matching the python path
 	// rather than leaving them to die indirectly on EPIPE. (unix; no-op elsewhere)

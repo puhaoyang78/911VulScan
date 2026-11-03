@@ -20,6 +20,9 @@ class InstallerTest(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root / 'scripts').mkdir()
         shutil.copy(SCRIPT, self.root / 'scripts/install-deployment.sh')
+        for helper in ('configure-ubuntu-mirrors.sh', 'select-docker-packages.py'):
+            shutil.copy(SCRIPT.with_name(helper), self.root / 'scripts' / helper)
+        (self.root / 'apt/sources.list.d').mkdir(parents=True)
         self.bin = self.root / 'mockbin'
         self.bin.mkdir()
         (self.root / 'runtime-parser').mkdir()
@@ -34,6 +37,7 @@ class InstallerTest(unittest.TestCase):
                         GO_VERSION='1.26.1', NPM_VERSION='10.9.0', GIT_VERSION='2.51.0', PYTHON_READY='1', DOCKER_READY='1',
                         VULSCAN_SYSTEMD_DIR=str(self.root / 'systemd'))
         self.env['HOME'] = str(self.root / 'home')
+        self.env['VULSCAN_APT_DIR'] = str(self.root / 'apt')
         self.env.pop('DOCKER_CONFIG', None)
         self.env.pop('SUDO_USER', None)
         self.os('24.04')
@@ -679,13 +683,21 @@ esac
         compose_data = b'#!/bin/sh\necho 5.5.1\n'
         (self.root / 'buildx-binary').write_bytes(buildx)
         (self.root / 'compose-binary').write_bytes(compose_data)
-        manifests = []
+        blocks = []
         for arch in ['amd64', 'arm64']:
-            manifests.append(hashlib.sha256(buildx).hexdigest() + f' *buildx-v0.38.1.linux-{arch}\n')
-        (self.root / 'buildx-checksums').write_text(''.join(manifests))
-        (self.root / 'compose-checksums').write_text(''.join(
-            hashlib.sha256(compose_data).hexdigest() + f'  docker-compose-linux-{arch}\n'
-            for arch in ['x86_64', 'aarch64']))
+            for name, version, payload in [('docker-compose-plugin', '5.5.1', compose_data), ('docker-buildx-plugin', '0.38.1', buildx)]:
+                filename = f'dists/noble/pool/stable/{arch}/{name}_{version}-1~ubuntu.24.04~noble_{arch}.deb'
+                blocks.append(f'Package: {name}\nVersion: {version}-1~ubuntu.24.04~noble\nArchitecture: {arch}\nFilename: {filename}\nSHA256: {hashlib.sha256(payload).hexdigest()}\n')
+        (self.root / 'plugin.gz').write_bytes(gzip.compress('\n'.join(blocks).encode()))
+        self.mock('dpkg-deb', r"""
+echo "extract-plugin $*" >> "$TEST_ROOT/actions"
+mkdir -p "$3/usr/libexec/docker/cli-plugins"
+case "$2" in
+ *docker-compose-plugin_*) cp "$TEST_ROOT/compose-binary" "$3/usr/libexec/docker/cli-plugins/docker-compose";;
+ *docker-buildx-plugin_*) cp "$TEST_ROOT/buildx-binary" "$3/usr/libexec/docker/cli-plugins/docker-buildx";;
+ *) exit 1;;
+esac
+""")
         doc = json.loads((self.root / 'go.json').read_text())
         for f in doc[0]['files']:
             f['sha256'] = hashlib.sha256(b'go-fixture').hexdigest()
@@ -695,10 +707,9 @@ echo "download $*" >> "$TEST_ROOT/actions"
 while [ "$1" != --output ]; do shift; done
 out=$2; url=$3
 case "$url" in
- *buildx*/checksums.txt) cat "$TEST_ROOT/buildx-checksums" > "$out";;
- *buildx-v*.linux-*) cat "$TEST_ROOT/buildx-binary" > "$out";;
- *compose*/checksums.txt) cat "$TEST_ROOT/compose-checksums" > "$out";;
- *docker-compose-linux-*) cat "$TEST_ROOT/compose-binary" > "$out";;
+ *Packages.gz) cat "$TEST_ROOT/plugin.gz" > "$out";;
+ *docker-buildx-plugin_*.deb) cat "$TEST_ROOT/buildx-binary" > "$out";;
+ *docker-compose-plugin_*.deb) cat "$TEST_ROOT/compose-binary" > "$out";;
  *mode=json*) cat "$TEST_ROOT/go.json" > "$out";;
  *go1.26*.tar.gz) printf go-fixture > "$out";;
  *) exit 23;;
@@ -730,7 +741,8 @@ chmod +x "$2/go/bin/go"
         self.assertNotIn('apt ', self.actions())
         self.assertNotIn('service ', self.actions())
         self.assertNotIn('compose/releases', self.actions())
-        self.assertNotIn('Packages.gz', self.actions())
+        self.assertIn('dists/noble/stable/binary-amd64/Packages.gz', self.actions())
+        self.assertNotIn('dists/focal/stable', self.actions())
         self.assertNotIn('both docker.io', output)
         self.assertFalse(list((config / 'cli-plugins').glob('.buildx.*')))
 
@@ -742,7 +754,8 @@ chmod +x "$2/go/bin/go"
         self.assertIn('go1.26', self.actions())
         self.assertIn('apt install --yes --no-remove --no-install-recommends ca-certificates', self.actions())
         self.assertNotIn('docker.io', self.actions())
-        self.assertNotIn('.deb', self.actions())
+        self.assertNotIn('docker-ce_', self.actions())
+        self.assertNotIn('apt install --yes --no-remove --no-install-recommends /', self.actions())
         self.assertNotIn('service ', self.actions())
         self.assertNotIn('compose/releases', self.actions())
 
@@ -772,7 +785,7 @@ chmod +x "$2/go/bin/go"
         self.plugin_fixtures(compose='', buildx_missing=False)
         self.env['ARCH'] = 'aarch64'
         self.run_script('--install-deps', '--deps-only', '--yes')
-        self.assertIn('docker-compose-linux-aarch64', self.actions())
+        self.assertIn('docker-compose-plugin_5.5.1-1~ubuntu.24.04~noble_arm64.deb', self.actions())
         self.assertNotIn('buildx/releases', self.actions())
         self.assertNotIn('sudo', self.actions())
 
@@ -795,8 +808,8 @@ chmod +x "$2/go/bin/go"
     def test_both_plugins_and_second_run_no_changes(self):
         self.plugin_fixtures(compose='')
         self.run_script('--install-deps', '--deps-only', '--yes')
-        self.assertIn('compose/releases', self.actions())
-        self.assertIn('buildx/releases', self.actions())
+        self.assertIn('docker-compose-plugin_5.5.1', self.actions())
+        self.assertIn('docker-buildx-plugin_0.38.1', self.actions())
         (self.root / 'actions').unlink()
         self.run_script('--install-deps', '--deps-only', '--yes')
         self.assertEqual(self.actions(), '')

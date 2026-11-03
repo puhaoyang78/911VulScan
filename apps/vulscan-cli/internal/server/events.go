@@ -441,6 +441,9 @@ func (s *Server) handleSnapshotEvents(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 	var sent []byte
 	for {
+		if !s.sessionAlive(r) {
+			return
+		}
 		j.mu.Lock()
 		data, err := json.Marshal(j.snapshotLocked())
 		status := j.Status

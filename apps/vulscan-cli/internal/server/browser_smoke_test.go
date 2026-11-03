@@ -130,7 +130,7 @@ func TestBrowserSmoke(t *testing.T) {
 	seedUIFixtures(t, s)
 	seedReviewJob(t, s)
 
-	srv := httptest.NewServer(s.Handler())
+	srv := httptest.NewServer(testHandler(t, s))
 	defer srv.Close()
 
 	// Absolute paths: cmd.Dir points at the harness dir so node resolves
@@ -165,5 +165,40 @@ func TestBrowserSmoke(t *testing.T) {
 	}
 	if os.Getenv("VULSCAN_UPDATE_GOLDEN") == "1" {
 		t.Log("GOLDEN UPDATED — review the diff before committing")
+	}
+}
+
+func TestBrowserSmokeAccounts(t *testing.T) {
+	if os.Getenv("VULSCAN_BROWSER_TESTS") != "1" {
+		t.Skip("requires Playwright and Chromium")
+	}
+	browserEnv := os.Environ() // retain Playwright's installed browser cache location
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	jobDir := filepath.Join(root, "1234567812345678")
+	if err := os.MkdirAll(jobDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "meta.json"), []byte(`{"repo":"legacy-private-browser-project","status":"done"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New("unused", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	script, err := filepath.Abs("testdata/browser-smoke/accounts_browser.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("node", script, srv.URL, s.accounts.bootstrapToken)
+	cmd.Dir = filepath.Dir(script)
+	cmd.Env = browserEnv
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("account browser acceptance failed: %v", err)
 	}
 }

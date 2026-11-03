@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-//go:embed index.html scan.html summary.html disclosure.html vendor/marked-18.1.1.min.js vendor/dompurify-3.4.17.min.js
+//go:embed index.html scan.html summary.html disclosure.html auth.html settings.html vendor/marked-18.1.1.min.js vendor/dompurify-3.4.17.min.js
 //go:embed static/*.css static/*.js design/*.css design/*.js design/*.woff2 design/*LICENSE.txt
 var FS embed.FS
 
