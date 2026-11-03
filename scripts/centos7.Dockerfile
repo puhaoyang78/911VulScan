@@ -32,4 +32,4 @@ RUN sh scripts/install-deployment.sh \
     && .venv/bin/python scripts/check-deployment.py --root /opt/911VulScan
 LABEL org.911vulscan.deployment="centos7"
 ENTRYPOINT ["/opt/911VulScan/bin/vulscan"]
-CMD ["serve", "--addr", "127.0.0.1:8080"]
+CMD ["serve", "--addr", "0.0.0.0:8080"]
