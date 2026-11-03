@@ -14,7 +14,7 @@ usage() {
 CentOS 7 与 Docker 26.1.4 均已停止维护。容器不升级宿主机内核；旧内核的
 运行兼容性由部署检查验证，不等同于 Node.js 官方支持或完整扫描验收。
 不替换系统 Python、OpenSSL、glibc，不关闭 SELinux、防火墙或容器安全限制。
-网页仅监听 127.0.0.1:8080；应用以 vulscan 非 root 用户运行。
+CentOS 7 网页监听 0.0.0.0:8080，可通过服务器内网 IP 访问；不提供网页登录认证。
 EOF
 }
 MODE=deploy
@@ -60,7 +60,7 @@ CentOS 7 部署计划：内核 $kernel
   3. 创建/复用非 root 的 vulscan 服务账号；配置在 $HOME_DIR/.config/vulscan，扫描数据在 $HOME_DIR/.vulscan。
      Docker 配置保存在 $HOME_DIR/.docker，保留已有内容与权限。
   4. 验证全部解析器、Docker 构建/运行/清理；有活动扫描时拒绝更新。
-  5. 启用并重启 vulscan.service，校验镜像、实际进程与监听端口；地址 http://127.0.0.1:8080。
+  5. 启用并重启 vulscan.service，校验镜像、实际进程与监听端口；地址 http://服务器内网IP:8080。
 不升级内核/系统 Python/glibc，不删除已有镜像/容器，不改 Docker socket 权限。
 应用容器使用宿主网络（服务仅绑定回环地址）与 Docker socket，二阶段测试仍由原实现执行。
 注意：CentOS 7 与 Docker 26.1.4 已停止维护；容器仍使用宿主机内核。
@@ -292,4 +292,4 @@ for ((waited=0; waited<60; waited++)); do
     sleep 1
 done
 verify "$image"
-printf '\n部署完成：http://127.0.0.1:8080\n服务：systemctl status vulscan\n日志：journalctl -u vulscan -f\n复查：bash %s/scripts/install-centos7.sh --check\n请在网页填写模型 API Key。\n' "$ROOT"
+printf '\n部署完成：监听 0.0.0.0:8080，请通过 http://服务器内网IP:8080 访问\n服务：systemctl status vulscan\n日志：journalctl -u vulscan -f\n复查：bash %s/scripts/install-centos7.sh --check\n请在网页填写模型 API Key。\n' "$ROOT"
