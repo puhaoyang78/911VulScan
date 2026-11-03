@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -95,4 +97,19 @@ func TestRejectCredsInRepoURL(t *testing.T) {
 	if rec2.Code != 400 {
 		t.Errorf("malformed credential URL = %d, want 400 (fail closed)", rec2.Code)
 	}
+}
+
+func TestExplicitLANListenerUsesIPv4(t *testing.T) {
+	srv := &Server{mgr: newManager(t.TempDir()), shutdownDone: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	addr, err := srv.Start(ctx, "0.0.0.0:0")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(addr, "http://0.0.0.0:") {
+		t.Errorf("LAN listener address = %q, want IPv4 wildcard", addr)
+	}
+	cancel()
+	srv.WaitShutdown()
 }
