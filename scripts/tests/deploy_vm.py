@@ -37,6 +37,24 @@ def image_for(version: str, cache: Path) -> Path:
     return image.resolve()
 
 
+def wait_boot(vm, ssh, console, previous=""):
+    deadline = time.monotonic() + 240
+    while time.monotonic() < deadline:
+        if vm.poll() is not None:
+            raise RuntimeError("Test VM exited; inspect " + str(console))
+        try:
+            result = subprocess.run([*ssh, "cat /proc/sys/kernel/random/boot_id"], check=False, capture_output=True, text=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            print("SSH boot probe timed out; retrying within the boot deadline.", flush=True)
+            result = None
+        if result is not None and result.returncode == 0:
+            boot = result.stdout.strip()
+            if boot and boot != previous:
+                return boot
+        time.sleep(2)
+    raise RuntimeError("Guest boot/SSH timed out; inspect " + str(console))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ubuntu", choices=("20.04", "22.04", "24.04"), required=True)
@@ -77,17 +95,6 @@ def main():
         def remote(command, **kwargs):
             return run(*ssh, command, **kwargs)
 
-        def wait_boot(previous=""):
-            deadline = time.monotonic() + 240
-            while time.monotonic() < deadline:
-                if vm.poll() is not None:
-                    raise RuntimeError("Test VM exited; inspect " + str(console))
-                result = subprocess.run([*ssh, "cat /proc/sys/kernel/random/boot_id"], check=False, capture_output=True, text=True, timeout=10)
-                if result.returncode == 0 and result.stdout.strip() != previous:
-                    return result.stdout.strip()
-                time.sleep(2)
-            raise RuntimeError("Guest boot/SSH timed out; inspect " + str(console))
-
         def capture(label, command):
             log = args.output_dir / f"ubuntu-{args.ubuntu}-{label}.log"
             print(f"Ubuntu {args.ubuntu}: {label}", flush=True)
@@ -95,7 +102,7 @@ def main():
                 remote(command, stdout=output, stderr=subprocess.STDOUT)
 
         try:
-            boot = wait_boot()
+            boot = wait_boot(vm, ssh, console)
             remote("cloud-init status --wait >/dev/null")
             run("scp", *options, "-P", str(port), str(args.archive.resolve()), "deployer@127.0.0.1:source.tar.gz")
             remote("sudo install -d -o deployer -g deployer /opt/911VulScan && tar -xzf source.tar.gz --strip-components=1 -C /opt/911VulScan")
@@ -173,7 +180,7 @@ def main():
             restarted = 'until systemctl is-active --quiet vulscan && test "$(systemctl show -p MainPID --value vulscan)" -gt 0 && test "$(systemctl show -p MainPID --value vulscan)" != ' + second_pid + '; do sleep 2; done'
             capture("failure-restart", "timeout 90 sh -c " + shlex.quote(restarted) + " && " + verify)
             subprocess.run([*ssh, "sudo systemctl reboot"], check=False)
-            wait_boot(boot)
+            wait_boot(vm, ssh, console, boot)
             capture("boot-recovery", "timeout 90 sh -c 'until systemctl is-active --quiet vulscan; do sleep 2; done' && " + verify)
             remote(f"sudo grep -qx retained {home}/.vulscan/deployment-preserved && sudo grep -q auths {home}/docker-client/config.json")
             capture('boot-authenticated-history', web_session + ' --expect-history deployment-history-fixture')
