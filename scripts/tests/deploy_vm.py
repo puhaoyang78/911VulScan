@@ -137,8 +137,9 @@ def main():
             if actual != expected_user:
                 raise AssertionError(f"Expected {expected_user}, service actually runs as {actual}")
             home = remote(f"getent passwd {expected_user} | cut -d: -f6", capture_output=True).stdout.strip()
-            run('scp', *options, '-P', str(port), str(Path(__file__).with_name('web_session.py').resolve()), 'deployer@127.0.0.1:/tmp/vulscan-web-acceptance.py')
-            web_session = f"sudo -n runuser -u {shlex.quote(expected_user)} -- /opt/911VulScan/.venv/bin/python /tmp/vulscan-web-acceptance.py --url http://127.0.0.1:8080 --home {shlex.quote(home)}"
+            # The same helper must remain available after reboot clears /tmp.
+            run('scp', *options, '-P', str(port), str(Path(__file__).with_name('web_session.py').resolve()), 'deployer@127.0.0.1:/var/tmp/vulscan-web-acceptance.py')
+            web_session = f"sudo -n runuser -u {shlex.quote(expected_user)} -- /opt/911VulScan/.venv/bin/python /var/tmp/vulscan-web-acceptance.py --url http://127.0.0.1:8080 --home {shlex.quote(home)}"
             capture('initialize-account', web_session + ' --initialize')
             first_pid = remote("systemctl show -p MainPID --value vulscan", capture_output=True).stdout.strip()
             first_hash = remote("sha256sum /opt/911VulScan/bin/vulscan-cli | cut -d' ' -f1", capture_output=True).stdout.strip()
