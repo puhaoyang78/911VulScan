@@ -54,8 +54,8 @@ fi
 if [ "$MODE" = plan ]; then
     cat <<EOF
 CentOS 7 部署计划：内核 $kernel
-  1. 复用已有 Docker（至少 20.10）；缺失时从官方归档安装 Engine/CLI 26.1.4、containerd 1.6.33。
-     CentOS RPM 使用 7.9.2009 官方 Vault，只为本次 yum 调用启用，不改写现有源。
+  1. 复用已有 Docker（至少 20.10）；缺失时从阿里云归档镜像安装 Engine/CLI 26.1.4、containerd 1.6.33。
+     CentOS/Docker RPM 使用阿里云镜像，仅为本次 yum 调用启用，不改写现有源。
   2. 构建 scripts/centos7.Dockerfile：Ubuntu 24.04 用户空间、Python 3.12、Go 1.26、Node 22、Compose、Buildx。
   3. 创建/复用非 root 的 vulscan 服务账号；配置在 $HOME_DIR/.config/vulscan，扫描数据在 $HOME_DIR/.vulscan。
      Docker 配置保存在 $HOME_DIR/.docker，保留已有内容与权限。
@@ -102,7 +102,7 @@ install_docker() {
         cat >> "$TMP/repos/vulscan.repo" <<EOF
 [vulscan-centos-$section]
 name=CentOS 7.9.2009 archive $section (911VulScan deployment only)
-baseurl=https://vault.centos.org/7.9.2009/$section/x86_64/
+baseurl=https://mirrors.aliyun.com/centos-vault/7.9.2009/$section/x86_64/
 enabled=1
 gpgcheck=1
 gpgkey=file://$centos_key
@@ -113,13 +113,13 @@ EOF
     # of CentOS itself. Bootstrap downloads without executing a remote script.
     yum --assumeyes --setopt="reposdir=$TMP/repos" --setopt=obsoletes=0 \
         --disablerepo='*' --enablerepo='vulscan-*' install ca-certificates curl \
-        || fail '基础下载工具安装失败；请检查官方 Vault 连接及 yum 输出。'
-    fetch https://download.docker.com/linux/centos/gpg "$TMP/docker.key"
+        || fail '基础下载工具安装失败；请检查阿里云 CentOS Vault 连接及 yum 输出。'
+    fetch https://mirrors.aliyun.com/docker-ce/linux/centos/gpg "$TMP/docker.key"
     printf '%s  %s\n' e6c650e0700b1bf4868b693b30761b926844befc8a0acb7ac0dd9b1faf1b7423 "$TMP/docker.key" | sha256sum --check --status || fail 'Docker 官方 RPM 签名密钥校验失败，未安装 Docker。'
     cat >> "$TMP/repos/vulscan.repo" <<EOF
 [vulscan-docker]
 name=Docker official CentOS 7 archive (911VulScan deployment only)
-baseurl=https://download.docker.com/linux/centos/7/x86_64/stable
+baseurl=https://mirrors.aliyun.com/docker-ce/linux/centos/7/x86_64/stable
 enabled=1
 gpgcheck=1
 gpgkey=file://$TMP/docker.key
@@ -129,7 +129,7 @@ EOF
         --disablerepo='*' --enablerepo='vulscan-*' install \
         docker-ce-26.1.4-1.el7.x86_64 docker-ce-cli-26.1.4-1.el7.x86_64 \
         containerd.io-1.6.33-3.1.el7.x86_64 \
-        || fail '归档 Docker 安装失败，请检查网络和 yum 输出；未修改现有源或系统 Python。修复后可重试原命令。'
+        || fail '归档 Docker 安装失败，请检查阿里云镜像连接和 yum 输出；未修改现有源或系统 Python。修复后可重试原命令。'
 }
 if ! command -v docker >/dev/null || ! command -v dockerd >/dev/null; then
     [ "$MODE" = deploy ] || fail 'Docker 尚未安装，无法检查已部署服务。'
