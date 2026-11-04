@@ -12,7 +12,9 @@ from types import SimpleNamespace
 import pytest
 
 import utilities.dynamic_tester as dt
+from utilities.docker_build import native_toolchain
 from utilities.dynamic_tester import test_generator as generator
+from utilities.dynamic_tester import docker_executor
 from utilities.dynamic_tester.diagnostics import (
     MAX_ERROR_FEEDBACK, bounded_diagnostic, error_feedback, failed_attempt_key,
 )
@@ -71,6 +73,30 @@ def harness(monkeypatch, tmp_path):
     tracker = TokenTracker()
     monkeypatch.setattr(dt, "get_global_tracker", lambda: tracker)
     prompts, executed = [], []
+    # The orchestrator also probes Docker and prepares its shared toolchain
+    # before run_single_container. Keep that I/O inside the same fixture;
+    # native_execution below must still invoke the real host compiler.
+    docker_commands = []
+    which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **kw:
+                        "/fixture/docker" if name == "docker" else which(name, *a, **kw))
+    replies = {
+        ("docker", "version", "--format", "{{.Server.Version}}"): "27.0-fixture",
+        ("docker", "buildx", "version"): "buildx fixture",
+        ("docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"): "",
+        ("docker", "info", "--format", "{{.ID}}"): "fixture-daemon",
+        ("docker", "system", "df", "--format", "{{json .}}"):
+            json.dumps({"Type": "Build Cache", "Size": "0B"}),
+        ("docker", "image", "inspect", "--format", "{{.Id}}", native_toolchain("c").image):
+            "sha256:fixture-toolchain",
+    }
+
+    def docker_command(command, **kwargs):
+        docker_commands.append(command)
+        assert tuple(command) in replies, f"unexpected Docker I/O in compiler fixture: {command}"
+        return replies[tuple(command)], "", 0, False
+
+    monkeypatch.setattr(docker_executor, "_run_command", docker_command)
 
     def run(executions, responses=None, *, language="python", filename="target.py",
             count=1, max_retries=3, repo_path=None):
@@ -106,7 +132,7 @@ def harness(monkeypatch, tmp_path):
             registry=SimpleNamespace(get=lambda phase: object()))
 
     return SimpleNamespace(run=run, prompts=prompts, executed=executed,
-                           tracker=tracker, output=tmp_path / "out")
+                           tracker=tracker, output=tmp_path / "out", docker_commands=docker_commands)
 
 
 def test_structured_failure_evidence_and_exit_zero_stderr_reach_next_prompt(harness):
@@ -169,6 +195,7 @@ def test_real_compiler_failure_reaches_repair_then_controlled_test_completes(
     assert "truncated" in harness.prompts[1]
     assert results[0].status == "NOT_REPRODUCED"
     assert len(harness.executed) == 2 and len(harness.prompts) == 2
+    assert any(command[:3] == ["docker", "image", "inspect"] for command in harness.docker_commands)
 
 
 def test_exact_repeated_artifacts_and_error_stop_without_hiding_error(harness):
