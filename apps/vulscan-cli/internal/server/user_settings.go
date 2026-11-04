@@ -71,6 +71,7 @@ type providerView struct {
 type settingsData struct {
 	Username, CSRF, Nonce, Error, Success string
 	Providers                             []providerView
+	HasAPIKey                             bool
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +144,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	for _, name := range names {
 		p, _ := cfg.GetProvider(name)
 		d.Providers = append(d.Providers, providerView{Name: name, Type: p.Type, BaseURL: p.BaseURL, HasKey: p.APIKey != ""})
+	}
+	if p, ok := cfg.GetProvider("deepseek"); ok {
+		d.HasAPIKey = p.APIKey != ""
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)

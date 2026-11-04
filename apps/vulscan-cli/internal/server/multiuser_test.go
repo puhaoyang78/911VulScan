@@ -182,6 +182,54 @@ func TestChineseAccountAndEightCharacterPassword(t *testing.T) {
 	}
 }
 
+func TestPersonalAPIKeyStatusAndAutofillSemantics(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("DEEPSEEK_API_KEY", "operator-env-key-never-in-html")
+	s, err := New("unused", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := httptest.NewServer(s.Handler())
+	defer service.Close()
+	alice, bob := realClient(t), realClient(t)
+	signIn(t, alice, service.URL, "register", "alice")
+	signIn(t, bob, service.URL, "register", "bob")
+	userModel(t, alice, service.URL, "alice-private-key-never-in-html")
+	for _, tc := range []struct {
+		client *http.Client
+		saved  bool
+	}{{alice, true}, {bob, false}} {
+		for _, path := range []string{"/", "/settings"} {
+			code, body, _ := httpCall(t, tc.client, "GET", service.URL+path, nil, "")
+			keyID := "api_key"
+			if path == "/settings" {
+				keyID = "settings-key"
+			}
+			keyInput := regexp.MustCompile(`<input[^>]*\bid="` + keyID + `"[^>]*>`).FindString(body)
+			if code != 200 || !strings.Contains(keyInput, `autocomplete="new-password"`) || !strings.Contains(body, "未读取，Web 账号使用独立配置") {
+				t.Fatalf("missing credential semantics/source status at %s: %d", path, code)
+			}
+			if strings.Contains(body, "operator-env-key-never-in-html") || strings.Contains(body, "alice-private-key-never-in-html") {
+				t.Fatal("a credential value was rendered")
+			}
+			want := `data-saved-key="false"`
+			if tc.saved {
+				want = `data-saved-key="true"`
+			}
+			if !strings.Contains(body, want) {
+				t.Fatalf("incorrect per-user saved-key status at %s: want %s", path, want)
+			}
+			if strings.Contains(body, "API 密钥（可选）") || strings.Contains(body, "API 地址（可选）") {
+				t.Fatal("credential configuration still labelled optional")
+			}
+			if path == "/" && (strings.Contains(body, `<datalist`) || !strings.Contains(body, `role="combobox"`)) {
+				t.Fatal("version picker still depends on browser autofill popup")
+			}
+		}
+	}
+}
+
 func TestDirectRegistrationWithoutAdministrator(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

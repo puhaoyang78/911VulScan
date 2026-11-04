@@ -18,14 +18,13 @@
   <section class="stats" aria-label="扫描任务概览"><div class="stat"><strong id="stat-total">{{len .Jobs}}</strong><span>全部任务</span></div><div class="stat stat-running"><strong id="stat-running">{{.RunningCount}}</strong><span>进行中 / 排队中</span></div><div class="stat stat-done"><strong id="stat-done">{{.DoneCount}}</strong><span>已完成</span></div><div class="stat"><strong id="stat-attention">{{.AttentionCount}}</strong><span>需处理</span></div></section>
   <div class="grid">
     <section class="card"><h2>新建扫描</h2>
-      <form method="POST" action="/scan" id="scan-form">
+      <form method="POST" action="/scan" id="scan-form" autocomplete="off">
         <input type="hidden" name="csrf" value="{{.CSRF}}">
         <fieldset><legend><span class="section-no">01</span>扫描目标</legend>
           <label for="repo">仓库地址或本机项目路径</label><input type="text" id="repo" name="repo" required placeholder="https://github.com/org/repo 或 /path/to/project" autocomplete="off" aria-describedby="repo-hint">
           <label for="ref">分支、标签或提交（可选）</label>
-          <div class="ref-control"><input type="text" id="ref" name="ref" list="ref-options" placeholder="默认分支，如需指定版本可填 v1.0.3" autocomplete="off" aria-describedby="ref-hint"><button type="button" class="btn" id="load-refs">获取版本列表</button></div>
-          <datalist id="ref-options"></datalist>
-          <p class="hint" id="ref-hint">留空使用默认分支。获取列表后，可输入关键词筛选标签和分支。</p>
+          <div class="ref-control"><div class="ref-picker" id="ref-picker"><div class="ref-input"><input type="text" id="ref" name="ref" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="ref-options" placeholder="默认分支，或指定版本" autocomplete="off" spellcheck="false" aria-describedby="ref-hint"><button type="button" id="toggle-refs" class="ref-toggle" aria-label="展开版本列表" aria-controls="ref-options" aria-expanded="false" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div><div class="ref-menu" id="ref-menu" hidden><p class="ref-count" id="ref-count" role="status"></p><div id="ref-options" role="listbox" aria-label="分支与标签"></div><p class="ref-empty" id="ref-empty" hidden>没有匹配的版本，可直接填写提交号。</p></div></div><button type="button" class="btn" id="load-refs">获取版本列表</button></div>
+          <p class="hint" id="ref-hint">留空使用默认分支。获取列表后点击选择，输入名称可筛选。</p>
           <p class="hint" id="repo-hint">仅扫描你有权测试的项目。私有仓库请使用本机 Git 凭据，不要把密码或令牌放进地址。</p>
           <label id="language-label">扫描语言</label><div class="language-grid" role="group" aria-labelledby="language-label">
             <label><input type="checkbox" name="languages" value="c"> C / C++</label><label><input type="checkbox" name="languages" value="python"> Python</label><label><input type="checkbox" name="languages" value="javascript"> JavaScript</label><label><input type="checkbox" name="languages" value="go"> Go</label>
@@ -34,7 +33,7 @@
         </fieldset>
         <fieldset><legend><span class="section-no">02</span>模型配置</legend>
           <div class="two-col"><div><label for="provider">模型来源</label><select name="provider" id="provider"><option value="deepseek" selected>DeepSeek（默认）</option><option value="configured">使用个人模型配置</option></select></div><div id="deepseek-model"><label for="model">分析模型</label><select name="model" id="model" aria-describedby="model-hint"><option value="deepseek-flash" selected>deepseek-flash（默认）</option><option value="deepseek-v4-pro">deepseek-v4-pro</option></select></div></div>
-          <div id="deepseek-settings"><label for="api_key">DeepSeek API 密钥（可选）</label><input type="password" id="api_key" name="api_key" placeholder="输入本次扫描使用的密钥" autocomplete="off" spellcheck="false" aria-describedby="key-hint"><p class="hint" id="key-hint">{{if .HasAPIKey}}已检测到 {{.APIKeySource}} 中的 DeepSeek 密钥；留空即可使用。{{else}}请在用户设置中保存密钥，或在此输入本次使用的密钥。{{end}} 手动输入的密钥优先于已有配置，只用于本次任务，不写入配置、日志或任务文件。</p><p class="privacy" id="endpoint-hint">请求接收方：<strong>{{.DeepSeekEndpoint}}</strong>。代码和密钥将发送至该服务地址；自定义网关地址来自个人配置，请确认可信。</p><p class="hint" id="model-hint">内置配置 deepseek-default 使用 deepseek-flash；deepseek-pro 使用 deepseek-v4-pro。其他模型与服务商可在<a href="/settings">用户设置</a>中配置。</p></div>
+          <div id="deepseek-settings" data-key-field data-saved-key="{{.HasAPIKey}}" data-key-context="scan"><div class="credential-heading"><label for="api_key">DeepSeek API 密钥</label><span class="credential-state" data-key-status role="status" aria-live="polite" data-state="{{if .HasAPIKey}}saved{{else}}missing{{end}}">{{if .HasAPIKey}}已配置 · {{.APIKeySource}}{{else}}未配置{{end}}</span></div><input type="password" id="api_key" name="api_key" maxlength="2048" placeholder="{{if .HasAPIKey}}已保存密钥，留空使用{{else}}填写 DeepSeek API 密钥{{end}}" autocomplete="new-password" spellcheck="false" data-secret aria-describedby="key-hint key-environment" {{if not .HasAPIKey}}required{{end}}><p class="hint" id="key-hint">本次填写仅用于当前扫描。<a href="/settings">在用户设置中保存个人密钥</a></p><p class="hint" id="key-environment">环境变量：{{if .IsolatedModelConfig}}未读取，Web 账号使用独立配置。{{else if .HasAPIKey}}{{.APIKeySource}}{{else}}未检测到 DeepSeek 密钥。{{end}}</p><p class="privacy" id="endpoint-hint">API 地址：<strong>{{.DeepSeekEndpoint}}</strong></p><p class="hint" id="model-hint">其他模型与服务商可在<a href="/settings">用户设置</a>中配置。</p></div>
           <div id="configured-settings" hidden><label for="llm_config">已有配置</label><select name="llm_config" id="llm_config" disabled><option value="">沿用配置文件中的默认值</option>{{range .LLMConfigs}}<option value="{{.}}">{{.}}</option>{{end}}</select><p class="hint">按已有配置选择各阶段的服务商、模型和凭据；此模式不使用上方 DeepSeek 密钥。未显式设置默认值时兼容已有配置；全新配置默认 deepseek-default。</p></div>
         </fieldset>
         <fieldset><legend><span class="section-no">03</span>验证与扫描范围</legend>
@@ -89,8 +88,85 @@ const repoInput = document.getElementById('repo');
 const refInput = document.getElementById('ref');
 const refOptions = document.getElementById('ref-options');
 const refsButton = document.getElementById('load-refs');
+const refPicker = document.getElementById('ref-picker');
+const refMenu = document.getElementById('ref-menu');
+const refToggle = document.getElementById('toggle-refs');
+let refsItems = [];
+let visibleRefs = [];
+let activeRef = -1;
 let refsRequest = null;
 let refsRepo = repoInput.value.trim();
+function closeRefs() {
+  refMenu.hidden = true;
+  refInput.setAttribute('aria-expanded', 'false');
+  refInput.removeAttribute('aria-activedescendant');
+  refToggle.setAttribute('aria-expanded', 'false');
+  refToggle.setAttribute('aria-label', '展开版本列表');
+  activeRef = -1;
+}
+function openRefs(query = '') {
+  if (!refsItems.length) return;
+  const term = query.toLocaleLowerCase();
+  visibleRefs = refsItems.filter(item => item.name.toLocaleLowerCase().includes(term));
+  refOptions.replaceChildren();
+  for (const [index, item] of visibleRefs.entries()) {
+    const option = document.createElement('button');
+    option.type = 'button'; option.tabIndex = -1; option.id = 'ref-option-' + index;
+    option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(item.name === refInput.value));
+    option.dataset.index = index;
+    const name = document.createElement('span'); name.className = 'ref-name'; name.textContent = item.name;
+    const kind = document.createElement('span'); kind.className = 'ref-kind'; kind.textContent = item.kind === 'tag' ? '标签' : '分支';
+    option.append(name, kind); refOptions.appendChild(option);
+  }
+  document.getElementById('ref-count').textContent = query ? visibleRefs.length + ' / ' + refsItems.length + ' 个版本' : refsItems.length + ' 个版本';
+  document.getElementById('ref-empty').hidden = visibleRefs.length !== 0;
+  refMenu.hidden = false;
+  refInput.setAttribute('aria-expanded', 'true');
+  refInput.removeAttribute('aria-activedescendant');
+  refToggle.setAttribute('aria-expanded', 'true');
+  refToggle.setAttribute('aria-label', '收起版本列表');
+  activeRef = -1;
+}
+function chooseRef(index) {
+  const item = visibleRefs[index];
+  if (!item) return;
+  refInput.value = item.name;
+  refInput.focus({preventScroll:true});
+  closeRefs();
+  refInput.dispatchEvent(new Event('change', {bubbles:true}));
+}
+refInput.addEventListener('focus', () => openRefs());
+refInput.addEventListener('click', () => openRefs());
+refInput.addEventListener('input', () => openRefs(refInput.value.trim()));
+refInput.addEventListener('keydown', event => {
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    if (!refsItems.length) return;
+    event.preventDefault();
+    if (refMenu.hidden) openRefs();
+    if (!visibleRefs.length) return;
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    activeRef = activeRef < 0 ? (step === 1 ? 0 : visibleRefs.length - 1) : (activeRef + step + visibleRefs.length) % visibleRefs.length;
+    for (const [index, option] of [...refOptions.children].entries()) option.classList.toggle('active', index === activeRef);
+    const option = refOptions.children[activeRef];
+    refInput.setAttribute('aria-activedescendant', option.id);
+    option.scrollIntoView({block:'nearest'});
+  } else if (event.key === 'Enter' && !refMenu.hidden && activeRef >= 0) {
+    event.preventDefault(); chooseRef(activeRef);
+  } else if (event.key === 'Escape' && !refMenu.hidden) {
+    event.preventDefault(); closeRefs();
+  } else if (event.key === 'Tab') closeRefs();
+});
+refToggle.addEventListener('click', () => {
+  const opening = refMenu.hidden;
+  refInput.focus({preventScroll:true});
+  if (opening) openRefs(); else closeRefs();
+});
+refOptions.addEventListener('click', event => {
+  const option = event.target.closest('[role=option]');
+  if (option) chooseRef(Number(option.dataset.index));
+});
+document.addEventListener('pointerdown', event => { if (!refPicker.contains(event.target)) closeRefs(); });
+refPicker.addEventListener('focusout', event => { if (!refPicker.contains(event.relatedTarget)) closeRefs(); });
 function setRefsBusy(busy) {
   refsButton.disabled = busy;
   refsButton.setAttribute('aria-busy', String(busy));
@@ -102,6 +178,7 @@ repoInput.addEventListener('input', () => {
   refsRepo = repo;
   refsRequest?.abort();
   refsRequest = null;
+  refsItems = []; visibleRefs = []; refToggle.disabled = true; closeRefs();
   refOptions.replaceChildren();
   setRefsBusy(false);
 });
@@ -134,14 +211,10 @@ refsButton.addEventListener('click', async function() {
     if (!Array.isArray(refs) || refs.some(item => !item || typeof item.name !== 'string' || !['tag','branch'].includes(item.kind))) {
       throw new Error('版本列表格式异常，请重试。');
     }
+    refsItems = refs;
     refOptions.replaceChildren();
-    for (const item of refs) {
-      const option = document.createElement('option');
-      option.value = item.name;
-      option.label = item.name + ' · ' + (item.kind === 'tag' ? '标签' : '分支');
-      option.textContent = option.label;
-      refOptions.appendChild(option);
-    }
+    refToggle.disabled = !refs.length;
+    if (refs.length && document.activeElement === refInput) openRefs(); else closeRefs();
     VulscanUI.notify(refs.length ? '已获取 ' + refs.length + ' 个可选版本。' : '此仓库没有可列出的标签或分支。',
       {tone:refs.length ? 'success' : 'info',button:this,id:'repository-refs'});
   } catch (error) {

@@ -61,18 +61,32 @@ try {
   }
   await Promise.all([register(a,aliceName),register(b,bobName)]);
   for (const page of [a,b]) {
+    if(await page.locator('#ref').inputValue()!==''||await page.locator('#api_key').inputValue()!=='')throw Error('Login credentials appeared in scan fields');
+    if(await page.locator('#api_key').getAttribute('autocomplete')!=='new-password'||!await page.locator('#api_key').evaluate(el=>el.required))throw Error('Missing-key/autofill semantics');
+    if(!await page.locator('#deepseek-settings [data-key-status]').innerText().then(t=>t.includes('未配置'))||!await page.locator('#key-environment').innerText().then(t=>t.includes('未读取')))throw Error('Missing credential source status');
     const account=await (await page.request.get(base+'/account')).json();
     if (account.admin!==false) throw new Error('Registration granted legacy administrator access');
     if (await page.getByText('legacy-private-browser-project',{exact:true}).count()) throw new Error('Legacy leak');
     await page.getByRole('navigation',{name:'账号',exact:true}).getByRole('link',{name:'用户设置',exact:true}).click();
     await page.getByRole('heading',{name:'用户设置',exact:true}).waitFor();
+    if(await page.locator('#settings-key').getAttribute('autocomplete')!=='new-password'||await page.locator('#settings-url').inputValue()!=='')throw Error('Settings API fields allow login autofill');
+    if(await page.getByLabel('API 地址（可选）',{exact:true}).count()||await page.getByLabel('API 密钥（可选）',{exact:true}).count())throw Error('API settings still labelled optional');
     await page.getByLabel('API 密钥',{exact:true}).fill(page===a?'browser-alice-key':'browser-bob-key');
+    if(!await page.locator('[data-key-status]').innerText().then(t=>t.includes('待保存')))throw Error('Typed key has no feedback');
     await Promise.all([page.waitForURL('**/settings?saved=1'),page.getByRole('button',{name:'保存模型配置',exact:true}).click()]);
     await page.getByText('已保存密钥',{exact:true}).waitFor();
     const html=await page.content();
     if (html.includes('browser-alice-key') || html.includes('browser-bob-key')) throw new Error('Secret rendered');
     await page.reload();
     if (await page.getByLabel('API 密钥',{exact:true}).inputValue()!=='') throw new Error('Key filled back into form');
+    if(!await page.locator('[data-key-status]').innerText().then(t=>t.includes('已配置'))||await page.locator('#settings-key').evaluate(el=>el.required))throw Error('Saved key status missing');
+    await page.selectOption('#settings-provider','openai');
+    if(!await page.locator('[data-key-status]').innerText().then(t=>t==='未配置')||!await page.locator('#settings-key').evaluate(el=>el.required))throw Error('Key status leaked across providers');
+    await page.selectOption('#settings-provider','deepseek');
+    const clear=page.locator('[data-clear-key]');await clear.check();
+    if(!await page.locator('#settings-key').isDisabled()||!await page.locator('[data-key-status]').innerText().then(t=>t==='保存后清除'))throw Error('Clear-key feedback missing');
+    await clear.uncheck();
+    if(!await page.locator('#settings-key').isEnabled()||!await page.locator('[data-key-status]').innerText().then(t=>t.includes('已配置')))throw Error('Clear-key cancel lost saved state');
   }
   // Both authenticated contexts remain usable; persisted cookies also work in
   // a fresh browser context without passing a password to the server again.

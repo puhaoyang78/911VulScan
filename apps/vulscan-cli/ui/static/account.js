@@ -1,5 +1,39 @@
 (() => {
   'use strict';
+  // API credentials are not sign-in passwords. The input uses new-password,
+  // and only presence/source information is reflected in the status component.
+  document.querySelectorAll('[data-key-field]').forEach(field => {
+    const input = field.querySelector('[data-secret]');
+    const status = field.querySelector('[data-key-status]');
+    const settings = field.dataset.keyContext === 'settings';
+    const provider = settings ? document.getElementById('settings-provider') : document.getElementById('provider');
+    const clear = field.querySelector('[data-clear-key]');
+    const savedProvider = () => [...document.querySelectorAll('[data-provider]')].find(item => item.dataset.provider === provider.value);
+    function update() {
+      const saved = settings ? savedProvider()?.dataset.hasKey === 'true' : field.dataset.savedKey === 'true';
+      const clearing = clear?.checked === true;
+      const entered = input.value.trim() !== '';
+      input.required = !saved && !clearing;
+      if (settings) input.disabled = clearing;
+      const state = clearing ? 'clearing' : entered ? 'entered' : saved ? 'saved' : 'missing';
+      status.dataset.state = state;
+      status.textContent = clearing ? '保存后清除' : entered ? (settings ? '已填写 · 待保存' : '已填写 · 本次扫描') : saved ? '已配置 · 个人设置' : '未配置';
+      input.placeholder = saved ? '已保存密钥，留空使用' : '填写该服务商的 API 密钥';
+    }
+    input.addEventListener('input', update);
+    input.addEventListener('change', update);
+    provider?.addEventListener('change', () => {
+      if (settings) {
+        input.value = ''; clear.checked = false;
+        document.getElementById('settings-url').value = savedProvider()?.dataset.baseUrl || '';
+      }
+      update();
+    });
+    clear?.addEventListener('change', () => { if (clear.checked) input.value = ''; update(); });
+    window.addEventListener('pageshow', () => { input.value = ''; update(); });
+    if (settings) document.getElementById('settings-url').value = savedProvider()?.dataset.baseUrl || '';
+    update();
+  });
   const nativeFetch = window.fetch.bind(window);
   const login = () => location.assign('/login?next=' + encodeURIComponent(location.pathname + location.search));
   document.querySelectorAll('[data-account-form]').forEach(form => {

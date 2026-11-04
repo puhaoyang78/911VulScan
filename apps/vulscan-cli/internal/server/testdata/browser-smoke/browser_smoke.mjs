@@ -285,6 +285,7 @@ let dompurifyProbeBlocked = 0;
       await route.fulfill({ status:200, contentType:'text/plain', body:'模拟未跳转响应' });
     });
     await page.fill('#repo', '/fixture-only-no-real-scan');
+    await page.fill('#api_key', 'smoke-fixture-not-a-real-key');
     await page.evaluate(() => { const form=document.getElementById('scan-form'); form.requestSubmit(); form.requestSubmit(); });
     await page.waitForFunction(() => !document.getElementById('start-button').disabled && document.getElementById('form-feedback').textContent.includes('任务响应异常'));
     if (submissions !== 1) throw new Error(`duplicate form submissions: ${submissions}`);
@@ -309,6 +310,8 @@ let dompurifyProbeBlocked = 0;
   const page=await context.newPage();
   page.on('pageerror',e=>note('version selection',e.message));
   let requests=0,reply={status:200,body:JSON.stringify({refs:[{name:'v1.2.0',kind:'tag'},{name:'main',kind:'branch'}]})};
+  let scanRequests=0;
+  await page.route('**/scan',async route=>{scanRequests++;await route.fulfill({status:400,body:'版本选择不应提交扫描'});});
   let releaseOld,oldSeen=false;
   const oldResponse=new Promise(resolve=>{releaseOld=resolve;});
   let oldHandled;
@@ -330,7 +333,7 @@ let dompurifyProbeBlocked = 0;
   await ready(page,'version selection',async()=>{
     await page.goto(baseURL+'/',{waitUntil:'domcontentloaded'});
     await page.setViewportSize({width:1440,height:1000});
-    const button=page.locator('#load-refs'),input=page.locator('#ref'),options=page.locator('#ref-options option');
+    const button=page.locator('#load-refs'),input=page.locator('#ref'),options=page.locator('#ref-options [role=option]');
     const notice=(message,tone)=>page.locator('.notice-toast'+(tone?`[data-tone=${tone}]`:'')).filter({hasText:message});
     const load=async(message,tone)=>{
       await button.click();
@@ -347,6 +350,7 @@ let dompurifyProbeBlocked = 0;
     let release;
     reply={...reply,wait:new Promise(resolve=>{release=resolve;})};
     await page.fill('#repo','https://example.com/repo');await button.click();
+    await page.fill('#api_key','version-fixture-not-a-real-key');
     await page.waitForFunction(()=>document.getElementById('load-refs').getAttribute('aria-busy')==='true');
     if(!await button.isDisabled()||!await button.innerText().then(t=>t.includes('正在获取')))throw Error('refs loading feedback is missing');
     await button.evaluate(e=>e.click());
@@ -357,17 +361,29 @@ let dompurifyProbeBlocked = 0;
     await notice('已获取 2 个可选版本。','success').waitFor();
     if(await button.isDisabled()||await button.getAttribute('aria-busy')!=='false')throw Error('refs loading state did not reset');
     if(!await input.evaluate(e=>e===document.activeElement))throw Error('async refs response stole focus');
-    const actual=await options.evaluateAll(nodes=>nodes.map(n=>[n.value,n.label,n.textContent]));
+    const actual=await options.evaluateAll(nodes=>nodes.map(n=>[n.querySelector('.ref-name').textContent,n.querySelector('.ref-kind').textContent]));
     if(JSON.stringify(actual)!==JSON.stringify([
-      ['v1.2.0','v1.2.0 · 标签','v1.2.0 · 标签'],
-      ['main','main · 分支','main · 分支'],
+      ['v1.2.0','标签'],
+      ['main','分支'],
     ]))throw Error('version options must show the actual ref name with its kind');
-    // Chromium headless does not open the OS datalist popup. Check both
-    // visible-label sources above and exercise each option's submitted value.
+    // Exercise real pointer and keyboard selection, even if the text field
+    // contains an unrelated value left by a browser/password manager.
+    await input.fill('saved-login-user');await input.click();
+    if(await options.count()!==2||!await options.first().isVisible())throw Error('current input value hid fetched versions');
     for(const ref of ['v1.2.0','main']){
-      await input.fill(ref);await input.press('Tab');
+      await input.click();
+      await options.filter({hasText:ref}).click();
       if(await page.locator('#scan-form').evaluate(form=>new FormData(form).get('ref'))!==ref)throw Error('selected version submission contains display-only text');
+      if(await input.getAttribute('aria-expanded')!=='false'||!await input.evaluate(e=>e===document.activeElement))throw Error('version selection did not close and restore focus');
     }
+    await input.fill('main');
+    if(await options.count()!==1||await options.first().locator('.ref-name').innerText()!=='main')throw Error('typed version search did not filter');
+    await input.press('ArrowDown');await input.press('Enter');
+    if(await input.inputValue()!=='main'||scanRequests)throw Error('keyboard version selection submitted the scan');
+    await page.locator('#toggle-refs').click();
+    if(await options.count()!==2||!await options.first().isVisible())throw Error('dropdown toggle did not show all versions');
+    await input.press('ArrowUp');await input.press('Escape');
+    if(await input.getAttribute('aria-expanded')!=='false'||await input.inputValue()!=='main')throw Error('Escape changed the selected version');
     await input.fill('v1.2.0');await input.press('Tab');
     await notice('扫描版本已设为 v1.2.0。','info').waitFor();
     if(await page.locator('.notice-toast').filter({hasText:'已获取'}).count())throw Error('version selection stacked obsolete feedback');
@@ -404,11 +420,13 @@ let dompurifyProbeBlocked = 0;
     reply={status:200,body:JSON.stringify({refs:[{name:'<img src=x onerror=alert(1)>',kind:'tag'},{name:'new-branch',kind:'branch'}]})};
     await load('已获取 2 个可选版本。','success');
     releaseOld();await oldFinished;
-    if(requests!==before+2||await options.last().getAttribute('value')!=='new-branch')throw Error('late response overwrote the current repository');
+    await input.click();
+    if(requests!==before+2||await options.last().locator('.ref-name').innerText()!=='new-branch')throw Error('late response overwrote the current repository');
     if(await page.locator('#ref-options img,#ref-options script').count())throw Error('version name treated as HTML');
     if(await page.locator('.notice-message').filter({hasText:'stale-tag'}).count())throw Error('stale response produced feedback');
     await page.locator('[data-theme-toggle]').click();
     await checkContrast(page,'light version feedback',['#ref','#load-refs','#ref-hint','.notice-message','.notice-close']);
+    if(scanRequests)throw Error('version selection created a scan');
   });
   releaseOld();if(oldSeen)await oldFinished;
   await drain(page,'version selection');await page.close();

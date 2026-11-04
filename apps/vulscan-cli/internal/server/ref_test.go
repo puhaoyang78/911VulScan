@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,13 +24,13 @@ func TestValidateGitRefAcceptsVersions(t *testing.T) {
 
 func TestValidateGitRefRejectsDangerousShapes(t *testing.T) {
 	cases := map[string]string{
-		"-p":              "短横线",
-		"--upload-pack=x": "短横线",
-		"a..b":            "字符序列",
-		"a@{1}":           "字符序列",
-		"v1 0":            "只能包含",
-		"$(id)":           "只能包含",
-		"v1;rm":           "只能包含",
+		"-p":                     "短横线",
+		"--upload-pack=x":        "短横线",
+		"a..b":                   "字符序列",
+		"a@{1}":                  "字符序列",
+		"v1 0":                   "只能包含",
+		"$(id)":                  "只能包含",
+		"v1;rm":                  "只能包含",
 		strings.Repeat("a", 129): "过长",
 	}
 	for ref, want := range cases {
@@ -142,5 +143,35 @@ func TestListRefsReturnsTagsBeforeBranches(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("branch missing from %+v", refs)
+	}
+}
+
+func TestListRefsKeepsBranchesWhenTagsReachLimit(t *testing.T) {
+	src, commit := newRepoWithTag(t)
+	gitRun(t, src, "branch", "feature-x")
+	var commands strings.Builder
+	for i := range 205 {
+		fmt.Fprintf(&commands, "create refs/tags/release-%03d %s\n", i, commit)
+	}
+	cmd := exec.Command("git", "-C", src, "update-ref", "--stdin")
+	cmd.Stdin = strings.NewReader(commands.String())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create tags: %v\n%s", err, out)
+	}
+	refs, err := listRefs(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 200 {
+		t.Fatalf("bounded version list = %d, want 200", len(refs))
+	}
+	branches := map[string]bool{}
+	for _, ref := range refs {
+		if ref.Kind == "branch" {
+			branches[ref.Name] = true
+		}
+	}
+	if !branches["main"] || !branches["feature-x"] || refs[0].Kind != "tag" {
+		t.Fatalf("tag history hid branches or changed ordering: %v", branches)
 	}
 }

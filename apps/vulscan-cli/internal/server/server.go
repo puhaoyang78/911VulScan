@@ -726,16 +726,17 @@ type jobView struct {
 }
 
 type indexData struct {
-	DeepSeekEndpoint string
-	LLMConfigs       []string
-	RunningCount     int
-	DoneCount        int
-	AttentionCount   int
-	Jobs             []*jobView
-	HasAPIKey        bool // whether a key is configured; the key VALUE is never sent to the page
-	APIKeySource     string
-	CSRF             string
-	Nonce            string // the noncedPage CSP nonce (see #578 follow-up A)
+	DeepSeekEndpoint    string
+	LLMConfigs          []string
+	RunningCount        int
+	DoneCount           int
+	AttentionCount      int
+	Jobs                []*jobView
+	HasAPIKey           bool // whether a key is configured; the key VALUE is never sent to the page
+	APIKeySource        string
+	IsolatedModelConfig bool
+	CSRF                string
+	Nonce               string // the noncedPage CSP nonce (see #578 follow-up A)
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -747,7 +748,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	apiKeySource := ""
 	if cfg != nil {
 		if p, ok := cfg.GetProvider("deepseek"); ok && p.Type == "deepseek" && p.APIKey != "" {
-			apiKeySource = "已有模型配置"
+			apiKeySource = "个人配置"
 		}
 	}
 	if who(r) == nil && apiKeySource == "" && os.Getenv("DEEPSEEK_API_KEY") != "" {
@@ -785,13 +786,14 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := indexData{
-		Jobs:             views,
-		DeepSeekEndpoint: deepSeekEndpointOrigin(cfg),
-		HasAPIKey:        apiKeySource != "",
-		LLMConfigs:       profiles,
-		APIKeySource:     apiKeySource,
-		CSRF:             s.csrfFor(r),
-		Nonce:            nonceFrom(r),
+		Jobs:                views,
+		DeepSeekEndpoint:    deepSeekEndpointOrigin(cfg),
+		HasAPIKey:           apiKeySource != "",
+		LLMConfigs:          profiles,
+		APIKeySource:        apiKeySource,
+		IsolatedModelConfig: who(r) != nil,
+		CSRF:                s.csrfFor(r),
+		Nonce:               nonceFrom(r),
 	}
 	if who(r) != nil {
 		d.DeepSeekEndpoint = "https://api.deepseek.com"
@@ -2484,11 +2486,14 @@ func listRefs(ctx context.Context, repo string) ([]refOption, error) {
 	sort.Slice(tags, func(i, j int) bool { return tags[i].Name > tags[j].Name })
 	sort.Slice(branches, func(i, j int) bool { return branches[i].Name < branches[j].Name })
 	const limit = 200
-	refs := append(tags, branches...)
-	if len(refs) > limit {
-		refs = refs[:limit]
+	if len(tags)+len(branches) > limit {
+		// Reserve room for both kinds: a long tag history must not hide branches.
+		branchCount := min(len(branches), limit/2)
+		tagCount := min(len(tags), limit-branchCount)
+		branchCount = min(len(branches), limit-tagCount)
+		tags, branches = tags[:tagCount], branches[:branchCount]
 	}
-	return refs, nil
+	return append(tags, branches...), nil
 }
 
 // runGit runs one git subcommand, streaming its stderr, and turns a non-zero
