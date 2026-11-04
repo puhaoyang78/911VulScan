@@ -125,10 +125,12 @@ def check_url(url: str) -> None:
     while time.monotonic() < deadline:
         try:
             with opener.open(urllib.request.Request(url, headers={"Accept": "text/html"}), timeout=3) as response:
-                if response.status == 200 and "911VulScan" in response.read().decode("utf-8"):
+                page = response.read().decode("utf-8")
+                if (response.status == 200 and response.headers.get("X-Application-Id") == "vulscan"
+                        and response.headers.get_content_type() == "text/html" and "<html" in page.lower()):
                     print("网页服务：" + url + "，正常", flush=True)
                     return
-                error = "响应不是 911VulScan 页面"
+                error = "响应不是扫描工作台页面"
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             error = str(exc)
         time.sleep(0.5)

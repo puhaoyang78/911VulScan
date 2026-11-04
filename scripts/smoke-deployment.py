@@ -88,13 +88,16 @@ assert not (root / "openant").exists()
                     output = log.read()
                     match = re.search(r"http://127\.0\.0\.1:\d+", output)
                     if match:
+                        run(sys.executable, str(source / 'scripts/check-deployment.py'), '--root', str(source), '--url', match.group(), env=env)
                         run(sys.executable, str(ROOT / 'scripts/tests/web_session.py'), '--url', match.group(), '--home', env['HOME'], '--register')
                         jar = http.cookiejar.LWPCookieJar(str(Path(env['HOME']) / '.vulscan/deployment-acceptance.cookies'))
                         jar.load(ignore_discard=True)
                         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(jar))
                         with opener.open(match.group(), timeout=5) as response:
                             assert response.status == 200
-                            assert "911VulScan" in response.read().decode()
+                            assert response.headers.get('X-Application-Id') == 'vulscan'
+                            page = response.read().decode()
+                            assert '安全扫描工作台' in page and '911VulScan' not in page
                         # Check exact packaged font/highlighter/theme bytes,
                         # not just an HTML page mentioning their filenames.
                         for name, folder in (("tabler-1.4.0.min.css", "design"),

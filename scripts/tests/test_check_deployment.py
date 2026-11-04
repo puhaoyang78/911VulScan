@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -23,6 +24,8 @@ class DeploymentCheckTests(unittest.TestCase):
         self.body = '<strong id="stat-running">0</strong>'
         self.operator = None
         self.running = 0
+        self.application = None
+        self.content_type = 'text/html'
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -37,6 +40,9 @@ class DeploymentCheckTests(unittest.TestCase):
                     self.wfile.write(__import__('json').dumps({'application': '911VulScan', 'running': fixture.running}).encode())
                     return
                 self.send_response(200)
+                self.send_header('Content-Type', fixture.content_type)
+                if fixture.application is not None:
+                    self.send_header('X-Application-Id', fixture.application)
                 self.end_headers()
                 self.wfile.write(fixture.body.encode())
 
@@ -56,6 +62,21 @@ class DeploymentCheckTests(unittest.TestCase):
         self.body = '<strong id="stat-running">2</strong>'
         with self.assertRaisesRegex(RuntimeError, "仍有运行"):
             checker.check_idle(self.url, self.home)
+
+    def test_page_check_uses_identity_header_without_display_branding(self):
+        self.application = 'vulscan'
+        self.body = '<html lang="zh-CN"><title>注册账号</title></html>'
+        checker.check_url(self.url)
+
+    def test_page_check_rejects_other_services_even_with_product_text(self):
+        self.body = '<html><title>911VulScan</title></html>'
+        for application, content_type in ((None, 'text/html'), ('other', 'text/html'), ('vulscan', 'application/json')):
+            with self.subTest(application=application, content_type=content_type):
+                self.application, self.content_type = application, content_type
+                # One real HTTP request; advance only the checker's retry clock.
+                with patch.object(checker.time, 'monotonic', side_effect=(0, 0, 61)), patch.object(checker.time, 'sleep'):
+                    with self.assertRaisesRegex(RuntimeError, '响应不是扫描工作台页面'):
+                        checker.check_url(self.url)
 
     def test_port_preflight_rejects_other_listener(self):
         with self.assertRaisesRegex(RuntimeError, "--port"):

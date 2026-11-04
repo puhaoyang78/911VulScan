@@ -43,6 +43,8 @@ async function register(page,name) {
 async function noOverflow(page) {
   const widths=await page.evaluate(()=>({body:document.documentElement.scrollWidth,window:innerWidth,violations:window.__violations}));
   if (widths.body>widths.window+1 || widths.violations.length) throw new Error('Overflow/CSP: '+JSON.stringify(widths));
+  const chrome=await page.locator('.app-header,footer,.eyebrow').allTextContents();
+  if(/911/.test(chrome.join(' ')+' '+await page.title())||await page.locator('.brand-mark').count()) throw new Error('Removed branding remains on account page');
 }
 try {
   const alice=await context(); const a=await alice.newPage();

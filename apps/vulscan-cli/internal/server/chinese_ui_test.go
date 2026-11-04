@@ -230,8 +230,11 @@ func TestChineseDashboardUsesSafeDefaultsAndNoSecretValues(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("dashboard = %d", w.Code)
 	}
+	if w.Header().Get("X-Application-Id") != "vulscan" {
+		t.Fatal("missing deployment identity header")
+	}
 	body := w.Body.String()
-	for _, want := range []string{`lang="zh-CN"`, "911VulScan", "安全扫描工作台", "最近扫描", `value="deepseek" selected`, "deepseek-v4-pro", `id="stat-running">1`, `id="stat-done">1`, `id="stat-attention">1`, "用户设置"} {
+	for _, want := range []string{`lang="zh-CN"`, "安全扫描工作台", "最近扫描", `value="deepseek" selected`, "deepseek-v4-pro", `id="stat-running">1`, `id="stat-done">1`, `id="stat-attention">1`, "用户设置"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -310,8 +313,13 @@ func TestRenderedChinesePagesJavaScriptSyntax(t *testing.T) {
 				t.Error("missing Chinese document language")
 			}
 			footer := regexp.MustCompile(`(?s)<footer[^>]*>(.*?)</footer>`).FindStringSubmatch(out.String())
-			if len(footer) != 2 || !strings.Contains(footer[1], "911VulScan") {
-				t.Fatal("missing product footer")
+			if len(footer) != 2 || !strings.Contains(footer[1], "中文安全扫描工作台") {
+				t.Fatal("missing workspace footer")
+			}
+			for _, removed := range []string{"911VulScan", ">911<", `class="brand-mark"`} {
+				if strings.Contains(out.String(), removed) {
+					t.Errorf("removed branding remains: %q", removed)
+				}
 			}
 			if strings.Contains(footer[1], "Knostic") || strings.Contains(footer[1], "OpenAnt") {
 				t.Error("obsolete upstream attribution remains in the visible footer")

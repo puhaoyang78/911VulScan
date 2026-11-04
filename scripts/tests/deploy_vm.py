@@ -124,7 +124,7 @@ def main():
             if args.ubuntu == "24.04":
                 # A real unrelated HTTP listener reproduces the original
                 # deployment failure. The installer must leave it running.
-                capture("occupied-default-port", "sudo systemd-run --unit=deployment-port-fixture --property=User=deployer /usr/bin/python3 -m http.server 8080 --bind 127.0.0.1 && python3 - <<'PY'\nimport time, urllib.request\nopener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\nfor attempt in range(10):\n try:\n  with opener.open('http://127.0.0.1:8080',timeout=2) as response:\n   assert response.status==200 and b'911VulScan' not in response.read()\n  break\n except OSError:\n  if attempt==9: raise\n  time.sleep(1)\nprint('Unrelated HTTP service owns 8080 in this disposable guest.')\nPY")
+                capture("occupied-default-port", "sudo systemd-run --unit=deployment-port-fixture --property=User=deployer /usr/bin/python3 -m http.server 8080 --bind 127.0.0.1 && python3 - <<'PY'\nimport time, urllib.request\nopener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\nfor attempt in range(10):\n try:\n  with opener.open('http://127.0.0.1:8080',timeout=2) as response:\n   assert response.status==200 and response.headers.get('X-Application-Id') != 'vulscan'\n  break\n except OSError:\n  if attempt==9: raise\n  time.sleep(1)\nprint('Unrelated HTTP service owns 8080 in this disposable guest.')\nPY")
 
             if args.ubuntu in ("20.04", "22.04"):
                 # Interrupt real CPython altinstall, then rerun the exact deploy
@@ -187,7 +187,7 @@ def main():
             remote(f"sudo grep -qx retained {home}/.vulscan/deployment-preserved && sudo grep -q auths {home}/docker-client/config.json")
             capture('authenticated-history', web_session + ' --expect-history deployment-history-fixture')
             if args.ubuntu == "24.04":
-                capture('foreign-service-preserved', "systemctl is-active --quiet deployment-port-fixture && python3 - <<'PY'\nimport urllib.request\nopener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\nwith opener.open('http://127.0.0.1:8080',timeout=5) as response:\n assert response.status==200 and b'911VulScan' not in response.read()\nprint('Unrelated 8080 service was preserved through all deployments.')\nPY")
+                capture('foreign-service-preserved', "systemctl is-active --quiet deployment-port-fixture && python3 - <<'PY'\nimport urllib.request\nopener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\nwith opener.open('http://127.0.0.1:8080',timeout=5) as response:\n assert response.status==200 and response.headers.get('X-Application-Id') != 'vulscan'\nprint('Unrelated 8080 service was preserved through all deployments.')\nPY")
             remote("systemctl is-enabled --quiet vulscan && systemctl is-enabled --quiet docker")
             verify = f"sudo /opt/911VulScan/.venv/bin/python /opt/911VulScan/scripts/check-deployment.py --root /opt/911VulScan --url {service_url} --service-uid " + uid + " --service-pid $(systemctl show -p MainPID --value vulscan)"
             capture("running-version", verify)

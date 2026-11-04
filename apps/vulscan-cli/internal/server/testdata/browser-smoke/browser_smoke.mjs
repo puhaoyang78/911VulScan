@@ -121,9 +121,13 @@ async function visit(name, path) {
   }
   if (['index', 'scan', 'summary', 'disclosure'].includes(name)) {
     const footer = await page.locator('footer').innerText();
-    if (!footer.includes('911VulScan') || /Knostic|OpenAnt/.test(footer)) {
+    if (!footer.includes('中文安全扫描工作台') || /911|Knostic|OpenAnt/.test(footer)) {
       note(name, `unexpected product footer: ${footer}`);
     }
+  }
+  const chrome=await page.locator('.app-header,footer,.eyebrow').allTextContents();
+  if(/911/.test(chrome.join(' ')+' '+await page.title())||await page.locator('.brand-mark').count()) {
+    note(name,'removed branding remains in page header, footer or title');
   }
   return { page, csp };
 }

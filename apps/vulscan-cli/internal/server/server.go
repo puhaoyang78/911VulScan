@@ -576,6 +576,8 @@ func securityHeaders(h http.Handler) http.Handler {
 			http.Error(w, "无效的主机地址：仅支持本机或内网 IP 访问", http.StatusForbidden)
 			return
 		}
+		// Deployment identity is independent of user-facing page titles/branding.
+		w.Header().Set("X-Application-Id", "vulscan")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		// Native same-origin form POSTs need an Origin header. no-referrer
@@ -1109,7 +1111,7 @@ func deepSeekEndpointOrigin(cfg *config.Config) string {
 func scanModelSettings(r *http.Request) (string, map[string]string, error) {
 	cfg, err := modelConfigFor(r)
 	if err != nil {
-		return "", nil, fmt.Errorf("无法读取模型配置，请检查 911VulScan 配置文件")
+		return "", nil, fmt.Errorf("无法读取模型配置，请检查个人配置文件")
 	}
 	provider := r.FormValue("provider")
 	if provider == "" {
