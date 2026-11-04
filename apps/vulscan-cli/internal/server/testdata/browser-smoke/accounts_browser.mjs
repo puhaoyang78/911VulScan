@@ -8,7 +8,9 @@ const launch = process.env.VULSCAN_BROWSER_EXECUTABLE ? {executablePath:process.
 const browser = await chromium.launch(launch);
 const errors = [];
 const contexts = [];
-const password = 'Browser-test-password-2026';
+const password = '12345678';
+const aliceName = '张三';
+const bobName = 'li';
 async function context() {
   const ctx = await browser.newContext({reducedMotion:'reduce'});
   contexts.push(ctx);
@@ -47,7 +49,17 @@ try {
   const bob=await context(); const b=await bob.newPage();
   await visit(a,'/');
   if (a.url()!==base+'/register?next=%2F') throw new Error('First visit did not open registration');
-  await Promise.all([register(a,'browser-alice'),register(b,'browser-bob')]);
+  const username=a.getByLabel('账号',{exact:true});
+  for (const [value,valid] of [['张',false],['张三',true],['li',true],['𠮷',false],['𠮷野',true],['中'.repeat(32),true],['中'.repeat(33),false]]) {
+    await username.fill(value);
+    if (await username.evaluate(el=>el.checkValidity())!==valid) throw new Error('Username character validation: '+value);
+  }
+  const initialPassword=a.getByLabel('密码',{exact:true});
+  for (const [value,valid] of [['1234567',false],['12345678',true],['🔑'.repeat(7),false],['🔑'.repeat(8),true]]) {
+    await initialPassword.fill(value);
+    if (await initialPassword.evaluate(el=>el.checkValidity())!==valid) throw new Error('Password character validation');
+  }
+  await Promise.all([register(a,aliceName),register(b,bobName)]);
   for (const page of [a,b]) {
     const account=await (await page.request.get(base+'/account')).json();
     if (account.admin!==false) throw new Error('Registration granted legacy administrator access');
@@ -67,7 +79,7 @@ try {
   const saved=await alice.storageState();
   const restored=await browser.newContext({storageState:saved});contexts.push(restored);
   const r=await restored.newPage();await r.goto(base+'/');
-  await r.locator('[data-account-nav] .account-name').filter({hasText:'browser-alice'}).waitFor();
+  await r.locator('[data-account-nav] .account-name').filter({hasText:aliceName}).waitFor();
   if (await r.getByText('legacy-private-browser-project',{exact:true}).count()) throw new Error('Restore leak');
   const capture=process.env.VULSCAN_SCREENSHOTS;
   if (capture) mkdirSync(capture,{recursive:true});
@@ -82,22 +94,22 @@ try {
   }
   await a.setViewportSize({width:1440,height:900});
   await a.getByLabel('当前密码',{exact:true}).fill(password);
-  await a.getByLabel('新密码',{exact:true}).fill('Updated-browser-password-2026');
+  await a.getByLabel('新密码',{exact:true}).fill('87654321');
   const confirm=a.getByLabel('确认新密码',{exact:true});await confirm.fill('Wrong-confirm-password');
   if (await confirm.evaluate(el=>el.checkValidity())) throw new Error('Confirmation mismatch accepted');
-  await confirm.fill('Updated-browser-password-2026');
+  await confirm.fill('87654321');
   await a.getByRole('button',{name:'更新密码',exact:true}).click();
   await a.getByRole('status').filter({hasText:'密码已更新'}).first().waitFor();
   await a.getByRole('button',{name:'退出',exact:true}).click();await a.waitForURL('**/login');
-  await b.reload();await b.locator('[data-account-nav] .account-name').filter({hasText:'browser-bob'}).waitFor();
+  await b.reload();await b.locator('[data-account-nav] .account-name').filter({hasText:bobName}).waitFor();
   await a.setViewportSize({width:360,height:900});await noOverflow(a);
   if (capture) await a.screenshot({path:join(capture,'accounts-login-360.png'),fullPage:true});
   // Keyboard form navigation and real sign-in after password change.
-  await a.getByLabel('账号',{exact:true}).fill('browser-alice');
+  await a.getByLabel('账号',{exact:true}).fill(aliceName);
   await a.getByLabel('账号',{exact:true}).press('Tab');
   if (!await a.getByLabel('密码',{exact:true}).evaluate(el=>el===document.activeElement)) throw new Error('Keyboard focus order');
-  await a.getByLabel('密码',{exact:true}).fill('Updated-browser-password-2026');
+  await a.getByLabel('密码',{exact:true}).fill('87654321');
   await a.getByRole('button',{name:'登录',exact:true}).click();await a.waitForURL(base+'/');await noOverflow(a);
   if (errors.length) throw new Error(errors.join('\n'));
-  console.log('ACCOUNTS-BROWSER OK: direct register/login/logout, two initial registrations, private legacy data, persistent cookies, isolated model settings, password confirmation/change, 4 viewport widths, light/dark, keyboard, 0 CSP/external-network errors');
+  console.log('ACCOUNTS-BROWSER OK: two-character Chinese/ASCII names, eight-character passwords, Unicode length boundaries, direct register/login/logout, two initial registrations, private legacy data, persistent cookies, isolated model settings, password confirmation/change, 4 viewport widths, light/dark, keyboard, 0 CSP/external-network errors');
 } finally {for (const ctx of contexts) await ctx.close();await browser.close();}

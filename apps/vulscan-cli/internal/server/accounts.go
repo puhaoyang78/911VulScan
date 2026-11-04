@@ -304,7 +304,7 @@ func (s *Server) validGuest(token string) bool {
 	return hmac.Equal([]byte(parts[1]), []byte(hex.EncodeToString(mac.Sum(nil))))
 }
 
-var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,31}$`)
+var usernamePattern = regexp.MustCompile(`^[\p{L}\p{N}_.-]{2,32}$`)
 
 func passwordKey(password, salt string) string {
 	key, err := pbkdf2.Key(sha256.New, password, []byte(salt), passwordIterations, 32)
@@ -384,8 +384,11 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		}
 		d.Username = strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 		password := r.FormValue("password")
-		if !usernamePattern.MatchString(d.Username) || len(password) > 128 || utf8.RuneCountInString(password) < 12 {
-			d.Error = "账号需为 3–32 位字母、数字或 ._-，密码需为 12 位以上且不超过 128 字节。"
+		if !usernamePattern.MatchString(d.Username) {
+			d.Error = "账号需为 2–32 个字符，支持中文、字母、数字和 ._-。"
+			code = 400
+		} else if len(password) > 128 || utf8.RuneCountInString(password) < 8 {
+			d.Error = "密码至少 8 个字符，且不超过 128 字节。"
 			code = 400
 		} else if mode == "login" {
 			s.accounts.mu.Lock()
@@ -502,8 +505,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) changePassword(u *identity, old, password string) error {
-	if len(old) > 128 || utf8.RuneCountInString(password) < 12 || len(password) > 128 {
-		return errors.New("新密码需为 12 位以上且不超过 128 字节。")
+	if len(old) > 128 || utf8.RuneCountInString(password) < 8 || len(password) > 128 {
+		return errors.New("新密码至少 8 个字符，且不超过 128 字节。")
 	}
 	select {
 	case s.accounts.passwordSlots <- struct{}{}:

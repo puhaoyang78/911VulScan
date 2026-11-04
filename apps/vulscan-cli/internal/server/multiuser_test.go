@@ -59,7 +59,7 @@ func httpCall(t *testing.T, c *http.Client, method, uri string, form url.Values,
 	}
 	return resp.StatusCode, string(data), resp.Header
 }
-func signIn(t *testing.T, c *http.Client, base, mode, name string) {
+func submitAuth(t *testing.T, c *http.Client, base, mode, name, password string) (int, string, http.Header) {
 	t.Helper()
 	code, body, _ := httpCall(t, c, "GET", base+"/"+mode, nil, "")
 	if code != 200 {
@@ -69,8 +69,12 @@ func signIn(t *testing.T, c *http.Client, base, mode, name string) {
 	if len(m) != 2 {
 		t.Fatal("missing guest CSRF")
 	}
-	values := url.Values{"username": {name}, "password": {testPassword}, "csrf": {m[1]}}
-	code, body, _ = httpCall(t, c, "POST", base+"/"+mode, values, "")
+	values := url.Values{"username": {name}, "password": {password}, "csrf": {m[1]}}
+	return httpCall(t, c, "POST", base+"/"+mode, values, "")
+}
+func signIn(t *testing.T, c *http.Client, base, mode, name string) {
+	t.Helper()
+	code, body, _ := submitAuth(t, c, base, mode, name, testPassword)
 	if code != 303 {
 		t.Fatalf("%s: %d %s", mode, code, body)
 	}
@@ -94,6 +98,87 @@ func userModel(t *testing.T, c *http.Client, base, key string) {
 	code, body, _ = httpCall(t, c, "GET", base+"/settings", nil, "")
 	if code != 200 || strings.Contains(body, key) || !strings.Contains(body, "已保存密钥") {
 		t.Fatalf("settings exposed key or failed: %d", code)
+	}
+}
+
+func TestChineseAccountAndEightCharacterPassword(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	s, err := New("unused", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := httptest.NewServer(s.Handler())
+	defer service.Close()
+	client := realClient(t)
+	for _, tc := range []struct {
+		name, password string
+	}{
+		{"张", "12345678"}, {"𠮷", "12345678"}, {"a", "12345678"},
+		{strings.Repeat("张", 33), "12345678"}, {"姓名 空格", "12345678"},
+		{"张三", "1234567"}, {"张三", "一二三四五六七"},
+		{"张三", strings.Repeat("a", 129)},
+	} {
+		code, _, _ := submitAuth(t, client, service.URL, "register", tc.name, tc.password)
+		if code != 400 || s.accounts.hasUsers() {
+			t.Fatalf("invalid account accepted: %q status=%d", tc.name, code)
+		}
+	}
+	for _, tc := range []struct {
+		name, password string
+	}{
+		{"张三", "12345678"}, {"li", "12345678"}, {"𠮷野", "一二三四五六七八"},
+		{strings.Repeat("中", 32), "12345678"},
+	} {
+		c := realClient(t)
+		if tc.name == "张三" {
+			c = client
+		}
+		code, body, _ := submitAuth(t, c, service.URL, "register", tc.name, tc.password)
+		if code != 303 || currentAccount(t, c, service.URL)["username"] != tc.name {
+			t.Fatalf("Chinese/short account registration: %d %s", code, body)
+		}
+	}
+	code, _, _ := submitAuth(t, realClient(t), service.URL, "register", "张三", "12345678")
+	if code != 409 {
+		t.Fatal("duplicate Chinese account accepted")
+	}
+	second := realClient(t)
+	code, _, _ = submitAuth(t, second, service.URL, "login", "张三", "12345678")
+	if code != 303 {
+		t.Fatal("Chinese account cannot log in with an eight-character password")
+	}
+	token := currentAccount(t, client, service.URL)["csrf"].(string)
+	for _, password := range []string{"1234567", "一二三四五六七"} {
+		code, _, _ = httpCall(t, client, "POST", service.URL+"/settings", url.Values{"action": {"password"}, "current_password": {"12345678"}, "new_password": {password}}, token)
+		if code != 400 {
+			t.Fatal("password update accepted fewer than eight characters")
+		}
+	}
+	code, body, _ := httpCall(t, client, "POST", service.URL+"/settings", url.Values{"action": {"password"}, "current_password": {"12345678"}, "new_password": {"87654321"}}, token)
+	if code != 303 {
+		t.Fatalf("eight-character password update: %d %s", code, body)
+	}
+	code, _, _ = httpCall(t, second, "GET", service.URL+"/account", nil, "")
+	if code != 401 {
+		t.Fatal("password change did not revoke the other session")
+	}
+	service.Close()
+	restarted, err := New("unused", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := httptest.NewServer(restarted.Handler())
+	defer restored.Close()
+	code, _, _ = submitAuth(t, realClient(t), restored.URL, "login", "张三", "12345678")
+	if code != 400 {
+		t.Fatal("old password accepted after restart")
+	}
+	login := realClient(t)
+	code, _, _ = submitAuth(t, login, restored.URL, "login", "张三", "87654321")
+	if code != 303 || currentAccount(t, login, restored.URL)["username"] != "张三" {
+		t.Fatal("Chinese account/eight-character password not persisted")
 	}
 }
 
