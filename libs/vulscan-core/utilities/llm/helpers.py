@@ -36,6 +36,8 @@ from .registry import PhaseBinding
 # directly, so they import THIS constant instead of pinning their own 4096 —
 # the two budget paths cannot drift apart again.
 DEFAULT_MAX_TOKENS = 20000
+# Per conversation, separate from transport retries and the agent turn budget.
+MAX_TOOL_ARGUMENT_RETRIES = 2
 
 
 def lookup_pricing(binding: PhaseBinding) -> Optional[dict]:

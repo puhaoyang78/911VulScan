@@ -90,8 +90,13 @@ def run_tests(
         if f.get("stage2_verdict") in DYNAMIC_TESTABLE
     ]
 
+    unresolved = sum(f.get("stage2_verdict") == "unverified" for f in testable)
     print(f"[动态测试] 可测试发现：{len(testable)} 项 "
-          f"（总计 {len(findings)} 项）", file=sys.stderr)
+          f"（其中复核未完成 {unresolved} 项；总计 {len(findings)} 项）", file=sys.stderr)
+    from core import ui_events
+    ui_events.emit("activity", stage="dynamic-test", status="running",
+                   message=f"动态测试范围：{len(testable)} 项，其中复核未完成 {unresolved} 项",
+                   details="复核未完成的候选仍保留，通过动态测试进一步检查；不计为复核保留。" if unresolved else "")
 
     if not testable:
         results_path = os.path.join(output_dir, "dynamic_test_results.json")

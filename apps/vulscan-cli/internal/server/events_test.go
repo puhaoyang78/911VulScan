@@ -73,6 +73,114 @@ func TestHumanLogsCannotBeAcceptedAsEventFrames(t *testing.T) {
 	}
 }
 
+func TestFastStageResultsSurviveLaterStagesAndSnapshotRecovery(t *testing.T) {
+	j := &Job{ID: "fast-stages", Status: StatusRunning, outDir: t.TempDir()}
+	j.addLog(eventLine(j.ID, 1, "scan.started", func(e *uiEvent) { e.StageOrder = []string{"parse", "analyze", "verify"} }))
+	j.addLog(eventLine(j.ID, 2, "stage.changed", func(e *uiEvent) { e.Stage, e.Status = "parse", "running" }))
+	completed := eventLine(j.ID, 3, "stage.changed", func(e *uiEvent) {
+		duration, cost, count := 0.08, 0.0, 12
+		e.Stage, e.Status = "parse", "success"
+		e.Duration, e.Cost, e.Processed, e.Total, e.Unit = &duration, &cost, &count, &count, "函数"
+		e.Summary = map[string]any{"language": "javascript", "processing_level": "all"}
+		e.Outputs = []string{"dataset.json"}
+	})
+	j.addLog(completed)
+	j.addLog(completed)
+	j.addLog(eventLine(j.ID, 4, "stage.changed", func(e *uiEvent) { e.Stage, e.Status = "analyze", "running" }))
+	raw, err := os.ReadFile(filepath.Join(j.outDir, "snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored jobSnapshot
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	st := restored.Stages["parse"]
+	if restored.Stage != "analyze" || len(restored.StageOrder) != 3 || st == nil || st.Duration == nil || *st.Duration != 0.08 || st.Cost == nil || *st.Cost != 0 || *st.Processed != 12 || st.Summary["language"] != "javascript" || st.Outputs[0] != "dataset.json" || st.StartedAt == nil || st.FinishedAt == nil {
+		t.Fatalf("completed fast stage lost its real result: %+v", st)
+	}
+}
+
+func TestFailedReviewCanEnterDynamicTestingWithoutBecomingRetained(t *testing.T) {
+	j := &Job{ID: "review-error", Status: StatusRunning}
+	yes := true
+	j.addLog(eventLine(j.ID, 1, "finding.upsert", func(e *uiEvent) {
+		e.FindingID = "ini.js:decode"
+		e.Finding = &uiFinding{ID: e.FindingID, ModelReview: "error", DynamicEligible: &yes, Dynamic: "pending"}
+	}))
+	update := eventLine(j.ID, 2, "validation.updated", func(e *uiEvent) {
+		e.FindingID = "ini.js:decode"
+		e.Finding = &uiFinding{ID: e.FindingID, Dynamic: "running", Attempt: 2}
+	})
+	j.addLog(update)
+	j.addLog(update)
+	s := j.snapshotLocked()
+	for key, want := range map[string]int{"candidates": 1, "retained": 0, "excluded": 0, "review_incomplete": 1, "review_error": 1, "dynamic_eligible": 1} {
+		if s.Counts[key] == nil || *s.Counts[key] != want {
+			t.Errorf("%s: want %d, got %v", key, want, s.Counts[key])
+		}
+	}
+	if s.Findings["ini.js:decode"].ModelReview != "error" || s.Counts["reproduced"] != nil {
+		t.Fatal("queued test invented successful review or reproduction")
+	}
+}
+
+func TestRestoreStageReportsUsesMatchingSavedDataWithoutOverwritingEvents(t *testing.T) {
+	root := t.TempDir()
+	j := &Job{ID: "history", Status: StatusDone, outDir: root}
+	j.Snapshot = newJobSnapshot(j, false)
+	j.Snapshot.Stages["parse"] = &uiStage{Status: "success"}
+	j.Snapshot.Stages["enhance"] = &uiStage{Status: "success", Summary: map[string]any{"units_enhanced": 19}}
+	j.Snapshot.Stages["verify"] = &uiStage{Status: "partial"}
+	data := []byte(`{"step":"parse","status":"success","duration_seconds":0.08,"cost_usd":0,"summary":{"total_units":6,"language":"javascript"},"outputs":{"dataset_path":"/original/path/dataset.json"}}`)
+	if err := os.WriteFile(filepath.Join(root, "parse.report.json"), data, 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "enhance.report.json"), []byte(`{"step":"enhance","status":"success","summary":{"units_enhanced":99}}`), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "verify.report.json"), []byte(`{"step":"verify","status":"success","summary":{"confirmed_vulnerabilities":99}}`), 0640); err != nil {
+		t.Fatal(err)
+	}
+	j.restoreStageReports()
+	parse := j.Snapshot.Stages["parse"]
+	if parse.Summary["language"] != "javascript" || parse.Duration == nil || *parse.Duration != 0.08 || len(parse.Outputs) != 1 || parse.Outputs[0] != "dataset.json" || parse.Cost == nil || *parse.Cost != 0 {
+		t.Fatalf("saved stage result not restored: %+v", parse)
+	}
+	if j.Snapshot.Stages["enhance"].Summary["units_enhanced"] != 19 || j.Snapshot.Stages["verify"].Summary != nil {
+		t.Fatal("saved file overwrote newer or mismatched event state")
+	}
+	after, err := os.ReadFile(filepath.Join(root, "parse.report.json"))
+	if err != nil || string(after) != string(data) {
+		t.Fatal("history projection changed the original report")
+	}
+	if j.Snapshot.DiscoveryKnown || len(j.Snapshot.Findings) != 0 {
+		t.Fatal("code processing totals were converted into findings")
+	}
+}
+
+func TestRestoreStageReportsRejectsSymlinksAndIncompleteCost(t *testing.T) {
+	root := t.TempDir()
+	j := &Job{ID: "history", Status: StatusDone, outDir: root, Snapshot: &jobSnapshot{Stages: map[string]*uiStage{"parse": {Status: "success"}, "analyze": {Status: "success"}, "enhance": {Status: "success"}}}}
+	external := filepath.Join(t.TempDir(), "external.json")
+	if err := os.WriteFile(external, []byte(`{"step":"enhance","status":"success","summary":{"units_enhanced":99}}`), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, filepath.Join(root, "enhance.report.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "parse.report.json"), []byte(`{"step":"parse","status":"success","cost_usd":0,"token_usage":{"cost_incomplete":true},"summary":{"total_units":6}}`), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "analyze.report.json"), []byte(`{"step":`), 0640); err != nil {
+		t.Fatal(err)
+	}
+	j.restoreStageReports()
+	if j.Snapshot.Stages["enhance"].Summary != nil || j.Snapshot.Stages["parse"].Cost != nil || j.Snapshot.Stages["analyze"].Details == "" {
+		t.Fatal("unsafe/missing history or incomplete cost looked valid")
+	}
+}
+
 func TestFinalCoverageReconcilesRecoveredErrors(t *testing.T) {
 	j := &Job{ID: "retry-test", Status: StatusRunning}
 	j.addLog(eventLine(j.ID, 1, "error", func(e *uiEvent) { e.Stage = "analyze" }))

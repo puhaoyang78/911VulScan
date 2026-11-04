@@ -28,14 +28,29 @@ def _bounded(value, limit=8000):
     return value if len(value) <= limit else value[:limit] + "\n[展示已截断，请查看原始结果或报告]"
 
 
-def start(*, verify, dynamic):
+def start(*, verify, dynamic, context=True, enhance=True, reachability=False, report=True):
     global _seq, _verify, _dynamic
     with _lock:
         _seq = 0
         _known.clear()
         _dynamic_states.clear()
         _verify, _dynamic = verify, dynamic
-        emit("scan.started", stage="initialize", message="扫描器已启动")
+        plan = ["parse"]
+        if context:
+            plan.append("app-context")
+        if reachability:
+            plan.append("llm-reachability")
+        if enhance:
+            plan.append("enhance")
+        plan.append("analyze")
+        if verify:
+            plan.append("verify")
+        plan.append("build-output")
+        if dynamic:
+            plan.append("dynamic-test")
+        if report:
+            plan.append("report")
+        emit("scan.started", stage="initialize", stage_order=plan, message="扫描器已启动")
 
 
 def emit(kind, *, stage="", **fields):
@@ -103,11 +118,53 @@ def pipeline_findings(findings):
         route = f'{loc["file"]}:{loc["function"]}'
         projected = dict(finding_id=route, report_id=str(item.get("id") or ""),
                          title=str(item.get("name") or ""), file=loc["file"], function=loc["function"])
+        from core.verdict_taxonomy import DYNAMIC_TESTABLE
+        eligible = item.get("stage2_verdict") in DYNAMIC_TESTABLE
+        projected["dynamic_eligible"] = eligible
         if route not in _dynamic_states:
-            _dynamic_states[route] = "pending" if _dynamic else "skipped"
-            projected.update(dynamic=_dynamic_states[route], dynamic_details="" if _dynamic else "未启用动态测试")
+            _dynamic_states[route] = "pending" if _dynamic and eligible else "skipped"
+            projected.update(dynamic=_dynamic_states[route], dynamic_details=(
+                "复核未完成，继续通过动态测试检查候选问题" if _dynamic and eligible and item.get("stage2_verdict") == "unverified"
+                else "" if _dynamic and eligible else "未启用动态测试" if not _dynamic
+                else "本项不在动态测试范围内"))
         emit("finding.upsert", stage="build-output", finding_id=route, finding=projected,
              message="关联报告编号")
+
+
+def stage_result(report):
+    """Publish selected fields from the actual step report, including fast steps.
+
+    Keep report files authoritative. Do not send configuration, arbitrary
+    nested model output or credentials as a generic UI payload.
+    """
+    if not os.environ.get("VULSCAN_JOB_ID"):
+        return
+    summary = report.summary if isinstance(report.summary, dict) else {}
+    # Send report fields, not a second set of counters or formatted log text.
+    # The web reader uses the same fields for live events and saved reports.
+    keys = ("total_units", "language", "processing_level", "application_type", "context_source",
+            "units_reviewed", "entry_points_promoted", "units_touched", "units_enhanced",
+            "incomplete_count", "error_count", "analyzed", "findings_input", "findings_tested",
+            "confirmed_vulnerabilities", "needs_review", "confirmed", "not_reproduced", "blocked",
+            "inconclusive", "errors", "classifications", "verdicts", "formats_generated", "error_summary")
+    visible = {}
+    for key in keys:
+        value = summary.get(key)
+        if isinstance(value, str):
+            visible[key] = _bounded(value, 500)
+        elif type(value) in (int, float) and math.isfinite(value):
+            visible[key] = value
+        elif isinstance(value, dict):
+            visible[key] = {str(k): v for k, v in list(value.items())[:30] if type(v) is int}
+        elif isinstance(value, list):
+            visible[key] = [_bounded(v, 100) for v in value[:8] if isinstance(v, str)]
+    errors = "\n".join(str(error) for error in report.errors)
+    detail = errors or str(summary.get("reason") or "")
+    cost = None if report.token_usage.get("accounting_error") or report.token_usage.get("cost_incomplete") else report.cost_usd
+    emit("stage.changed", stage=report.step, status=report.status,
+         duration_seconds=report.duration_seconds, cost_usd=cost,
+         summary=visible, outputs=[os.path.basename(v) for v in report.outputs.values() if isinstance(v, str)][:12],
+         message=_bounded(summary.get("purpose"), 2000) if summary.get("purpose") else "阶段完成" if report.status == "success" else "阶段结束", details=detail)
 
 
 def dynamic(finding, result=None, *, status=None, attempt=None, phase="", execution=None):

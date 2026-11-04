@@ -375,7 +375,8 @@ def scan_repository(
     os.makedirs(output_dir, exist_ok=True)
 
     from core import ui_events
-    ui_events.start(verify=verify, dynamic=dynamic_test)
+    ui_events.start(verify=verify, dynamic=dynamic_test, context=generate_context,
+                    enhance=enhance, reachability=llm_reachability, report=generate_report)
 
     # Reset tracking
     tracking.reset_tracking()
@@ -596,6 +597,7 @@ def scan_repository(
                 ctx.summary = {
                     "application_type": threat_model_ctx.application_type,
                     "context_source": "threat_model",
+                    "purpose": getattr(threat_model_ctx, "purpose", ""),
                 }
                 ctx.outputs = {"app_context_path": app_context_path}
                 print(
@@ -639,6 +641,7 @@ def scan_repository(
                     ctx.summary = {
                         "application_type": context.application_type,
                         "context_source": result.context_source,
+                        "purpose": getattr(context, "purpose", ""),
                     }
                     ctx.outputs = {"app_context_path": app_context_path}
                     print(f"  App type: {context.application_type}", file=sys.stderr)

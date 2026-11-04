@@ -1,6 +1,7 @@
 # Modified 2026-10-23 for the VulScan-only product namespace.
 """Offline DeepSeek protocol, config migration, billing, and language tests."""
 from concurrent.futures import ThreadPoolExecutor
+import json
 from types import SimpleNamespace as NS
 from unittest.mock import MagicMock, patch
 
@@ -176,11 +177,98 @@ def test_402_is_nonretryable_quota_and_secret_redacted():
     assert "123456789012345678901234" not in str(caught.value)
 
 
-@pytest.mark.parametrize("args", ["not-json", "[]", "null"])
-def test_invalid_tool_arguments_are_not_executed(args):
+@pytest.mark.parametrize("args", ["not-json", "[]", "null", "", None])
+def test_invalid_tool_arguments_are_not_executed(args, capsys):
     a, _ = adapter(response(None, "reason", [tool(args=args)], "tool_calls"))
     with pytest.raises(LLMResponseError, match="工具参数不是有效 JSON"):
         complete(a)
+    assert "passing empty input" not in capsys.readouterr().err
+
+
+def tool_conversation(phase, a):
+    from utilities.finding_verifier import FindingVerifier
+    from utilities.agentic_enhancer.agent import ContextAgent
+    from utilities.llm_client import TokenTracker
+    tracker = TokenTracker()
+    binding = PhaseBinding(phase=phase, provider_name="deepseek", model="deepseek-flash", adapter=a)
+    index = MagicMock()
+    if phase == "verify":
+        agent = FindingVerifier(index, binding, tracker=tracker)
+        run = lambda: agent.verify_result("def decode(s): pass", "vulnerable", "输入未校验", "检查参数")
+    else:
+        agent = ContextAgent(index, binding, tracker=tracker)
+        run = lambda: agent.analyze_unit("ini.js:decode", "function", "function decode(s) {}", [], [])
+    return run, tracker, agent
+
+
+@pytest.mark.parametrize("phase", ["verify", "enhance"])
+def test_bad_tool_json_gets_feedback_then_recovers_with_exact_usage(phase):
+    payload = {"agree": True, "correct_finding": "vulnerable", "explanation": "输入到达危险操作。"} if phase == "verify" else {
+        "include_functions": [], "usage_context": "处理输入", "security_classification": "neutral",
+        "classification_reasoning": "未见危险操作", "confidence": 0.8}
+    bad = tool(args='{"explanation": "未转义的\n换行"}')
+    bad.function.name = "finish"
+    good = tool(id="fixed", args=json.dumps(payload, ensure_ascii=False))
+    good.function.name = "finish"
+    a, client = adapter(response(None, "private rejected reasoning", [tool(), bad], "tool_calls", prompt_cache_hit_tokens=5),
+                        response(None, "private corrected reasoning", [good], "tool_calls", prompt_cache_hit_tokens=7))
+    run, tracker, agent = tool_conversation(phase, a)
+    agent.tool_executor.execute = MagicMock(wraps=agent.tool_executor.execute)
+    result = run()
+    assert client.chat.completions.create.call_count == 2
+    retry = client.chat.completions.create.call_args_list[1].kwargs
+    assert "未通过 JSON 解析" in retry["messages"][-1]["content"]
+    assert "该轮所有工具调用均未执行" in retry["messages"][-1]["content"]
+    assert "private rejected reasoning" not in str(retry)
+    assert all(c.args[0] != "read_file" for c in agent.tool_executor.execute.call_args_list)
+    assert "response_format" not in retry  # Text JSON mode does not constrain tool arguments.
+    totals = tracker.get_totals()
+    assert totals["total_input_tokens"] == 40
+    assert totals["total_output_tokens"] == 20
+    assert totals["total_cache_read_tokens"] == 12
+    assert totals["total_turns"] == 2
+    assert result.total_tokens == 60
+
+
+@pytest.mark.parametrize("phase", ["verify", "enhance"])
+def test_bad_tool_json_has_a_bounded_feedback_budget_and_keeps_rejected_usage(phase):
+    a, client = adapter(*[response(None, "private", [tool(args="not JSON")], "tool_calls",
+                                  prompt_cache_hit_tokens=5) for _ in range(3)])
+    run, tracker, _ = tool_conversation(phase, a)
+    with pytest.raises(LLMResponseError, match="工具参数不是有效 JSON"):
+        run()
+    assert client.chat.completions.create.call_count == 3
+    totals = tracker.get_totals()
+    assert totals["total_input_tokens"] == 60
+    assert totals["total_output_tokens"] == 30
+    assert totals["total_cache_read_tokens"] == 15
+    assert totals["total_turns"] == 3
+
+
+def test_truncated_tool_json_does_not_repeat_with_the_same_output_budget():
+    a, client = adapter(response(None, "private", [tool(args='{"path":')], "length"))
+    run, tracker, _ = tool_conversation("verify", a)
+    with pytest.raises(LLMResponseError) as caught:
+        run()
+    assert caught.value.stop_reason == "max_tokens"
+    assert client.chat.completions.create.call_count == 1
+    assert tracker.get_totals()["total_output_tokens"] == 10
+
+
+def test_feedback_event_retains_the_finding_identity(monkeypatch, capsys):
+    from core import ui_events
+    monkeypatch.setenv("VULSCAN_JOB_ID", "json-retry-fixture")
+    ui_events.start(verify=True, dynamic=True)
+    good = tool(args='{"agree":true,"correct_finding":"vulnerable","explanation":"输入未校验。"}')
+    good.function.name = "finish"
+    a, _ = adapter(response(None, "private", [tool(args="not JSON")], "tool_calls"),
+                   response(None, "private", [good], "tool_calls"))
+    _, _, verifier = tool_conversation("verify", a)
+    verifier._verify_one(dict(route_key="ini.js:decode", finding="vulnerable"), {"ini.js:decode": "function decode(s) {}"})
+    events = [json.loads(line[len(ui_events.PREFIX):]) for line in capsys.readouterr().err.splitlines() if line.startswith(ui_events.PREFIX)]
+    retry = next(e for e in events if e.get("status") == "retrying")
+    assert retry["job_id"] == "json-retry-fixture" and retry["finding_id"] == "ini.js:decode" and retry["attempt"] == 1
+    assert getattr(verifier._finding_context, "route", "") == ""
 
 
 def test_reasoning_only_truncation_remains_failure_with_billed_usage():

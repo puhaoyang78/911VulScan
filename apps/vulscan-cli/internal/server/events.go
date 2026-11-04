@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -16,58 +18,69 @@ import (
 const uiEventPrefix = "@vulscan-event "
 
 type uiFinding struct {
-	ID             string `json:"finding_id"`
-	ReportID       string `json:"report_id,omitempty"`
-	Title          string `json:"title,omitempty"`
-	Severity       string `json:"severity,omitempty"`
-	File           string `json:"file,omitempty"`
-	Function       string `json:"function,omitempty"`
-	CWE            string `json:"cwe,omitempty"`
-	CWEName        string `json:"cwe_name,omitempty"`
-	Verdict        string `json:"verdict,omitempty"`
-	ModelReview    string `json:"model_review,omitempty"`
-	ReviewDetails  string `json:"review_details,omitempty"`
-	Description    string `json:"description,omitempty"`
-	Dynamic        string `json:"dynamic,omitempty"`
-	DynamicDetails string `json:"dynamic_details,omitempty"`
-	FailurePhase   string `json:"failure_phase,omitempty"`
-	Attempt        int    `json:"attempt,omitempty"`
-	FirstSeq       uint64 `json:"first_seq"`
+	ID              string `json:"finding_id"`
+	ReportID        string `json:"report_id,omitempty"`
+	Title           string `json:"title,omitempty"`
+	Severity        string `json:"severity,omitempty"`
+	File            string `json:"file,omitempty"`
+	Function        string `json:"function,omitempty"`
+	CWE             string `json:"cwe,omitempty"`
+	CWEName         string `json:"cwe_name,omitempty"`
+	Verdict         string `json:"verdict,omitempty"`
+	ModelReview     string `json:"model_review,omitempty"`
+	ReviewDetails   string `json:"review_details,omitempty"`
+	Description     string `json:"description,omitempty"`
+	Dynamic         string `json:"dynamic,omitempty"`
+	DynamicDetails  string `json:"dynamic_details,omitempty"`
+	DynamicEligible *bool  `json:"dynamic_eligible,omitempty"`
+	FailurePhase    string `json:"failure_phase,omitempty"`
+	Attempt         int    `json:"attempt,omitempty"`
+	FirstSeq        uint64 `json:"first_seq"`
 }
 
 type uiEvent struct {
-	Source    string     `json:"source,omitempty"`
-	SourceSeq uint64     `json:"source_seq,omitempty"`
-	Version   int        `json:"version"`
-	JobID     string     `json:"job_id"`
-	Seq       uint64     `json:"seq"`
-	Type      string     `json:"type"`
-	Time      time.Time  `json:"time"`
-	Stage     string     `json:"stage,omitempty"`
-	Phase     string     `json:"phase,omitempty"`
-	Status    string     `json:"status,omitempty"`
-	FindingID string     `json:"finding_id,omitempty"`
-	Attempt   int        `json:"attempt,omitempty"`
-	Finding   *uiFinding `json:"finding,omitempty"`
-	Processed *int       `json:"processed,omitempty"`
-	Total     *int       `json:"total,omitempty"`
-	Unit      string     `json:"unit,omitempty"`
-	Elapsed   *float64   `json:"elapsed_seconds,omitempty"`
-	ETA       *float64   `json:"eta_seconds,omitempty"`
-	Duration  *float64   `json:"duration_seconds,omitempty"`
-	Message   string     `json:"message,omitempty"`
-	Details   string     `json:"details,omitempty"`
+	Source     string         `json:"source,omitempty"`
+	SourceSeq  uint64         `json:"source_seq,omitempty"`
+	Version    int            `json:"version"`
+	JobID      string         `json:"job_id"`
+	Seq        uint64         `json:"seq"`
+	Type       string         `json:"type"`
+	Time       time.Time      `json:"time"`
+	Stage      string         `json:"stage,omitempty"`
+	Phase      string         `json:"phase,omitempty"`
+	Status     string         `json:"status,omitempty"`
+	FindingID  string         `json:"finding_id,omitempty"`
+	Attempt    int            `json:"attempt,omitempty"`
+	Finding    *uiFinding     `json:"finding,omitempty"`
+	Processed  *int           `json:"processed,omitempty"`
+	Total      *int           `json:"total,omitempty"`
+	Unit       string         `json:"unit,omitempty"`
+	Elapsed    *float64       `json:"elapsed_seconds,omitempty"`
+	ETA        *float64       `json:"eta_seconds,omitempty"`
+	Duration   *float64       `json:"duration_seconds,omitempty"`
+	Message    string         `json:"message,omitempty"`
+	Details    string         `json:"details,omitempty"`
+	StageOrder []string       `json:"stage_order,omitempty"`
+	Summary    map[string]any `json:"summary,omitempty"`
+	Outputs    []string       `json:"outputs,omitempty"`
+	Cost       *float64       `json:"cost_usd,omitempty"`
 }
 
 type uiStage struct {
-	Status    string   `json:"status"`
-	Processed *int     `json:"processed"`
-	Total     *int     `json:"total"`
-	Unit      string   `json:"unit"`
-	Elapsed   *float64 `json:"elapsed_seconds"`
-	ETA       *float64 `json:"eta_seconds"`
-	Duration  *float64 `json:"duration_seconds"`
-	Activity  string   `json:"activity"`
+	Status     string         `json:"status"`
+	Processed  *int           `json:"processed"`
+	Total      *int           `json:"total"`
+	Unit       string         `json:"unit"`
+	Elapsed    *float64       `json:"elapsed_seconds"`
+	ETA        *float64       `json:"eta_seconds"`
+	Duration   *float64       `json:"duration_seconds"`
+	Activity   string         `json:"activity"`
+	StartedAt  *time.Time     `json:"started_at,omitempty"`
+	FinishedAt *time.Time     `json:"finished_at,omitempty"`
+	Summary    map[string]any `json:"summary,omitempty"`
+	Outputs    []string       `json:"outputs,omitempty"`
+	Details    string         `json:"details,omitempty"`
+	Cost       *float64       `json:"cost_usd,omitempty"`
 }
 
 type jobSnapshot struct {
@@ -91,6 +104,7 @@ type jobSnapshot struct {
 	Coverage         string                `json:"coverage"`
 	Stage            string                `json:"stage"`
 	Stages           map[string]*uiStage   `json:"stages"`
+	StageOrder       []string              `json:"stage_order,omitempty"`
 	Findings         map[string]*uiFinding `json:"findings"`
 	Counts           map[string]*int       `json:"counts"`
 	Activity         []uiEvent             `json:"activity"`
@@ -104,6 +118,73 @@ func newJobSnapshot(j *Job, legacy bool) *jobSnapshot {
 		StartedAt: j.StartedAt, UpdatedAt: j.StartedAt, Legacy: legacy, Coverage: "unknown",
 		Stages: map[string]*uiStage{}, Findings: map[string]*uiFinding{},
 		Counts: map[string]*int{}, Pending: map[uint64]uiEvent{}, Activity: []uiEvent{}}
+}
+
+// Older snapshots have stage status/timing but no report summary. Read only
+// matching, finished stage reports; never infer outcomes from human log text or
+// overwrite a newer event. The same summary fields drive live and history views.
+func (j *Job) restoreStageReports() {
+	if j.Snapshot == nil || j.outDir == "" || scanActive(j.Status) {
+		return
+	}
+	changed := false
+	for _, step := range []string{"parse", "app-context", "llm-reachability", "enhance", "analyze", "verify", "build-output", "dynamic-test", "report"} {
+		stage := j.Snapshot.Stages[step]
+		if stage == nil || stage.Summary != nil {
+			continue
+		}
+		f, _, err := openRegularInRoot(j.outDir, filepath.Join(j.outDir, step+".report.json"))
+		if err != nil {
+			continue
+		}
+		var saved struct {
+			Step       string            `json:"step"`
+			Status     string            `json:"status"`
+			Duration   *float64          `json:"duration_seconds"`
+			Cost       *float64          `json:"cost_usd"`
+			Summary    map[string]any    `json:"summary"`
+			Outputs    map[string]string `json:"outputs"`
+			Errors     []string          `json:"errors"`
+			TokenUsage map[string]any    `json:"token_usage"`
+		}
+		err = json.NewDecoder(io.LimitReader(f, 256<<10)).Decode(&saved)
+		f.Close()
+		if err != nil {
+			if stage.Details == "" {
+				stage.Details = "阶段报告无法读取，可查看原始日志。"
+				changed = true
+			}
+			continue
+		}
+		if saved.Step != step || saved.Status != stage.Status {
+			continue
+		}
+		stage.Summary = saved.Summary
+		if stage.Duration == nil && saved.Duration != nil && *saved.Duration >= 0 {
+			stage.Duration = saved.Duration
+		}
+		if stage.Cost == nil && saved.TokenUsage["accounting_error"] != true && saved.TokenUsage["cost_incomplete"] != true {
+			stage.Cost = saved.Cost
+		}
+		if len(stage.Outputs) == 0 {
+			for _, path := range saved.Outputs {
+				if path != "" {
+					stage.Outputs = append(stage.Outputs, filepath.Base(path))
+				}
+			}
+			sort.Strings(stage.Outputs)
+		}
+		if stage.Details == "" {
+			stage.Details = strings.Join(saved.Errors, "\n")
+			if reason, ok := saved.Summary["reason"].(string); ok && stage.Details == "" {
+				stage.Details = reason
+			}
+		}
+		changed = true
+	}
+	if changed {
+		j.Snapshot.Revision++
+	}
 }
 
 func (j *Job) snapshotLocked() *jobSnapshot {
@@ -155,7 +236,7 @@ func (j *Job) snapshotLocked() *jobSnapshot {
 
 func (s *jobSnapshot) projectCounts() {
 	s.Counts = map[string]*int{}
-	for _, k := range []string{"candidates", "retained", "excluded", "pending", "reproduced", "not_reproduced", "environment_error", "skipped"} {
+	for _, k := range []string{"candidates", "retained", "excluded", "pending", "review_incomplete", "review_error", "dynamic_eligible", "reproduced", "not_reproduced", "environment_error", "skipped"} {
 		s.Counts[k] = nil
 	}
 	if !s.DiscoveryKnown {
@@ -165,11 +246,18 @@ func (s *jobSnapshot) projectCounts() {
 	s.Counts["candidates"] = &n
 	reviewKnown, reviewResultKnown, dynamicKnown, dynamicResultKnown := false, false, false, false
 	reviewValues, dynamicValues := map[string]int{}, map[string]int{}
+	eligible, eligibilityKnown := 0, false
 	for _, f := range s.Findings {
+		if f.DynamicEligible != nil {
+			eligibilityKnown = true
+			if *f.DynamicEligible {
+				eligible++
+			}
+		}
 		if f.ModelReview == "pending" || f.ModelReview == "not_requested" || f.ModelReview == "retained" || f.ModelReview == "excluded" || f.ModelReview == "error" || f.ModelReview == "inconclusive" || f.ModelReview == "interrupted" {
 			reviewKnown = true
 			reviewValues[f.ModelReview]++
-			if f.ModelReview == "retained" || f.ModelReview == "excluded" || f.ModelReview == "error" || f.ModelReview == "inconclusive" {
+			if f.ModelReview == "retained" || f.ModelReview == "excluded" || f.ModelReview == "error" || f.ModelReview == "inconclusive" || f.ModelReview == "interrupted" {
 				reviewResultKnown = true
 			}
 		}
@@ -180,6 +268,14 @@ func (s *jobSnapshot) projectCounts() {
 				dynamicResultKnown = true
 			}
 		}
+	}
+	if eligibilityKnown {
+		s.Counts["dynamic_eligible"] = &eligible
+	}
+	if reviewResultKnown {
+		incomplete := reviewValues["error"] + reviewValues["inconclusive"] + reviewValues["interrupted"]
+		errors := reviewValues["error"]
+		s.Counts["review_incomplete"], s.Counts["review_error"] = &incomplete, &errors
 	}
 	for _, k := range []string{"retained", "excluded", "pending"} {
 		if reviewResultKnown || (k == "pending" && reviewKnown) {
@@ -238,6 +334,10 @@ func (s *jobSnapshot) reduce(e uiEvent) {
 	s.Revision++
 	s.Legacy = false
 	switch e.Type {
+	case "scan.started":
+		if len(e.StageOrder) <= 32 {
+			s.StageOrder = e.StageOrder
+		}
 	case "discovery.started":
 		s.DiscoveryKnown = true
 	case "stage.changed", "progress.updated":
@@ -247,10 +347,32 @@ func (s *jobSnapshot) reduce(e uiEvent) {
 			s.Stages[e.Stage] = st
 		}
 		if e.Type == "stage.changed" {
+			if e.Status == "running" {
+				st.StartedAt, st.FinishedAt = &e.Time, nil
+				st.Duration, st.Elapsed, st.ETA = nil, nil, nil
+				st.Processed, st.Total = nil, nil
+				st.Summary, st.Outputs, st.Details, st.Cost = nil, nil, "", nil
+			} else {
+				st.FinishedAt = &e.Time
+			}
 			if !(st.Status == "error" && e.Status == "skipped") {
 				st.Status = e.Status
 			}
-			st.Duration = e.Duration
+			if e.Duration != nil {
+				st.Duration = e.Duration
+			}
+			if e.Summary != nil {
+				st.Summary = e.Summary
+			}
+			if e.Outputs != nil {
+				st.Outputs = e.Outputs
+			}
+			if e.Details != "" {
+				st.Details = e.Details
+			}
+			if e.Cost != nil {
+				st.Cost = e.Cost
+			}
 			if e.Status != "running" && e.Status != "queued" {
 				st.ETA = nil
 			}
@@ -349,8 +471,19 @@ func (j *Job) runnerEventLocked(stage, status, message, details string, terminal
 		if s.Stages[stage] == nil {
 			s.Stages[stage] = &uiStage{}
 		}
-		s.Stages[stage].Status = status
-		s.Stages[stage].Activity = message
+		st := s.Stages[stage]
+		if status == "running" || status == "queued" {
+			if st.StartedAt == nil {
+				st.StartedAt = &now
+			}
+		} else {
+			st.FinishedAt = &now
+			if st.StartedAt != nil {
+				elapsed := now.Sub(*st.StartedAt).Seconds()
+				st.Duration = &elapsed
+			}
+		}
+		st.Status, st.Activity, st.Details = status, message, details
 		s.Stage = stage
 	}
 	s.appendActivity(uiEvent{Version: 1, JobID: j.ID, Type: kind, Time: now, Stage: stage, Source: "runner", Status: status, Message: message, Details: details})
@@ -364,6 +497,9 @@ func (j *Job) runnerEvent(stage, status, message, details string) {
 }
 
 func mergeFinding(dst, src *uiFinding) {
+	if src.DynamicEligible != nil {
+		dst.DynamicEligible = src.DynamicEligible
+	}
 	if src.Dynamic != "" && src.Dynamic != "error" && src.Dynamic != "environment_error" {
 		dst.FailurePhase = ""
 	}

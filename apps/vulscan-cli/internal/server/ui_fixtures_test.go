@@ -50,7 +50,30 @@ func seedUIFixtures(t *testing.T, s *Server) {
 		if item.rich {
 			var seq uint64
 			emit := func(kind string, update func(*uiEvent)) { seq++; j.addLog(eventLine(j.ID, seq, kind, update)) }
-			emit("scan.started", func(e *uiEvent) { e.Message = "扫描器启动" })
+			emit("scan.started", func(e *uiEvent) {
+				e.Message = "扫描器启动"
+				e.StageOrder = []string{"parse", "app-context", "enhance", "analyze", "verify", "build-output", "dynamic-test", "report"}
+			})
+			for _, step := range []string{"parse", "app-context", "enhance"} {
+				emit("stage.changed", func(e *uiEvent) { e.Stage = step; e.Status = "running"; e.Message = "阶段开始" })
+				emit("stage.changed", func(e *uiEvent) {
+					e.Stage, e.Status, e.Message = step, "success", "阶段完成"
+					duration := 0.08
+					e.Duration = &duration
+					switch step {
+					case "parse":
+						count := 189
+						e.Processed, e.Total, e.Unit = &count, &count, "函数"
+						e.Summary = map[string]any{"language": "c", "processing_level": "reachable"}
+						e.Outputs = []string{"dataset.json"}
+					case "app-context":
+						e.Summary = map[string]any{"application_type": "cli_tool", "context_source": "generated"}
+						e.Message = "读取用户提供的输入，并交给请求处理函数。"
+					case "enhance":
+						e.Summary = map[string]any{"units_enhanced": 189, "error_count": 0}
+					}
+				})
+			}
 			emit("stage.changed", func(e *uiEvent) { e.Stage = "analyze"; e.Status = "running"; e.Message = "漏洞分析开始" })
 			emit("discovery.started", nil)
 			processed, total := 94, 987
@@ -73,6 +96,8 @@ func seedUIFixtures(t *testing.T, s *Server) {
 					e.FindingID = id
 					e.Message = "新增候选问题"
 					e.Finding = &uiFinding{ID: id, ReportID: fmt.Sprintf("VULN-%03d", i+1), Title: []string{"用户输入长度未校验", "复核排除：调用者已限制输入", "动态未复现：条件未满足", "等待模型复核", "依赖构建失败，尚未判定", "验证条件不足，已跳过"}[i], File: longFile, Function: fmt.Sprintf("copy_%d", i+1), CWE: "120", CWEName: "Buffer Copy", Severity: []string{"high", "medium", "high", "low", "medium", "low"}[i], ModelReview: review[i], Description: "这是确定性 UI fixture，未扫描真实项目。\n<script>window.__fixtureInjected=true</script>", ReviewDetails: "模型复核只表示分析判定。"}
+					eligible := i != 1
+					e.Finding.DynamicEligible = &eligible
 					if i == 3 {
 						e.Finding.Title = payload.Title
 						e.Finding.Description = payload.Description
@@ -155,7 +180,7 @@ int copy(const char *input) {
 			if err := os.MkdirAll(filepath.Dir(disclosure), 0750); err != nil {
 				t.Fatal(err)
 			}
-			disc := "> **所属发现：** VULN-001  \n> **目标版本：** " + j.Snapshot.Commit + "  \n> **验证状态：** 模型复核保留  \n> **动态测试：** fixture 已复现\n\n" + strings.Replace(md, "# 安全分析摘要", "# 漏洞报告：用户输入长度未校验", 1)
+			disc := "> **所属发现：** VULN-001  \n> **目标版本：** " + j.Snapshot.Commit + "  \n> **验证状态：** 模型复核保留  \n> **动态测试：** fixture 已复现\n\n" + strings.Replace(md, "# 安全分析摘要", "# 漏洞报告：用户输入长度未校验", 1) + "\n### PoC 与测试记录\n\n#### 构建和运行\n\n```sh\nfixture-build\nfixture-run\n```\n\n#### 实际结果\n\nfixture 原始测试输出。\n"
 			if err := os.WriteFile(disclosure, []byte(disc), 0640); err != nil {
 				t.Fatal(err)
 			}
@@ -175,6 +200,27 @@ int copy(const char *input) {
 		j.persistSnapshotLocked()
 		s.mgr.add(j)
 	}
+	// A failed review can legitimately continue to reproduction. The model and
+	// dynamic axes must remain distinct, and the UI must explain this transition.
+	dir := filepath.Join(s.outDir, "f0000010")
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	j := &Job{ID: "f0000010", Repo: "/fixtures/ini-parser", Status: StatusRunning, StartedAt: time.Now().Add(-time.Minute), outDir: dir}
+	j.Snapshot = newJobSnapshot(j, false)
+	j.addLog(eventLine(j.ID, 1, "scan.started", func(e *uiEvent) { e.StageOrder = []string{"parse", "analyze", "verify", "dynamic-test", "report"} }))
+	j.addLog(eventLine(j.ID, 2, "finding.upsert", func(e *uiEvent) {
+		yes := true
+		e.Stage, e.FindingID = "verify", "ini.js:decode"
+		e.Finding = &uiFinding{ID: e.FindingID, ReportID: "VULN-001", Title: "INI 参数解析缺少输入校验", File: "ini.js", Function: "decode", ModelReview: "error", ReviewDetails: "工具参数不是有效 JSON；反馈重试后仍未完成。", Dynamic: "running", DynamicEligible: &yes}
+	}))
+	j.addLog(eventLine(j.ID, 3, "stage.changed", func(e *uiEvent) {
+		e.Stage = "dynamic-test"
+		e.Status = "running"
+		e.Message = "正在检查复核未完成的候选"
+	}))
+	j.persistSnapshotLocked()
+	s.mgr.add(j)
 	// Exercise the actual restart path, not an independently fabricated object.
 	recovered := &Server{outDir: s.outDir, mgr: newManager(s.outDir)}
 	recovered.recoverJobs()
@@ -202,6 +248,14 @@ func seedReviewJob(t *testing.T, s *Server) {
 		}
 		if err := os.WriteFile(filepath.Join(dest, name), b, 0640); err != nil {
 			t.Fatal(err)
+		}
+	}
+	for _, step := range []string{"parse", "app-context", "llm-reachability", "enhance", "analyze", "verify", "build-output", "dynamic-test", "report"} {
+		name := step + ".report.json"
+		if raw, err := os.ReadFile(filepath.Join(source, name)); err == nil {
+			if err := os.WriteFile(filepath.Join(dest, name), raw, 0640); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	var data report.ReportData
@@ -244,6 +298,27 @@ func seedReviewJob(t *testing.T, s *Server) {
 	}
 	if err := json.Unmarshal(raw, &j.Snapshot); err != nil {
 		t.Fatal(err)
+	}
+	j.restoreStageReports()
+	if raw, err := os.ReadFile(filepath.Join(source, "report", "SUMMARY_REPORT.md")); err == nil {
+		j.SummaryPath = filepath.Join(dest, "SUMMARY_REPORT.md")
+		if err := os.WriteFile(j.SummaryPath, raw, 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range findDisclosures(source) {
+		target := filepath.Join(dest, "report", "disclosures", filepath.Base(path))
+		if err := os.MkdirAll(filepath.Dir(target), 0750); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, raw, 0640); err != nil {
+			t.Fatal(err)
+		}
+		j.DisclosurePaths = append(j.DisclosurePaths, target)
 	}
 	raw, err = os.ReadFile(filepath.Join(dest, "logs.txt"))
 	if err != nil {

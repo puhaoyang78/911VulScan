@@ -458,9 +458,9 @@ let dompurifyProbeBlocked = 0;
     const result = await page.evaluate(() => {
       const line='11:22:33 [Enhance] 94/987 source.c::tc_error neutral';
       VulscanScan.applySnapshot({version:1,job_id:'jx',revision:999,status:'done',legacy:false,coverage:'unknown',started_at:'2026-10-25T08:00:00Z',finished_at:'2026-10-25T08:10:00Z',updated_at:'2026-10-25T08:10:00Z',stage:'enhance',stages:{enhance:{status:'success',processed:95,total:987,unit:'代码单元',elapsed_seconds:192,eta_seconds:1800,activity:'<img src=x onerror=alert(1)>'}},findings:{},counts:{},activity:[]});
-      return {severity:VulscanScan.classifyLine(line),warning:VulscanScan.classifyLine('WARNING: failed'),count:document.getElementById('overview-count').textContent,injected:document.querySelector('#overview-task img')!==null};
+      return {severity:VulscanScan.classifyLine(line),warning:VulscanScan.classifyLine('WARNING: failed'),error:VulscanScan.classifyLine('[Verify] ERROR ini.js:decode: invalid tool JSON'),other:VulscanScan.classifyLine('error handling is implemented here'),count:document.getElementById('overview-count').textContent,injected:document.querySelector('#overview-task img')!==null};
     });
-    if(result.severity!=='progress'||result.warning!=='warning'||!result.count.startsWith('95 / 987')||result.injected)throw new Error('structured progress/severity/XSS regression');
+    if(result.severity!=='progress'||result.warning!=='warning'||result.error!=='error'||result.other!=='other'||!result.count.startsWith('95 / 987')||result.injected)throw new Error('structured progress/severity/XSS regression');
   });
   await drain(page, 'scan');
   await page.close();
@@ -600,6 +600,10 @@ let summaryHTML = '';
   await goto('f0000001');if(await page.locator('#count-candidates').innerText()!=='—')throw Error('unstarted discovery was fabricated as zero');
   await goto('f0000009');if(await page.locator('#count-candidates').innerText()!=='0'||await page.locator('#count-retained').innerText()!=='—'||await page.locator('#count-reproduced').innerText()!=='—')throw Error('known empty discovery and unproduced verification were conflated');
   await page.locator('#tab-findings').click();if(!(await page.locator('#findings-empty').innerText()).includes('尚未发现候选'))throw Error('known empty finding list is unclear');
+  await goto('f0000010');
+  for(const [key,n]of[['retained','0'],['review_incomplete','1'],['dynamic_eligible','1'],['running','1']])if(await page.locator('#count-'+key).innerText()!==n)throw Error('incomplete review / dynamic transition counter '+key);
+  if(!(await page.locator('#stage-output').innerText()).includes('复核未完成的候选'))throw Error('dynamic testing of an incomplete review has no explanation');
+  await page.locator('[data-filter="review:incomplete"]').click();if(await page.locator('#finding-rows tr:visible').count()!==1||!(await page.locator('#finding-rows tr:visible').innerText()).includes('复核错误'))throw Error('incomplete review counter does not filter its real rows');
   await goto('f0000006');await page.locator('#tab-activity').click();await page.selectOption('#activity-stage','report');if(!(await page.locator('#activity-groups').innerText()).includes('报告步骤部分失败')||await page.locator('.activity-row:visible details[open]').count()<1)throw Error('failure phase/output not visible in activity');
   await goto('f0000005');await page.locator('#tab-findings').click();await page.selectOption('#review-filter','interrupted');
   if(await page.locator('#finding-rows tr:visible').count()!==1||!(await page.locator('#finding-rows').innerText()).includes('复核未完成'))throw Error('terminal unfinished review cannot be filtered');
@@ -608,6 +612,17 @@ let summaryHTML = '';
   await goto('f0000002');
   for(const [key,n]of[['candidates',6],['retained',3],['excluded',1],['reproduced',1]])if(await page.locator('#count-'+key).innerText()!==String(n))throw Error('incorrect projection '+key);
   if(!(await page.locator('#overview-count').innerText()).startsWith('94 / 987'))throw Error('processing denominator became finding count');
+  const parseStep=page.locator('.stage-select[data-stage="parse"]');
+  await parseStep.click();
+  if(await page.locator('#overview-stage').innerText()!=='代码解析'||await page.locator('#overview-elapsed').innerText()!=='0.08 秒'||await page.locator('#overview-count').innerText()!=='189 / 189 函数'||!(await page.locator('#stage-files').innerText()).includes('dataset.json'))throw Error('fast parse stage lost timing, progress or outputs');
+  await parseStep.focus();
+  await page.evaluate(async()=>{const s=await(await fetch('/scan/f0000002/snapshot')).json();s.revision++;s.stages.analyze.activity='正在分析下一个函数';VulscanScan.applySnapshot(s);});
+  if(await page.locator('#overview-stage').innerText()!=='代码解析'||!await parseStep.evaluate(el=>el===document.activeElement))throw Error('live progress displaced the stage being read');
+  for(const width of [1440,768,360]){await page.setViewportSize({width,height:1000});if(screenshotDir)await page.screenshot({path:`${screenshotDir}/scan-fast-stage-${width}.png`,fullPage:true});if(await page.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth+1))throw Error('fast-stage layout overflow '+width);}
+  await page.setViewportSize({width:1440,height:1000});
+  await page.locator('.stage-select[data-stage="app-context"]').click();if(!(await page.locator('#stage-highlights').innerText()).includes('命令行工具')||!(await page.locator('#overview-task').innerText()).includes('读取用户提供的输入'))throw Error('early context result is invisible');
+  await page.locator('#follow-stage').click();if(await page.locator('#overview-stage').innerText()!=='漏洞分析'||await page.locator('#follow-stage').getAttribute('aria-pressed')!=='true')throw Error('follow-current-stage control did not resume');
+  await page.locator('.stage-select[data-stage="verify"]').click();if(!await page.locator('#show-activity').isDisabled())throw Error('unstarted stage links to unrelated activity');await page.locator('#follow-stage').click();
   await page.locator('#tab-findings').click();
   if(await page.locator('#finding-rows tr').count()!==6)throw Error('finding details disagree with aggregate');
   await page.selectOption('#dynamic-filter','environment_error');if(await page.locator('#finding-rows tr:visible').count()!==1)throw Error('environment-error filter');
@@ -655,7 +670,7 @@ let summaryHTML = '';
   await page.locator('#clear-activity').click();
   if((await page.locator('#activity-note').innerText()).includes('没有匹配'))throw Error('activity filter feedback was not cleared');
   await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.getElementById('count-reproduced')?.textContent==='1');
-  await page.locator('#tab-terminal').click();await page.waitForFunction(()=>document.getElementById('log-count').textContent.includes(' / 1520 行'));
+  await page.locator('#tab-terminal').click();await page.waitForFunction(()=>document.getElementById('log-count').textContent.includes(' / 1526 行'));
   const count=await page.locator('#log-count').innerText();if(!/1[,.]?5\d\d/.test(count.replaceAll(',','')))throw Error('long-log fixture was not fully received: '+count);
   if(await page.locator('.log-line').count()>250)throw Error('raw log DOM is unbounded');
   await page.fill('#log-query','中文注释');await page.waitForFunction(()=>document.getElementById('log-count').textContent.startsWith('匹配 1507 /'));
@@ -782,7 +797,13 @@ for(const [name,path]of[['summary-rich','/summary/f0000007'],['disclosure-rich',
    await page.waitForFunction(()=>location.hash.startsWith('#section-')&&!document.getElementById('content').hidden&&document.getElementById('source-view').hidden);
    if(name==='disclosure-rich'){
     if(await page.locator('.document-heading h1').innerText()!=='用户输入长度未校验'||await page.locator('.header-subtitle').innerText()!=='漏洞报告')throw Error('vulnerability report title or name is inconsistent');
-    if(await page.locator('#content > blockquote').first().locator('br').count()!==3)throw Error('vulnerability report metadata collapsed into one paragraph');
+    if(await page.locator('#content .document-record blockquote').first().locator('br').count()!==3)throw Error('vulnerability report metadata collapsed into one paragraph');
+    if(await page.locator('#document-finding').innerText()!=='VULN-001'||await page.locator('#document-review').innerText()!=='复核保留'||await page.locator('#document-dynamic').innerText()!=='已复现'||(await page.locator('#document-counts').innerText()).includes('累计候选'))throw Error('single vulnerability report shows unrelated task totals or incorrect validation');
+    const edges=await page.evaluate(()=>[document.querySelector('#content h2').getBoundingClientRect().left,document.querySelector('#content h2 + p').getBoundingClientRect().left]);if(Math.abs(edges[0]-edges[1])>1)throw Error('report headings and prose are not aligned');
+    const record=page.locator('.document-test-record');if(await record.count()!==1||await record.evaluate(el=>el.open))throw Error('full transcript is not collapsed by default');
+    await page.locator('#document-toc a').filter({hasText:'PoC 与测试记录'}).click();if(!await record.evaluate(el=>el.open))throw Error('report table of contents did not open transcript');
+    const transcriptCode=record.locator('.code-reader code').first(),rawTranscript=await transcriptCode.textContent();await record.getByRole('button',{name:'复制代码原文',exact:true}).first().click();if(await page.evaluate(()=>navigator.clipboard.readText())!==rawTranscript)throw Error('folded transcript copy changed original bytes');
+    await record.locator(':scope > summary').click();
    }
   }else{
    const record=page.locator('.finding-record').filter({has:page.locator('summary').filter({hasText:'PoC 与测试记录'})});
@@ -974,20 +995,35 @@ if(screenshotDir){
 if(process.env.VULSCAN_REVIEW_SOURCE_DIR){
  const id=basename(process.env.VULSCAN_REVIEW_SOURCE_DIR);
  const {page}=await visit('current-scan','/scan/'+id);
- await ready(page,'current candidate 4',async()=>{
+ await ready(page,'current findings and stage results',async()=>{
+  const snapshot=await(await context.request.get(baseURL+'/scan/'+id+'/snapshot')).json();
+  const findings=Object.values(snapshot.findings).sort((a,b)=>a.first_seq-b.first_seq);
   await page.locator('#tab-findings').click();
+  if(await page.locator('#finding-rows tr').count()!==findings.length)throw Error('real finding rows differ from saved identities');
   for(const width of [1440,1920,768,360]){
    await page.setViewportSize({width,height:1000});await settleLayout(page);
    if(screenshotDir)await page.screenshot({path:`${screenshotDir}/current-findings-${width}.png`,fullPage:true});
   }
-  await page.locator('#finding-rows tr[data-finding-id="main.py:jwtmain"] .finding-title').click();
-  for(const width of [1440,1920,768,360]){
-   await page.setViewportSize({width,height:1000});await settleLayout(page);
-   const size=await page.locator('#finding-dialog').evaluate(d=>({client:d.clientWidth,scroll:d.scrollWidth,left:d.scrollLeft}));
-   if(size.scroll>size.client+1||size.left>1)throw Error('real candidate overflows '+JSON.stringify(size));
-   if(screenshotDir)await page.screenshot({path:`${screenshotDir}/current-candidate-4-${width}.png`,fullPage:false});
+  for(let i=0;i<findings.length;i++){
+   const row=page.locator('#finding-rows tr').nth(i);
+   if(await row.getAttribute('data-finding-id')!==findings[i].finding_id)throw Error('real finding identity order changed');
+   await row.locator('.finding-title').click();
+   for(const width of [1440,1920,768,360]){
+    await page.setViewportSize({width,height:1000});await settleLayout(page);
+    const size=await page.locator('#finding-dialog').evaluate(d=>({client:d.clientWidth,scroll:d.scrollWidth,left:d.scrollLeft,title:document.getElementById('finding-title').textContent}));
+    if(size.scroll>size.client+1||size.left>1||!size.title||size.title.length>96||size.title.includes('```'))throw Error('real candidate rendering '+JSON.stringify(size));
+    if(screenshotDir)await page.screenshot({path:`${screenshotDir}/current-candidate-${i+1}-${width}.png`,fullPage:false});
+   }
+   if(!await page.locator('#finding-detail [data-detail=location]').innerText().then(text=>text.includes(findings[i].function)))throw Error('real candidate location lost');
+   await page.locator('#finding-close').click();
   }
-  if(await page.locator('#finding-title').innerText()!=='jwtmain')throw Error('real payload became the heading');
+  await page.locator('#tab-overview').click();
+  for(const step of ['parse','app-context','enhance','verify','dynamic-test']){
+   if(!snapshot.stages[step])continue;
+   await page.locator('.stage-select[data-stage="'+step+'"]').click();
+   if(snapshot.stages[step].summary&&await page.locator('#stage-highlights').innerText()==='')throw Error('saved stage summary not presented '+step);
+   for(const width of [1440,360]){await page.setViewportSize({width,height:1000});if(screenshotDir)await page.screenshot({path:`${screenshotDir}/current-stage-${step}-${width}.png`,fullPage:true});}
+  }
  });
  await drain(page,'current-scan');await page.close();
  const report=await visit('current-report','/report/'+id);await waitCharts(report.page);
@@ -995,6 +1031,22 @@ if(process.env.VULSCAN_REVIEW_SOURCE_DIR){
  await checkContrast(report.page,'current report',['.report-toc strong','.report-finding-title','.report-verification strong','.hint','#pipeline td']);
  if(screenshotDir){const html=await(await context.request.get(baseURL+'/report/'+id)).text();writeFileSync(join(screenshotDir,'current-report.html'),html);}
  await drain(report.page,'current-report');await report.page.close();
+ const disclosures=await(await context.request.get(baseURL+'/disclosures/'+id)).json();
+ for(const item of disclosures){
+  const document=await visit('current-vulnerability-report',item.url);
+  await ready(document.page,'current vulnerability report',async()=>{
+   await document.page.waitForFunction(()=>document.getElementById('document-scope').textContent!==('任务 '+documentContext.jobID));
+   if(await document.page.locator('#document-finding').innerText()==='未记录')throw Error('real report lost its association');
+   if(/^(?:vulnerable|unverified|confirmed|agreed|error)$/i.test(await document.page.locator('.document-heading h1').innerText()))throw Error('real report used a verdict token as its title');
+   const snapshot=await(await context.request.get(baseURL+'/scan/'+id+'/snapshot')).json();if(snapshot.commit&&(await document.page.locator('#document-version').innerText()).startsWith('未记录'))throw Error('real report omitted its known target version');
+   const expectsTranscript=await document.page.evaluate(()=>/^#{2,3}\s+PoC\s*与测试记录\s*$/mi.test(markdown));
+   if(expectsTranscript&&await document.page.locator('.document-test-record').count()!==1)throw Error('real transcript heading was not recognized');
+   if(await document.page.locator('.document-test-record').count()&&await document.page.locator('.document-test-record').first().evaluate(el=>el.open))throw Error('real full transcript dominates the report by default');
+   for(const width of [1440,1920,768,360]){await document.page.setViewportSize({width,height:1000});if(screenshotDir)await document.page.screenshot({path:`${screenshotDir}/current-vulnerability-report-${width}.png`,fullPage:true});if(await document.page.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth+1))throw Error('real report overflow '+width);}
+  });
+  await drain(document.page,'current-vulnerability-report');await document.page.close();
+ }
+
 }
 
 if (update && failures.length === 0) {

@@ -1,23 +1,34 @@
 /* UI projections only. All scan decisions remain in the scanner. */
 (() => {
  'use strict';
- const stages={recovery:'历史恢复',queue:'等待执行',initialize:'初始化',clone:'获取仓库',parse:'代码解析','app-context':'应用上下文',enhance:'上下文增强',analyze:'漏洞分析',verify:'模型复核','build-output':'结果整理','dynamic-test':'动态测试',report:'生成报告',scan:'主扫描',cleanup:'停止与清理',task:'任务结束'};
- const statuses={queued:'排队中',running:'运行中',cancelling:'取消中',cancelled:'已取消',timeout:'已超时',error:'失败',done:'完成',success:'完成',completed:'完成',partial:'部分完成',interrupted:'中断',skipped:'跳过',pending:'待处理',reported:'已记录范围',incomplete:'覆盖不完整'};
+ const stages={recovery:'历史恢复',queue:'等待执行',initialize:'初始化',clone:'获取仓库',parse:'代码解析','app-context':'项目识别','llm-reachability':'入口分析',enhance:'上下文增强',analyze:'漏洞分析',verify:'模型复核','build-output':'结果整理','dynamic-test':'动态测试',report:'生成报告','report-data':'报告内容',summary:'扫描摘要',scan:'主扫描',cleanup:'停止与清理',task:'任务结束'};
+ const statuses={queued:'排队中',running:'运行中',retrying:'正在重试',cancelling:'取消中',cancelled:'已取消',timeout:'已超时',error:'失败',done:'完成',success:'完成',completed:'完成',partial:'部分完成',interrupted:'中断',skipped:'跳过',pending:'待处理',reported:'已记录范围',incomplete:'覆盖不完整'};
  const reviews={pending:'待复核',retained:'复核保留',excluded:'复核排除',inconclusive:'无法确定',error:'复核错误',interrupted:'复核未完成',not_requested:'未请求复核',unreviewed:'未记录复核'};
  const dynamics={pending:'待测试',running:'执行中',reproduced:'已复现',not_reproduced:'未复现',inconclusive:'无法确定',environment_error:'环境错误',error:'测试错误',skipped:'已跳过',blocked:'测试受阻',unknown:'未知',interrupted:'未完成（任务已结束）'};
  const severities={critical:'严重',high:'高危',medium:'中危',low:'低危'};
  const phases={generation:'测试生成',build:'构建',run:'运行',analysis:'结果分析',environment:'执行环境',cleanup:'资源清理',compose_build:'构建',compose_run:'运行'};
  function findingTitle(f){
   const title=String(f.title||'').trim();
-  if(title.length<=96&&title&&!/^(vulnerable|bypassable|safe|error|候选问题（未提供标题）)$/i.test(title))return title;
+  if(title.length<=96&&title&&!/^(vulnerable|bypassable|safe|error|confirmed|agreed|unverified|inconclusive|候选问题（未提供标题）)$/i.test(title))return title;
   return [f.cwe_name||'',f.function||f.file||'候选问题'].filter(Boolean).join(' · ');
  }
  const active=s=>['queued','running','cancelling'].includes(s);
+ const incompleteReview=s=>['error','inconclusive','interrupted'].includes(s);
+ function stageHighlights(key,summary={}){
+  const fields={parse:[['total_units','解析对象'],['language','语言'],['processing_level','扫描范围']],'app-context':[['application_type','项目类型'],['context_source','上下文来源']],'llm-reachability':[['units_reviewed','检查对象'],['entry_points_promoted','补充入口'],['units_touched','更新对象']],enhance:[['units_enhanced','完成增强'],['incomplete_count','未返回完整结果'],['error_count','处理错误']],analyze:[['analyzed','完成分析'],['total_units','分析范围'],['error_count','分析错误']],verify:[['findings_input','复核范围']],'dynamic-test':[['findings_tested','测试范围'],['confirmed','已复现'],['not_reproduced','未复现'],['blocked','测试受阻'],['inconclusive','无法确定'],['errors','测试错误']]};
+  const labels={web_app:'Web 应用',cli_tool:'命令行工具',library:'代码库 / SDK',agent_framework:'Agent 框架',generated:'自动分析',repo_manual:'仓库配置',threat_model:'仓库安全模型',reachable:'可达代码',all:'全部代码',file:'文件级'};
+  const result=[];
+  for(const [name,label]of fields[key]||[]){const value=summary[name];if(typeof value==='string'||typeof value==='number')result.push({label,value:labels[value]??String(value)});}
+  for(const [name,names]of [['classifications',{neutral:'中性代码',security_control:'防护代码',exploitable:'可能可利用',vulnerable_internal:'内部缺陷'}],['verdicts',{vulnerable:'疑似漏洞',bypassable:'可绕过防护',inconclusive:'无法确定',protected:'已有防护',safe:'未发现风险'}]])for(const [nameKey,label]of Object.entries(names)){const value=summary[name]?.[nameKey];if(Number.isInteger(value)&&value>0)result.push({label,value:String(value)});}
+  if(Array.isArray(summary.formats_generated))result.push({label:'报告格式',value:summary.formats_generated.map(v=>String(v).toUpperCase()).join(' / ')});
+  return result;
+ }
  const stripTime=s=>s.replace(/^\d{2}:\d{2}:\d{2}\s+/, '').trim();
  function classifyLine(line){
   const s=stripTime(line).toLowerCase();
-  if(/^(?:\[(?:error|fatal|错误)\]|(?:error|fatal|错误|失败)[:：]|traceback \(most recent call last\):)/.test(s))return 'error';
-  if(/^(?:\[(?:warn(?:ing)?|警告)\]|(?:warn(?:ing)?|警告)[:：])/.test(s))return 'warning';
+  const body=s.replace(/^\[(?:parse|enhance|analyze|detect|verify|report|dynamic[-_]test|代码解析|动态测试)\]\s*/,'');
+  if(/^(?:\[(?:error|fatal|错误)\]|(?:error|fatal|错误|失败)[:：]|traceback \(most recent call last\):)/.test(body)||body!==s&&/^(?:error|fatal|错误|失败)\s/.test(body))return 'error';
+  if(/^(?:\[(?:warn(?:ing)?|警告)\]|(?:warn(?:ing)?|警告)[:：])/.test(body))return 'warning';
   if(/^\[[^\]]+\]\s+(?:---\s+|done:\s+)?\d[\d,]*\s*\/\s*\d[\d,]*/.test(s))return /^\[\d+\/\d+\]/.test(s)?'step-tag':'progress';
   if(/^\[(?:parse|enhance|analyze|detect|verify|report|dynamic[-_]test|代码解析|动态测试)\]/.test(s))return 'step-tag';
   return 'other';
@@ -30,7 +41,7 @@
   return 'other';
  }
  function matchesFinding(f,q,review,dynamic){
-  return (!review||f.model_review===review)&&(!dynamic||f.dynamic===dynamic)&&(!q||[f.finding_id,f.report_id,f.title,f.file,f.function,f.cwe,f.cwe?'CWE-'+String(f.cwe).replace(/^CWE-/i,''):'',f.cwe_name,f.verdict].join(' ').toLocaleLowerCase().includes(q));
+  return (!review||(review==='incomplete'?incompleteReview(f.model_review):f.model_review===review))&&(!dynamic||f.dynamic===dynamic)&&(!q||[f.finding_id,f.report_id,f.title,f.file,f.function,f.cwe,f.cwe?'CWE-'+String(f.cwe).replace(/^CWE-/i,''):'',f.cwe_name,f.verdict].join(' ').toLocaleLowerCase().includes(q));
  }
  function legacyRecord(line){
   const s=stripTime(line),low=s.toLowerCase();
@@ -45,18 +56,22 @@
   if(!stage)return null;
   return {stage,status:/^warning:/.test(low)?'error':/^-\s*skipping/.test(low)?'skipped':'running',activity:/docker not found/.test(low)?'未找到 Docker':s};
  }
- globalThis.VulscanScan={classifyLine,stageFromLog,matchesFinding,legacyRecord,findingTitle};
+ globalThis.VulscanScan={classifyLine,stageFromLog,matchesFinding,legacyRecord,findingTitle,stageHighlights};
  if(typeof document==='undefined')return;
  const $=id=>document.getElementById(id);
  const node=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  const text=(id,value)=>{const n=$(id),v=String(value??'');if(n&&n.textContent!==v)n.textContent=v;};
+ const allLogStages=node('option','全部阶段');allLogStages.value='';
+ $('log-stage').replaceChildren(allLogStages,...Object.entries({...stages,other:'其他'}).map(([key,label])=>{const option=node('option',label);option.value=key;return option;}));
  const fmt=n=>n===null||n===undefined?'—':Number(n).toLocaleString('zh-CN');
- const duration=n=>typeof n!=='number'||!Number.isFinite(n)?'—':n<60?Math.floor(n)+' 秒':n<3600?Math.floor(n/60)+' 分 '+Math.floor(n%60)+' 秒':Math.floor(n/3600)+' 小时 '+Math.floor(n%3600/60)+' 分';
+ const duration=n=>typeof n!=='number'||!Number.isFinite(n)?'—':n<10?Number(Math.max(0,n).toFixed(n<1?2:1))+' 秒':n<60?Math.floor(n)+' 秒':n<3600?Math.floor(n/60)+' 分 '+Math.floor(n%60)+' 秒':Math.floor(n/3600)+' 小时 '+Math.floor(n%3600/60)+' 分';
  const date=s=>{if(!s)return '—';const d=new Date(s);return Number.isNaN(+d)?'—':new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d)+' UTC+8';};
  const tone=s=>['error','environment_error','reproduced','critical','high'].includes(s)?'risk':['timeout','partial','inconclusive','blocked','cancelling'].includes(s)?'warn':['running','queued','pending'].includes(s)?'active':['done','success','completed'].includes(s)?'done':'neutral';
  const pill=(label,state)=>{const n=node('span',label||'尚未记录','status-pill');n.dataset.tone=tone(state);return n;};
  let snapshot=null,lastRevision=-1,currentView='overview',cancelPending=false,cancelPromptOpen=false,terminalStatus='',currentFinding='',artifactsChecked=false,artifactsLoading=false,lastArtifactState='';
  let observedActive=false,terminalNoticeShown=false;
+ let followStage=true,selectedStage='',stageDetailKey='';
+ const stageRows=new Map();
  const rowMap=new Map(),rowValues=new WeakMap(),detailValues=new WeakMap(),recentRows=new Map(),activityRows=new Map(),activityGroups=new Map();let recentTable=null,detailValue="";
  const views=['overview','findings','activity','terminal','materials'];
  function showView(view){
@@ -70,12 +85,14 @@
   $('tab-'+view).addEventListener('click',()=>showView(view));
   $('tab-'+view).addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const i=e.key==='Home'?0:e.key==='End'?views.length-1:(index+(e.key==='ArrowRight'?1:-1)+views.length)%views.length;showView(views[i]);$('tab-'+views[i]).focus();});
  });
- $('show-findings').addEventListener('click',()=>showView('findings'));$('show-activity').addEventListener('click',()=>showView('activity'));$('show-materials').addEventListener('click',()=>showView('materials'));
+ $('show-findings').addEventListener('click',()=>showView('findings'));$('show-activity').addEventListener('click',()=>{$('activity-stage').value=selectedStage;filterActivity();showView('activity');});$('show-materials').addEventListener('click',()=>showView('materials'));
+ $('follow-stage').addEventListener('click',()=>{followStage=true;renderStages(snapshot?.stages||{});});
  document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{
   $('review-filter').value='';$('dynamic-filter').value='';$('finding-query').value='';
   const [axis,value]=button.dataset.filter.split(':');if(axis==='review')$('review-filter').value=value;if(axis==='dynamic')$('dynamic-filter').value=value;filterFindings();showView('findings');
  }));
- function updateElapsed(){if(!snapshot)return;const end=snapshot.finished_at?+new Date(snapshot.finished_at):active(snapshot.status)?Date.now():NaN;text('job-elapsed',Number.isFinite(end)&&snapshot.started_at?duration(Math.max(0,(end-new Date(snapshot.started_at))/1000)):'结束时间未记录');}
+ function stageElapsed(stage){if(!stage)return null;if(stage.status!=='running')return stage.duration_seconds??stage.elapsed_seconds;if(stage.started_at&&active(snapshot?.status))return Math.max(0,(Date.now()-new Date(stage.started_at))/1000);return stage.elapsed_seconds;}
+ function updateElapsed(){if(!snapshot)return;const end=snapshot.finished_at?+new Date(snapshot.finished_at):active(snapshot.status)?Date.now():NaN;text('job-elapsed',Number.isFinite(end)&&snapshot.started_at?duration(Math.max(0,(end-new Date(snapshot.started_at))/1000)):'结束时间未记录');if(!snapshot.legacy)text('overview-elapsed',duration(stageElapsed(snapshot.stages?.[selectedStage])));}
  setInterval(updateElapsed,1000);
  function setStatus(status){
   text('status-text',statuses[status]||status||'状态未记录');$('status-text').dataset.state=status;$('status-text').dataset.tone=tone(status);
@@ -94,22 +111,13 @@
   if(active(data.status))observedActive=true;
   if(data.repo){text('project-name',data.repo.replace(/^https?:\/\/[^/]+\//,'').replace(/\.git$/,''));$('project-name').title=data.repo;}const artifactState=JSON.stringify(data.artifacts||{});if(artifactState!==lastArtifactState){artifactsChecked=false;lastArtifactState=artifactState;}setStatus(data.status);updateElapsed();text('last-updated',data.legacy?'未记录（旧任务）':date(data.updated_at));
   text('revision-label',[data.branch,data.commit?.slice(0,10)].filter(Boolean).join(' · ')||'—');
-  ['candidates','retained','excluded','reproduced'].forEach(k=>text('count-'+k,fmt(data.counts?.[k])));
-  const c=data.counts||{},states=Object.values(data.findings||{});text('secondary-counts',[[c.pending,'待复核'],...['not_reproduced','inconclusive','environment_error','error','skipped','interrupted'].map(status=>[states.filter(f=>f.dynamic===status).length,dynamics[status]])].filter(([n])=>n>0).map(([n,label])=>label+' '+fmt(n)).join(' · '));
+  ['candidates','retained','excluded','review_incomplete','dynamic_eligible','reproduced'].forEach(k=>text('count-'+k,fmt(data.counts?.[k])));
+  const c=data.counts||{},states=Object.values(data.findings||{});text('count-running',states.some(f=>f.dynamic)?fmt(states.filter(f=>f.dynamic==='running').length):'—');text('secondary-counts',[[c.pending,'待复核'],[c.review_error,'复核错误'],...['not_reproduced','inconclusive','environment_error','error','skipped','interrupted'].map(status=>[states.filter(f=>f.dynamic===status).length,dynamics[status]])].filter(([n])=>n>0).map(([n,label])=>label+' '+fmt(n)).join(' · '));
   const notes=[];if(data.legacy)notes.push('历史任务 · 未记录结构化统计');
   if(data.partial)notes.push('部分结果 · 有未完成步骤');
   if(Object.keys(data.pending||{}).length)notes.push('正在同步缺失事件…');
   if(data.persistence_error)notes.push(data.persistence_error);
   $('coverage-note').hidden=notes.length===0&&!data.coverage_details;text('coverage-summary',notes.join(' · ')||'覆盖范围');text('coverage-detail',data.coverage_details||'详见活动记录。');
-  const stage=data.stages?.[data.stage];text('overview-stage',stages[data.stage]||data.stage||'等待阶段信息');
-  text('stage-status',stage?statuses[stage.status]||'处理中':'尚未产生');$('stage-status').dataset.tone=tone(stage?.status);
-  text('overview-count',stage?.processed!==null&&stage?.processed!==undefined?fmt(stage.processed)+' / '+fmt(stage.total)+(stage.unit?' '+stage.unit:''):'—');
-  text('overview-elapsed',duration(stage?.elapsed_seconds??stage?.duration_seconds));text('overview-eta',active(data.status)?duration(stage?.eta_seconds):'任务已结束');
-  text('eta-label',(stages[data.stage]||'当前阶段')+'预计剩余');
-  const known=Number.isInteger(stage?.total)&&stage.total>0&&Number.isInteger(stage.processed)&&stage.processed<=stage.total;
-  $('stage-progress').hidden=!known;if(known){$('stage-progress').max=stage.total;$('stage-progress').value=stage.processed;}
-  text('overview-progress-note',known?'阶段进度 '+Math.floor(stage.processed/stage.total*100)+'%':'');
-  text('overview-task',stage?.activity||(!active(data.status)?'任务已结束':'等待扫描器状态…'));
   renderStages(data.stages||{});renderFindings(data.findings||{});renderActivity(data.activity||[]);
   if(data.legacy)logs.forEach(r=>applyLegacyRecord(r.raw));
   if(!active(data.status)){
@@ -117,7 +125,41 @@
    checkArtifacts();
   }
  }
- function renderStages(items){const list=$('stage-list');list.replaceChildren();Object.entries(items).forEach(([key,item])=>{const row=node('li');row.append(node('span',stages[key]||key),pill(statuses[item.status]||'处理中',item.status));list.append(row);});if(!list.children.length)list.append(node('li','历史任务未记录阶段状态。'));}
+ function renderStages(items){
+  const rank=Object.keys(stages),keys=[...new Set([...(snapshot?.stage_order||[]),...Object.keys(items)])].filter(k=>k!=='scan'||!items.parse||k===selectedStage&&!followStage).sort((a,b)=>(rank.indexOf(a)<0?100:rank.indexOf(a))-(rank.indexOf(b)<0?100:rank.indexOf(b)));
+  if(followStage||!keys.includes(selectedStage))selectedStage=keys.includes(snapshot?.stage)?snapshot.stage:keys.filter(k=>items[k]).at(-1)||keys[0]||'';
+  $('follow-stage').setAttribute('aria-pressed',String(followStage));text('follow-stage',followStage?'跟随进度':'恢复跟随');
+  if(!stageRows.size&&keys.length)$('stage-list').replaceChildren();
+  stageRows.forEach((row,key)=>{row.hidden=!keys.includes(key);});
+  keys.forEach(key=>{
+   let row=stageRows.get(key);
+   if(!row){row=node('li',undefined,'workflow-step');const button=node('button',undefined,'stage-select'),copy=node('span',undefined,'stage-copy');button.type='button';button.dataset.stage=key;copy.append(node('strong',stages[key]||key),node('span',undefined,'stage-meta'));button.append(node('span',undefined,'stage-marker'),copy);row.append(button);button.addEventListener('click',()=>{selectedStage=key;followStage=false;renderStages(snapshot.stages||{});});stageRows.set(key,row);const next=keys.slice(keys.indexOf(key)+1).map(k=>stageRows.get(k)).find(Boolean);$('stage-list').insertBefore(row,next||null);}
+   const item=items[key],status=item?.status||'';row.dataset.state=status;row.dataset.selected=String(key===selectedStage);const button=row.firstElementChild;button.setAttribute('aria-pressed',String(key===selectedStage));button.querySelector('.stage-marker').textContent=['done','success','completed'].includes(status)?'✓':['error','partial','interrupted'].includes(status)?'!':status==='skipped'?'−':'';
+   button.querySelector('.stage-meta').textContent=[statuses[status]||(active(snapshot?.status)?'待开始':'未记录'),item?.duration_seconds==null?'':duration(item.duration_seconds)].filter(Boolean).join(' · ');
+  });
+  renderStageDetail();
+ }
+ function renderStageDetail(){
+  if(!snapshot)return;const key=selectedStage,stage=snapshot.stages?.[key];
+  $('show-activity').disabled=!stage||!(snapshot.activity||[]).some(e=>e.stage===key);
+  text('stage-context-label',followStage?(active(snapshot.status)?'当前阶段':'最后阶段'):'阶段结果');text('overview-stage',stages[key]||key||'等待阶段信息');
+  text('stage-status',stage?statuses[stage.status]||'处理中':key?(active(snapshot.status)?'待开始':'未记录'):'尚未产生');$('stage-status').dataset.tone=tone(stage?.status);
+  text('overview-count',stage?.processed==null?'—':fmt(stage.processed)+(stage.total==null?'':' / '+fmt(stage.total))+(stage.unit?' '+stage.unit:''));
+  text('overview-elapsed',duration(stageElapsed(stage)));text('overview-eta',!active(snapshot.status)?'任务已结束':duration(stage?.eta_seconds));text('eta-label',(stages[key]||'当前阶段')+'预计剩余');$('overview-eta').parentElement.hidden=!!stage&&stage.status!=='running';
+  const known=Number.isInteger(stage?.total)&&stage.total>0&&Number.isInteger(stage.processed)&&stage.processed<=stage.total;
+  $('stage-progress').hidden=!known;if(known){$('stage-progress').max=stage.total;$('stage-progress').value=stage.processed;}text('overview-progress-note',known?Math.floor(stage.processed/stage.total*100)+'% · '+(stages[key]||key):'');
+  const activity=stage?.activity||'';$('overview-task').hidden=!activity||['阶段开始','阶段结束','阶段完成','代码解析结束','处理队列已建立'].includes(activity);text('overview-task',activity);
+  const highlights=stageHighlights(key,stage?.summary).filter(v=>!(key==='parse'&&stage.processed!=null&&v.label==='解析对象'));
+  if(key==='verify')for(const [name,label]of[['retained','复核保留'],['excluded','复核排除'],['review_incomplete','复核未完成'],['review_error','其中复核错误']]){const count=snapshot.counts?.[name];if(count!=null)highlights.push({label,value:fmt(count)});}
+  const signature=JSON.stringify(highlights);if($('stage-highlights').dataset.value!==signature){$('stage-highlights').dataset.value=signature;$('stage-highlights').replaceChildren(...highlights.map(item=>{const part=node('div');part.append(node('dt',item.label),node('dd',item.value));return part;}));}
+  const events=(snapshot.activity||[]).filter(e=>e.stage===key&&(['activity','error','validation.updated'].includes(e.type)||e.type==='finding.upsert'&&incompleteReview(e.status))).slice(-3);
+  const output=[];if(key==='dynamic-test'){const unresolved=Object.values(snapshot.findings||{}).filter(f=>(f.dynamic_eligible===true||['running','reproduced','not_reproduced','blocked','error','environment_error','inconclusive','interrupted'].includes(f.dynamic))&&incompleteReview(f.model_review)).length;if(unresolved)output.push('测试范围包含 '+unresolved+' 项复核未完成的候选。');}
+  if(stage?.summary?.error_summary){const names={rate_limit:'请求限流',empty_completion:'模型未返回完整内容',connection:'连接失败',timeout:'超时'};const errors=Object.entries(stage.summary.error_summary).filter(([,n])=>Number.isInteger(n)&&n>0).map(([name,n])=>(names[name]||name)+' '+n);if(errors.length)output.push('处理错误：'+errors.join(' · '));}
+  events.forEach(e=>{const f=snapshot.findings?.[e.finding_id],label=['validation.updated','finding.upsert'].includes(e.type)?[(f?.report_id||f?.function||e.finding_id),e.type==='validation.updated'?dynamics[e.status]||e.status:reviews[e.status]||e.status,e.status==='error'?e.details?.split('\n')[0]?.slice(0,180):''].filter(Boolean).join(' · '):e.message;if(label&&!output.includes(label))output.push(label);});
+  const outputSignature=JSON.stringify(output);if($('stage-output').dataset.value!==outputSignature){$('stage-output').dataset.value=outputSignature;$('stage-output').replaceChildren(...output.map(s=>node('li',s)));}
+  const details=stage?.details||'';$('stage-details').hidden=!details;text('stage-details-text',details);if(stageDetailKey!==key){$('stage-details').open=!!details&&['error','partial','interrupted'].includes(stage?.status);stageDetailKey=key;}
+  text('stage-files',(stage?.outputs||[]).join(' · '));text('stage-cost',typeof stage?.cost_usd==='number'?'预估费用 $'+stage.cost_usd.toFixed(stage.cost_usd<0.01?4:2):'');
+ }
  function fillRow(row,f){
   const signature=JSON.stringify(f);if(rowValues.get(row)===signature)return;rowValues.set(row,signature);
   const cells=row.cells;cells[0].textContent=f.report_id||'候选 #'+row.dataset.ordinal;

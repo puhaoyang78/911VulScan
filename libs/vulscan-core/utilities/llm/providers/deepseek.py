@@ -23,7 +23,7 @@ import openai
 
 from ..adapter import (
     CompletionResult, LLMAuthError, LLMConnectionError, LLMNotFoundError, LLMRateLimitError,
-    LLMRefusalError, LLMResponseError, Message, TextBlock, ToolDef, ToolUseBlock,
+    LLMRefusalError, LLMResponseError, LLMToolArgumentsError, Message, TextBlock, ToolDef, ToolUseBlock,
 )
 from .._pricing import LazyProviderPricing
 from .._redact import redact_secrets, redacted_cause_from
@@ -90,6 +90,30 @@ def _usage_details(usage: Any) -> dict | None:
 def _response_to_deepseek(response: Any) -> CompletionResult:
     usage = getattr(response, "usage", None)
     details = _usage_details(usage)
+    choices = getattr(response, "choices", None) or []
+    message = getattr(choices[0], "message", None) if choices else None
+    finish = getattr(choices[0], "finish_reason", None) if choices else None
+    # Validate before the generic OpenAI parser, which otherwise warns that it
+    # is substituting {}. No partial tool from a rejected batch may execute.
+    if finish != "content_filter":
+        for call in getattr(message, "tool_calls", None) or []:
+            try:
+                args = json.loads(call.function.arguments)
+                if not isinstance(args, dict):
+                    raise ValueError("参数必须是 JSON 对象")
+            except (ValueError, TypeError) as exc:
+                reason = (f"{exc.msg}（第 {exc.lineno} 行，第 {exc.colno} 列）"
+                          if isinstance(exc, json.JSONDecodeError) else "参数必须是 JSON 对象")
+                error = LLMResponseError if finish == "length" else LLMToolArgumentsError
+                diagnostic = (("DeepSeek 工具参数达到 max_tokens 上限，JSON 不完整",)
+                              if finish == "length" else (call.function.name, reason))
+                raise error(
+                    *diagnostic,
+                    input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                    output_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                    usage_details=details,
+                    stop_reason="max_tokens" if finish == "length" else None,
+                ) from exc
     try:
         result = _response_to_unified(response, adapter="DeepSeekAdapter")
     except LLMResponseError as exc:
@@ -107,18 +131,6 @@ def _response_to_deepseek(response: Any) -> CompletionResult:
             message = "DeepSeek 未返回可用文本或工具调用；请求可能被过滤，或响应格式无效"
         exc.args = (message,)
         raise
-    message = response.choices[0].message
-    for call in getattr(message, "tool_calls", None) or []:
-        try:
-            args = json.loads(call.function.arguments or "{}")
-            if not isinstance(args, dict):
-                raise ValueError("tool arguments must be a JSON object")
-        except (ValueError, TypeError) as exc:
-            raise LLMResponseError(
-                "DeepSeek 返回的工具参数不是有效 JSON 对象；已停止执行不完整的工具调用",
-                input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-                usage_details=details,
-            ) from exc
     reasoning = getattr(message, "reasoning_content", None)
     if reasoning is not None and not isinstance(reasoning, str):
         raise LLMResponseError(

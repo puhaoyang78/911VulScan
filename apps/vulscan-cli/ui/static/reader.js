@@ -44,7 +44,7 @@
  }
  function toc(root,target){
   target.replaceChildren();target.append(make('h2','本页目录'));
-  root.querySelectorAll('h1,h2,h3').forEach((h,i)=>{h.id='section-'+i;const a=make('a',h.textContent);a.href='#'+h.id;a.dataset.level=h.tagName.slice(1);target.append(a);});
+  root.querySelectorAll('h1,h2,h3').forEach((h,i)=>{h.id='section-'+i;if(getComputedStyle(h).display==='none'||h.closest('.document-record,.document-record-body'))return;const a=make('a',h.textContent);a.href='#'+h.id;a.dataset.level=h.tagName.slice(1);target.append(a);});
   if(target.children.length===1)target.append(make('p','本文未提供章节标题。','hint'));
  }
  globalThis.VulscanReader={enhance,markdown,toc,copy,original:code=>originals.get(code)};

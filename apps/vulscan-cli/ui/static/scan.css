@@ -1,0 +1,132 @@
+/* Scan detail: a compact task header and a persistent, inspectable workflow. */
+.scan-page .main {max-width:1424px;padding-top:22px}
+.scan-page .breadcrumb {margin-bottom:16px}
+.scan-page .page-heading {margin-bottom:12px;align-items:center}
+.scan-page .page-heading h1 {font-size:27px;margin:0}
+.scan-page .eyebrow {margin:0 0 5px}
+.task-actions {display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0}
+.scan-context {border-bottom:1px solid var(--line);padding-bottom:14px}
+.scan-context .context-grid {margin:0;padding:0;border:0;grid-template-columns:minmax(180px,1.6fr) minmax(120px,1fr) minmax(180px,1fr);gap:16px}
+.scan-context .context-grid dt {font-weight:400}
+.scan-context .context-grid dd {font-size:14px}
+.context-actions {display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-top:12px}
+.scan-context .task-settings {margin:0;text-align:right;max-width:65%}
+.scan-context .task-settings[open] {text-align:left}
+.scan-context .coverage-notice {margin-top:12px}
+.scan-page .sticky-summary {padding-top:16px;padding-bottom:8px}
+.scan-page .summary-stats {grid-template-columns:repeat(3,minmax(0,1fr))}
+.summary-block {min-width:0;border-right:1px solid var(--line);display:flex;flex-direction:column}
+.summary-block:last-child {border-right:0}
+.scan-page .summary-stat {border:0;padding:13px 20px 2px;width:100%;flex:1;border-radius:0}
+.scan-page .summary-stat strong {font-size:32px;letter-spacing:-.03em;margin:4px 0}
+.summary-breakdown,.summary-footnote {display:flex;align-items:center;gap:14px;padding:0 20px 12px;color:var(--muted);font-size:12px;min-height:32px;flex-wrap:wrap}
+.summary-breakdown button {font-size:12px;min-height:28px;border:0;background:transparent;padding:0;color:var(--muted);text-align:left}
+.summary-breakdown b {color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;margin-left:4px}
+.summary-breakdown button:hover {color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+.scan-page .summary-caption {margin-top:7px;min-height:20px}
+.scan-page .view-tabs {margin-top:0;margin-bottom:20px}
+.scan-workflow {display:grid;grid-template-columns:238px minmax(0,1fr);gap:26px;align-items:start}
+.workflow-nav {min-width:0;padding-top:4px;position:sticky;top:190px}
+.workflow-heading {display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 10px}
+.workflow-heading h2 {font-size:14px;margin:0;color:var(--ink-soft);font-weight:600}
+.text-button {display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:4px 7px;border:0;border-radius:5px;color:var(--accent);background:transparent;font-size:13px;font-weight:500;line-height:1.5}
+.text-button:hover {background:var(--hover);color:var(--accent)}
+.workflow-heading .text-button {font-size:12px}
+.scan-page .stage-list {margin:0;display:grid;gap:2px}
+.scan-page .stage-list li {display:block;border:0;padding:0;font-size:13px;position:relative}
+.stage-select {display:flex;width:100%;gap:12px;align-items:center;text-align:left;padding:12px 10px;border:1px solid transparent;background:transparent;border-radius:8px;min-height:64px;color:var(--ink-soft);position:relative}
+.stage-select:hover {background:var(--paper)}
+.workflow-step[data-selected=true] .stage-select {background:var(--paper);border-color:var(--line);box-shadow:0 1px 2px var(--card-shadow)}
+.workflow-step[data-selected=true] .stage-copy strong {color:var(--accent)}
+.stage-marker {width:22px;height:22px;flex-shrink:0;border:1.5px solid var(--control-border);border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:650;background:var(--bg);position:relative;z-index:1}
+.workflow-step:not(:last-child)::after {content:'';position:absolute;width:1px;background:var(--line);top:44px;bottom:-25px;left:21px}
+.workflow-step[data-state=success] .stage-marker,.workflow-step[data-state=done] .stage-marker,.workflow-step[data-state=completed] .stage-marker {border-color:var(--success-ink);color:var(--success-ink);background:var(--success-bg)}
+.workflow-step[data-state=running] .stage-marker {border:6px solid var(--active-bg);background:var(--accent);box-shadow:0 0 0 1px var(--accent-border)}
+.workflow-step[data-state=error] .stage-marker {border-color:var(--risk-border);background:var(--risk-bg);color:var(--risk-ink)}
+.workflow-step[data-state=partial] .stage-marker,.workflow-step[data-state=interrupted] .stage-marker {border-color:var(--warn-border);background:var(--warn-bg);color:var(--warn-ink)}
+.stage-copy {display:grid;gap:2px;min-width:0}
+.stage-copy strong {font-size:14px;font-weight:550;overflow-wrap:anywhere}
+.stage-meta {font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.workflow-content {min-width:0;display:grid;gap:18px}
+.stage-detail {padding:22px 24px}
+.stage-detail .stage-title {align-items:flex-start}
+.stage-detail h2 {margin:0;font-size:21px}
+.stage-detail .metrics {grid-template-columns:repeat(3,minmax(0,1fr));margin:20px 0 0;gap:18px}
+.stage-detail .metric:first-child {grid-column:auto}
+.stage-detail .metric dt {font-weight:400;font-size:12px;min-height:20px}
+.stage-detail .metric dd {font-size:19px;font-weight:550}
+.stage-detail progress {height:6px;border:0;border-radius:3px;margin:18px 0 5px;overflow:hidden}
+.stage-detail progress::-webkit-progress-bar {background:var(--subtle-bg)}
+.stage-detail progress::-webkit-progress-value {background:var(--accent)}
+.stage-detail .overview-note {font-size:12px;text-align:right;margin:0}
+.stage-detail .current-task {font-size:13px;margin:16px 0 0;border:0;border-left:2px solid var(--accent-border);border-radius:0;padding:8px 12px;background:var(--paper-soft)}
+.stage-highlights {display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:16px;margin:20px 0 0;padding-top:18px;border-top:1px solid var(--line)}
+.stage-highlights:empty,.stage-output:empty {display:none}
+.stage-highlights dt {font-size:12px;font-weight:400;color:var(--muted);margin-bottom:4px}
+.stage-highlights dd {font-size:14px;font-weight:550;margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.stage-output {margin:18px 0 0;padding:0;list-style:none;display:grid;gap:7px;font-size:13px;color:var(--ink-soft)}
+.stage-output li {padding-left:14px;position:relative;overflow-wrap:anywhere}
+.stage-output li::before {content:'';position:absolute;left:0;top:.7em;width:4px;height:4px;border-radius:50%;background:var(--muted)}
+.stage-details {margin-top:16px;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.stage-details summary {padding:9px 12px;cursor:pointer;font-size:13px;color:var(--muted)}
+.stage-details pre {max-height:250px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:14px;color:var(--ink-soft);background:var(--paper-soft);font-size:13px;line-height:1.7;border-top:1px solid var(--line)}
+.stage-footer {display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:18px;padding-top:12px;border-top:1px solid var(--line)}
+.stage-footer .meta {font-size:12px}
+.stage-footer .text-button {margin-left:auto}
+.scan-page .recent-card {padding:18px 24px}
+.recent-card .card-header {padding-bottom:12px;border-bottom:1px solid var(--line)}
+.recent-card .card-title {font-size:16px;font-weight:600}
+.recent-card .empty-state {padding:24px 12px}
+.recent-card .findings-table td {padding:14px 0}
+.scan-page .recent-findings .findings-table td:first-child {width:75%}
+.scan-page .recent-findings .findings-table td:last-child {text-align:right;white-space:nowrap}
+.scan-page .recent-findings .finding-location {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.6}
+.scan-page .next-actions {justify-content:flex-end;margin-top:18px}
+@media (prefers-reduced-motion:no-preference) {
+ .stage-select,.text-button {transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease}
+}
+@media (max-width:1000px) {
+ .scan-workflow {grid-template-columns:205px minmax(0,1fr);gap:18px}
+ .stage-detail .metrics {grid-template-columns:1fr 1fr}
+ .stage-detail .metric:first-child {grid-column:1/-1}
+ .task-actions {gap:6px}
+}
+@media (max-width:700px) {
+ .scan-page .main {padding-top:16px}
+ .scan-page .page-heading h1 {font-size:23px}
+ .scan-page .page-heading {gap:12px;margin-bottom:16px}
+ .task-actions {width:100%}
+ .task-actions .status-pill {margin-right:auto}
+ .scan-context .context-grid {grid-template-columns:1fr 1fr;gap:10px}
+ .scan-context .context-grid>div:first-child {grid-column:1/-1}
+ .scan-context .context-grid dd {font-size:13px}
+ .context-actions {gap:8px}
+ .scan-context .task-settings {max-width:55%}
+ .scan-page .sticky-summary {position:static;padding-top:14px}
+ .scan-page .summary-stats {grid-template-columns:repeat(3,minmax(0,1fr));gap:0}
+ .scan-page .summary-stat {padding:12px 10px 0}
+ .scan-page .summary-stat strong {font-size:27px}
+ .scan-page .summary-stat span {font-size:12px}
+ .summary-breakdown,.summary-footnote {padding:0 10px 8px;gap:3px 10px;font-size:11px}
+ .summary-breakdown button {font-size:11px}
+ .summary-breakdown b {margin-left:2px}
+ .scan-page .view-tabs {margin-bottom:16px}
+ .scan-workflow {grid-template-columns:1fr;gap:12px}
+ .workflow-nav {position:static;padding:0}
+ .workflow-heading {padding:0 0 7px}
+ .scan-page .stage-list {display:flex;overflow-x:auto;gap:4px;padding:2px 2px 8px;scrollbar-width:thin}
+ .scan-page .workflow-step {flex:0 0 auto}
+ .workflow-step::after {display:none}
+ .stage-select {padding:8px;min-height:56px;gap:8px}
+ .stage-marker {width:18px;height:18px;font-size:10px}
+ .stage-copy strong {font-size:13px}
+ .stage-meta {font-size:11px}
+ .stage-detail,.scan-page .recent-card {padding:17px}
+ .stage-detail h2 {font-size:19px}
+ .stage-detail .metrics {margin-top:16px;gap:12px}
+ .stage-detail .metric dd {font-size:17px}
+ .stage-highlights {grid-template-columns:1fr 1fr;gap:12px}
+ .scan-page .recent-findings .findings-table td:first-child {width:65%}
+ .scan-page .recent-findings .findings-table td:last-child {white-space:normal}
+ .scan-page .next-actions .btn {width:100%}
+}

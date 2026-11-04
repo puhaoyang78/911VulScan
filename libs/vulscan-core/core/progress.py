@@ -96,7 +96,7 @@ class ProgressReporter:
             self._summary_interval = min(50, ten_pct)
         stage = {"detect": "analyze"}.get(step_name.lower(), step_name.lower())
         ui_events.emit("progress.updated", stage=stage, processed=completed,
-                       total=total, unit="复核项" if stage == "verify" else "函数",
+                       total=total, unit="复核项" if stage == "verify" else "分析对象",
                        elapsed_seconds=0, message="处理队列已建立")
 
     def _get_cost(self) -> float:
@@ -225,7 +225,7 @@ class ProgressReporter:
             unique_done = self._initial_completed + len(self._ui_units)
             ui_elapsed = time.monotonic() - self.start_time
             ui_events.emit("progress.updated", stage=stage, processed=unique_done,
-                           total=self.total, unit="函数" if stage != "verify" else "复核项",
+                           total=self.total, unit="分析对象" if stage != "verify" else "复核项",
                            elapsed_seconds=round(ui_elapsed, 2),
                            eta_seconds=round(ui_elapsed / len(self._ui_units) * max(0, self.total - unique_done), 2),
                            message=unit_label, details=detail, duration_seconds=unit_elapsed)

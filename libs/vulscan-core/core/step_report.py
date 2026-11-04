@@ -248,11 +248,9 @@ def step_context(step: str, output_dir: str, inputs: dict | None = None, *, pers
         _ui_summary = report.summary if isinstance(report.summary, dict) else {}
         if step == "parse" and isinstance(_ui_summary.get("total_units"), int):
             ui_events.emit("progress.updated", stage=step, processed=_ui_summary["total_units"],
-                           total=_ui_summary["total_units"], unit="已解析函数",
+                           total=_ui_summary["total_units"], unit="分析对象",
                            elapsed_seconds=report.duration_seconds, message="代码解析结束")
-        ui_events.emit("stage.changed", stage=step, status=report.status,
-                       duration_seconds=report.duration_seconds, message="阶段结束",
-                       details="\n".join(str(error) for error in report.errors) or str(_ui_summary.get("reason", "")))
+        ui_events.stage_result(report)
         if report.errors:
             ui_events.emit("error", stage=step, status=report.status,
                            message="阶段存在错误", details="\n".join(str(error) for error in report.errors))

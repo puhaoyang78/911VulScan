@@ -33,7 +33,8 @@ from ..llm import (
 # simple_text and previously pinned its own 4096, so PR #242's raised default
 # never reached enhance either. Shares the thinking-era budget; see
 # llm/helpers.py:DEFAULT_MAX_TOKENS.
-from ..llm.helpers import DEFAULT_MAX_TOKENS
+from ..llm.helpers import DEFAULT_MAX_TOKENS, MAX_TOOL_ARGUMENT_RETRIES
+from ..llm.adapter import LLMToolArgumentsError
 from .repository_index import RepositoryIndex
 from .tools import TOOL_DEFINITIONS, ToolExecutor
 from .prompts import SYSTEM_PROMPT, get_user_prompt
@@ -309,6 +310,7 @@ class ContextAgent:
         # #697: the dropped-block per-kind accumulator for this call
 
         per_turn_dropped: dict[str, int] = {}
+        argument_retries = 0
 
         while iterations < MAX_ITERATIONS:
             iterations += 1
@@ -328,6 +330,19 @@ class ContextAgent:
                     messages=messages,
                 )
             except Exception as exc:
+                if isinstance(exc, LLMToolArgumentsError) and argument_retries < MAX_TOOL_ARGUMENT_RETRIES:
+                    turn = error_path_turn(exc)
+                    total_input_tokens += turn.input_tokens
+                    total_output_tokens += turn.output_tokens
+                    per_turn_usage_details.extend(turn.entries)
+                    argument_retries += 1
+                    messages.append(Message(role="user", content=[TextBlock(exc.feedback)]))
+                    from core import ui_events
+                    message = f"工具 {exc.tool_name} 参数格式错误，反馈后重试（{argument_retries}/{MAX_TOOL_ARGUMENT_RETRIES}）"
+                    print(f"[Enhance] {unit_id}: {message}", file=sys.stderr)
+                    ui_events.emit("activity", stage="enhance", status="retrying",
+                                   finding_id=unit_id, attempt=argument_retries, message=message, details=str(exc))
+                    continue
                 # #609: a failed attempt's spend must not vanish from
                 # accounting. The exits record via record_call; the raise
                 # did not, so the tracker and every summary/checkpoint

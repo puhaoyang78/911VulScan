@@ -106,7 +106,7 @@ def test_partial_failure_or_output_rebuild_cannot_erase_a_real_reproduction(monk
     ui_events.start(verify=True, dynamic=True)
     row = dict(route_key="a.c:copy", finding="vulnerable")
     ui_events.finding(row)
-    item = dict(id="VULN-001", name="copy", location=dict(file="a.c", function="copy"))
+    item = dict(id="VULN-001", name="copy", stage2_verdict="confirmed", location=dict(file="a.c", function="copy"))
     ui_events.pipeline_findings([item])
     ui_events.dynamic(item, SimpleNamespace(status="CONFIRMED", details="proof", elapsed_seconds=1))
     ui_events.skipped("dynamic-test", "failed")
@@ -123,8 +123,8 @@ def test_failed_dynamic_preparation_closes_only_queued_tests(monkeypatch, capsys
     ui_events.start(verify=True, dynamic=True)
     for name in ("excluded", "running"):
         ui_events.finding(dict(route_key=f"a.c:{name}", finding="vulnerable"))
-    queued = dict(id="VULN-001", location=dict(file="a.c", function="queued"))
-    running = dict(id="VULN-002", location=dict(file="a.c", function="running"))
+    queued = dict(id="VULN-001", stage2_verdict="unverified", location=dict(file="a.c", function="queued"))
+    running = dict(id="VULN-002", stage2_verdict="confirmed", location=dict(file="a.c", function="running"))
     ui_events.pipeline_findings([queued, running])
     ui_events.dynamic(running, status="RUNNING", attempt=1)
     records(capsys)
@@ -135,6 +135,40 @@ def test_failed_dynamic_preparation_closes_only_queued_tests(monkeypatch, capsys
     assert [e["finding_id"] for e in updates] == ["a.c:queued"]
     assert updates[0]["finding"]["dynamic"] == "skipped"
     assert "测试未执行" in updates[0]["details"]
+
+
+def test_dynamic_queue_uses_real_eligibility_and_preserves_review_errors(monkeypatch, capsys):
+    monkeypatch.setenv("VULSCAN_JOB_ID", "fixture")
+    ui_events.start(verify=True, dynamic=True)
+    ui_events.finding(dict(route_key="ini.js:decode", finding="vulnerable", error="invalid JSON",
+                           verification={"incomplete": True}), stage="verify", force=True)
+    ui_events.pipeline_findings([
+        dict(id="VULN-001", stage2_verdict="unverified", location=dict(file="ini.js", function="decode")),
+        dict(id="VULN-002", stage2_verdict="rejected", location=dict(file="ini.js", function="safe")),
+    ])
+    events = records(capsys)
+    assert events[1]["finding"]["model_review"] == "error"
+    pending, skipped = events[-2:]
+    assert pending["finding"]["dynamic"] == "pending" and pending["finding"]["dynamic_eligible"] is True
+    assert "复核未完成" in pending["finding"]["dynamic_details"]
+    assert "model_review" not in pending["finding"]
+    assert skipped["finding"]["dynamic"] == "skipped" and skipped["finding"]["dynamic_eligible"] is False
+
+
+def test_fast_step_carries_actual_report_results_and_known_zero(monkeypatch, capsys, tmp_path):
+    from core.step_report import step_context
+    monkeypatch.setenv("VULSCAN_JOB_ID", "fixture")
+    ui_events.start(verify=True, dynamic=True, context=False, enhance=False)
+    with step_context("parse", str(tmp_path)) as report:
+        report.summary = {"total_units": 0, "language": "javascript", "processing_level": "all"}
+        report.outputs = {"dataset_path": str(tmp_path / "dataset.json")}
+    events = records(capsys)
+    assert events[0]["stage_order"] == ["parse", "analyze", "verify", "build-output", "dynamic-test", "report"]
+    final = next(e for e in events if e["type"] == "stage.changed" and e["status"] == "success")
+    assert final["duration_seconds"] >= 0
+    assert final["summary"] == {"total_units": 0, "language": "javascript", "processing_level": "all"}
+    assert final["outputs"] == ["dataset.json"]
+    assert events[-2]["processed"] == events[-2]["total"] == 0
 
 
 def test_final_coverage_includes_optional_phase_failure(monkeypatch, capsys, tmp_path):

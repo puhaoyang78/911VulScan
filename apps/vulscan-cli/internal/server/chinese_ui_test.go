@@ -452,6 +452,12 @@ fi
 	if len(lines) != 3 {
 		t.Fatalf("expected scan+HTML report-data+summary calls, got %q", data)
 	}
+	for _, step := range []string{"report-data", "summary"} {
+		stage := job.Snapshot.Stages[step]
+		if stage == nil || stage.Status != "success" || stage.Duration == nil || stage.StartedAt == nil || stage.FinishedAt == nil {
+			t.Fatalf("supplemental %s has no completed presentation event: %+v", step, stage)
+		}
+	}
 	for i, line := range lines {
 		if !strings.Contains(line, "-P -m vulscan "+[]string{"scan", "report-data", "report"}[i]+" ") {
 			t.Errorf("unexpected subprocess order: %s", line)
@@ -491,6 +497,21 @@ func TestScanPageShowsSelectedTimeBudget(t *testing.T) {
 		}
 		if strings.Contains(out.String(), "可设置 VULSCAN_INVOKE_TIMEOUT") {
 			t.Error("web timeout guidance still directs users to a global environment setting")
+		}
+	}
+}
+
+func TestDisclosureTitleUsesAnExactFindingReference(t *testing.T) {
+	j := &Job{Snapshot: &jobSnapshot{Findings: map[string]*uiFinding{"a.js:decode": {ID: "a.js:decode", ReportID: "VULN-001", CWEName: "原型污染", Function: "decode"}}}}
+	for _, tc := range []struct{ heading, reference, want string }{
+		{"VULNERABLE", "VULN-001", "原型污染 · decode"},
+		{"unverified", "VULN-001", "原型污染 · decode"},
+		{"输入解析导致原型污染", "VULN-001", "输入解析导致原型污染"},
+		{"VULNERABLE", "unknown", "漏洞报告"},
+	} {
+		md := "> **漏洞编号：** " + tc.reference + "\n\n# 漏洞报告：" + tc.heading + "\n"
+		if got := disclosureTitleForJob(j, strings.NewReader(md)); got != tc.want {
+			t.Errorf("title=%q reference=%q: got %q, want %q", tc.heading, tc.reference, got, tc.want)
 		}
 	}
 }

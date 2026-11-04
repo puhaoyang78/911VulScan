@@ -202,7 +202,7 @@ func (d ReportData) HasFindingGroups() bool {
 // FindingCounts is a projection of recorded identities, not a sum of the
 // overlapping pipeline summary fields. Legacy rows stay explicitly unknown.
 func (d ReportData) FindingCounts() map[string]string {
-	out := map[string]string{"candidates": "—", "retained": "—", "excluded": "—", "reproduced": "—"}
+	out := map[string]string{"candidates": "—", "retained": "—", "excluded": "—", "review_incomplete": "—", "reproduced": "—"}
 	rows := d.Findings
 	if rows == nil {
 		for _, g := range d.FindingsByVerdict {
@@ -234,7 +234,7 @@ func (d ReportData) FindingCounts() map[string]string {
 		if f.Candidate != nil && *f.Candidate {
 			values["candidates"]++
 		}
-		if f.ModelReviewStatus == "retained" || f.ModelReviewStatus == "excluded" || f.ModelReviewStatus == "inconclusive" || f.ModelReviewStatus == "error" {
+		if f.ModelReviewStatus == "retained" || f.ModelReviewStatus == "excluded" || f.ModelReviewStatus == "inconclusive" || f.ModelReviewStatus == "error" || f.ModelReviewStatus == "interrupted" {
 			reviewKnown = true
 			values[f.ModelReviewStatus]++
 		}
@@ -251,6 +251,7 @@ func (d ReportData) FindingCounts() map[string]string {
 	if reviewKnown {
 		out["retained"] = fmt.Sprint(values["retained"])
 		out["excluded"] = fmt.Sprint(values["excluded"])
+		out["review_incomplete"] = fmt.Sprint(values["inconclusive"] + values["error"] + values["interrupted"])
 	}
 	if dynamicKnown {
 		out["reproduced"] = fmt.Sprint(values["reproduced"])
@@ -362,10 +363,12 @@ func (f Finding) InFindingNavigation() bool {
 func (f Finding) DisplayTitle() string {
 	title := strings.TrimSpace(f.Title)
 	switch strings.ToLower(title) {
-	case "vulnerable", "bypassable", "safe", "error", "候选问题（未提供标题）":
+	case "vulnerable", "bypassable", "safe", "error", "confirmed", "agreed", "unverified", "inconclusive", "候选问题（未提供标题）":
 		title = ""
 	}
-	if title != "" && len([]rune(title)) <= 96 {
+	if title != "" && title != strings.TrimSpace(f.AttackVector) &&
+		!strings.ContainsAny(title, "\r\n") && !strings.Contains(title, `\n`) &&
+		len([]rune(title)) <= 96 {
 		return title
 	}
 	location := f.Function

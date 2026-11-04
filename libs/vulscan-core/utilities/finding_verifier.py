@@ -57,7 +57,8 @@ from .llm import (
 # tool conversation), so it takes its output budget from the SAME constant as
 # simple_text's default — a private 4096 here is how PR #242's raise never
 # reached verify on any route.
-from .llm.helpers import DEFAULT_MAX_TOKENS
+from .llm.helpers import DEFAULT_MAX_TOKENS, MAX_TOOL_ARGUMENT_RETRIES
+from .llm.adapter import LLMToolArgumentsError
 from .json_extract import extract_json_object
 
 # Null logger that discards all messages (used when no logger provided)
@@ -445,6 +446,7 @@ class FindingVerifier:
         self.tool_executor = ToolExecutor(index)
         self.logger = logger or _null_logger
         self._use_logger = logger is not None
+        self._finding_context = threading.local()
 
         # Build typed tool defs once per verifier instance.
         self._tool_defs: list[ToolDef] = [
@@ -519,6 +521,7 @@ class FindingVerifier:
         # #697: the dropped-block per-kind accumulator for this call
         # (the #625/#660 diagnostic rides every record like the usage does)
         per_turn_dropped: dict[str, int] = {}
+        argument_retries = 0
 
         while iterations < MAX_ITERATIONS:
             iterations += 1
@@ -543,6 +546,20 @@ class FindingVerifier:
                     messages=messages,
                 )
             except Exception as exc:
+                if isinstance(exc, LLMToolArgumentsError) and argument_retries < MAX_TOOL_ARGUMENT_RETRIES:
+                    turn = error_path_turn(exc)
+                    total_input_tokens += turn.input_tokens
+                    total_output_tokens += turn.output_tokens
+                    per_turn_usage_details.extend(turn.entries)
+                    argument_retries += 1
+                    messages.append(Message(role="user", content=[TextBlock(exc.feedback)]))
+                    from core import ui_events
+                    message = f"工具 {exc.tool_name} 参数格式错误，反馈后重试（{argument_retries}/{MAX_TOOL_ARGUMENT_RETRIES}）"
+                    route = getattr(self._finding_context, "route", "")
+                    print(f"[Verify] {route + ': ' if route else ''}{message}", file=sys.stderr)
+                    ui_events.emit("activity", stage="verify", status="retrying",
+                                   finding_id=route, attempt=argument_retries, message=message, details=str(exc))
+                    continue
                 # Only LLMResponseError carries the raising turn's usage;
                 # connection/auth/limit errors contribute nothing (and a
                 # turn-1 failure with zero accumulated usage writes NO
@@ -1061,6 +1078,7 @@ class FindingVerifier:
         self.tracker.start_unit_tracking()
         unit_start = time.monotonic()
         detail = ""
+        self._finding_context.route = route_key
         try:
             code = code_by_route.get(route_key, "")
             verification = self.verify_result(
@@ -1129,6 +1147,8 @@ class FindingVerifier:
             result["verification"]["incomplete"] = True
             result["verification_note"] = f"Verification errored: {err_msg}"
             print(f"[Verify] ERROR {route_key}: {err_msg}", file=sys.stderr, flush=True)
+        finally:
+            self._finding_context.route = ""
 
         unit_elapsed = time.monotonic() - unit_start
         from core import ui_events

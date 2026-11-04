@@ -444,6 +444,7 @@ func (s *Server) recoverJobs() {
 			}
 			f.Close()
 		}
+		job.restoreStageReports()
 		s.mgr.add(job)
 	}
 }
@@ -1455,7 +1456,7 @@ func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		name := filepath.Base(p)
-		label := disclosureTitle(f)
+		label := disclosureTitleForJob(job, f)
 		f.Close()
 		if label == "" {
 			label = disclosureLabel(name)
@@ -1522,7 +1523,7 @@ func (s *Server) handleDisclosure(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mdJSON, _ := json.Marshal(string(data))
-	title := disclosureTitle(bytes.NewReader(data))
+	title := disclosureTitleForJob(job, bytes.NewReader(data))
 	if title == "" {
 		title = disclosureLabel(filename)
 	}
@@ -1536,6 +1537,54 @@ func (s *Server) handleDisclosure(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// The scanner's leading reference binds a document to its saved finding. Use
+// that finding to name generic or oversized model headings, as in HTML reports.
+func disclosureTitleForJob(job *Job, reader io.ReadSeeker) string {
+	title := disclosureTitle(reader)
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
+		return title
+	}
+	scanner := bufio.NewScanner(reader)
+	reference := ""
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "#") {
+			break
+		}
+		for _, prefix := range []string{"> **漏洞编号：**", "> **所属发现：**"} {
+			if strings.HasPrefix(line, prefix) {
+				reference = strings.TrimSpace(strings.TrimPrefix(line, prefix))
+				break
+			}
+		}
+		if reference != "" {
+			break
+		}
+	}
+	job.mu.Lock()
+	var match *uiFinding
+	if reference != "" && job.Snapshot != nil {
+		for _, f := range job.Snapshot.Findings {
+			if f.ReportID == reference || f.ID == reference {
+				if match != nil {
+					match = nil
+					break
+				}
+				copy := *f
+				match = &copy
+			}
+		}
+	}
+	job.mu.Unlock()
+	if match != nil {
+		return (report.Finding{Title: title, CWEName: match.CWEName, File: match.File, Function: match.Function}).DisplayTitle()
+	}
+	if title != "" && (report.Finding{Title: title}).DisplayTitle() != strings.TrimSpace(title) {
+		return "漏洞报告"
+	}
+	return title
 }
 
 // disclosureTitle reads the first markdown heading and returns the vulnerability title.
@@ -1986,9 +2035,9 @@ func (s *Server) runJob(job *Job) {
 
 	// If still missing, try explicit report generation (non-fatal).
 	if !fileExists(reportPath) {
-		job.runnerEvent("report", "running", "正在生成补充 HTML 报告", "")
+		job.runnerEvent("report-data", "running", "正在生成补充 HTML 报告", "")
 		if err := s.generateHTMLReport(job.ctx, outDir, reportPath, job.addLog); err != nil {
-			job.runnerEvent("report", "error", "补充 HTML 报告生成失败", err.Error())
+			job.runnerEvent("report-data", "error", "补充 HTML 报告生成失败", err.Error())
 			if job.ctx.Err() != nil {
 				return
 			}
@@ -2006,6 +2055,8 @@ func (s *Server) runJob(job *Job) {
 			}
 			job.addLog("[report] 警告：" + err.Error())
 			// Continue — mark done only if we found something.
+		} else {
+			job.runnerEvent("report-data", "success", "HTML 报告已生成", "report.html")
 		}
 	}
 
@@ -2032,11 +2083,11 @@ func (s *Server) runJob(job *Job) {
 		}
 	}
 	if summaryPath == "" {
-		job.runnerEvent("report", "running", "正在生成补充摘要", "")
+		job.runnerEvent("summary", "running", "正在生成补充摘要", "")
 		// Non-fatal — requires API key / LLM.
 		sp := filepath.Join(outDir, "SUMMARY_REPORT.md")
 		if err := s.generateSummary(job.ctx, outDir, sp, job.llmConfig, job.keyEnv, job.addLog); err != nil {
-			job.runnerEvent("report", "partial", "补充摘要生成失败", err.Error())
+			job.runnerEvent("summary", "partial", "补充摘要生成失败", err.Error())
 			if job.ctx.Err() != nil {
 				return
 			}
@@ -2052,19 +2103,11 @@ func (s *Server) runJob(job *Job) {
 			job.addLog("[report] 警告：未生成摘要：" + err.Error())
 		} else {
 			summaryPath = sp
+			job.runnerEvent("summary", "success", "扫描摘要已生成", "SUMMARY_REPORT.md")
 		}
 	}
 
 	disclosurePaths := findDisclosures(outDir)
-	job.mu.Lock()
-	if job.Snapshot != nil {
-		if st := job.Snapshot.Stages["report"]; st != nil && st.Status == "running" {
-			st.Status = "success"
-			st.Activity = "报告整理完成"
-		}
-	}
-	job.mu.Unlock()
-
 	job.setDone(reportPath, summaryPath, disclosurePaths)
 }
 

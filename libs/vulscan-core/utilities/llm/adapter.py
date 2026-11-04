@@ -333,6 +333,32 @@ class LLMResponseError(LLMError):
 
 
 
+class LLMToolArgumentsError(LLMResponseError):
+    """A complete reply whose tool arguments cannot be decoded as an object.
+
+    Callers may request a bounded correction. The rejected call must never be
+    executed; its usage is still billed through the normal error-path channel.
+    """
+
+    def __init__(self, tool_name: str, reason: str, **usage):
+        self.tool_name = tool_name
+        self.reason = reason
+        super().__init__(
+            f"工具参数不是有效 JSON 对象（{tool_name!r}）：{reason}",
+            **usage,
+        )
+
+    @property
+    def feedback(self) -> str:
+        return (
+            f"上一轮工具 {self.tool_name!r} 的参数未通过 JSON 解析：{self.reason}。"
+            "该轮所有工具调用均未执行。请重新发送本轮所需的完整工具调用，"
+            "参数必须为符合工具 schema 的 JSON 对象，包含所有必填字段；"
+            "字符串使用双引号，正确转义代码中的引号、反斜杠和换行。"
+            "不要使用 Markdown 围栏、尾随逗号或省略号；说明保持简洁。"
+        )
+
+
 class LLMRefusalError(LLMResponseError):
     """Provider refused to answer or content-filtered the response.
 

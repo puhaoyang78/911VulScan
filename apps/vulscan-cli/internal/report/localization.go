@@ -105,6 +105,10 @@ func (f Finding) ModelReviewLabel() string {
 		return "无法确定"
 	case "pending":
 		return "待复核"
+	case "interrupted":
+		return "复核未完成"
+	case "not_requested":
+		return "未请求复核"
 	case "unreviewed":
 		return "未记录复核"
 	default:

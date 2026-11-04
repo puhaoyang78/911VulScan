@@ -22,6 +22,25 @@ func readableFinding() Finding {
 	}
 }
 
+func TestIncompleteReviewCountsStayDistinctFromReproduction(t *testing.T) {
+	yes := true
+	f := Finding{ID: "ini.js:decode", Candidate: &yes, ModelReviewStatus: "error", DynamicTestStatus: "CONFIRMED"}
+	d := ReportData{Findings: []Finding{f, f}}
+	counts := d.FindingCounts()
+	for key, want := range map[string]string{"candidates": "1", "retained": "0", "excluded": "0", "review_incomplete": "1", "reproduced": "1"} {
+		if counts[key] != want {
+			t.Errorf("%s: want %s, got %s", key, want, counts[key])
+		}
+	}
+	var out bytes.Buffer
+	if err := RenderReskin(d, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "未完成 1") {
+		t.Fatal("report concealed the failed review")
+	}
+}
+
 // Both layouts and both reskin grouping paths must receive the same details.
 func TestFindingDetailsRenderAcrossLayouts(t *testing.T) {
 	for _, tc := range []struct {
@@ -158,5 +177,13 @@ func TestPayloadTitlesAndDiagnosticSummaryStayReadable(t *testing.T) {
 	f.Title = "SQL 注入"
 	if f.DisplayTitle() != f.Title {
 		t.Fatal("real short title was replaced")
+	}
+	for _, title := range []string{"key=value", "first\nsecond", `first\nsecond`} {
+		f.Title = title
+		f.AttackVector = "key=value"
+		f.CWEName = "输入验证不当"
+		if f.DisplayTitle() != "输入验证不当 · jwtmain" {
+			t.Errorf("test input %q became a report title", title)
+		}
 	}
 }
