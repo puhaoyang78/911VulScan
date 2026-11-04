@@ -13,6 +13,9 @@ import tempfile
 import tomllib
 
 from utilities.docker_build.errors import DockerBuildEnvironmentError
+from utilities.docker_build.downloads import (
+    build_with_downloads, download_diagnostic, is_download_failure, render_downloads,
+)
 from utilities.docker_build.images import ensure_base_images, is_registry_failure
 from utilities.file_io import UnsafeRepoFile, read_repo_file
 
@@ -185,7 +188,7 @@ def plan_for_repository(language: str, repo_root: str | None,
                 raise ValueError("无法确定 Go 版本约束，沿用逐条构建")
             version = declared.get("go", "1.26")
             base = _prefer_cached([f"golang:{version}-alpine", f"golang:{version}"], available)
-            return _plan("go", base, contents, "go mod download",
+            return _plan("go", base, contents, "go mod download all",
                          "依赖已下载到 /go/pkg/mod，GOTOOLCHAIN=local。保留目标 go.mod/go.sum，"
                          "不要在已有模块内再次 go mod init。复制真实项目后在构建阶段编译；"
                          "运行时不下载、不编译。", "/src")
@@ -201,14 +204,16 @@ def _image_present(tag: str, runner) -> bool:
 
 
 def ensure_dependency_image(plan: DependencyPlan, repo_root: str, runner,
-                            proxy_arguments=(), build_timeout: int = 900,
+                            proxy: str | None = None, build_timeout: int = 900,
                             pull_timeout: int = 600) -> str | None:
     if _image_present(plan.tag, runner):
+        from utilities.docker_build.images import log_download
+        log_download(f"共享依赖镜像缓存命中：{plan.tag}", status="success")
         return plan.tag
     from core import ui_events
     ui_events.emit("activity", stage="dynamic-test", phase="environment", status="running",
                    message="准备共享依赖镜像", details=plan.tag)
-    ensure_base_images([plan.base_image], runner, timeout=pull_timeout)
+    ensure_base_images([plan.base_image], runner, timeout=pull_timeout, proxy=proxy)
     context = tempfile.mkdtemp(prefix="vulscan-deps-")
     try:
         for name, text in plan.inputs:
@@ -216,19 +221,21 @@ def ensure_dependency_image(plan: DependencyPlan, repo_root: str, runner,
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
         dockerfile = Path(context) / "Dockerfile"
-        dockerfile.write_text(_dockerfile(plan), encoding="utf-8")
+        dockerfile.write_text(render_downloads(_dockerfile(plan)), encoding="utf-8")
         argv = ["docker", "build", "--builder", "default", "-t", plan.tag,
-                "--label", "io.vulscan.dependencies=1", *proxy_arguments,
+                "--label", "io.vulscan.dependencies=1",
                 "-f", str(dockerfile), context]
-        out, err, code, timed = runner(argv, timeout=build_timeout,
-                                      on_output=ui_events.command_output("build"))
+        out, err, code, timed = build_with_downloads(
+            argv, runner, proxy=proxy, timeout=build_timeout,
+            on_output=ui_events.command_output("build"))
         if code == 0 and not timed:
             print(f"  依赖镜像已就绪：{plan.tag}", file=sys.stderr)
             ui_events.emit("activity", stage="dynamic-test", phase="environment", status="success",
                            message="共享依赖镜像已就绪", details=plan.tag)
             return plan.tag
-        diagnostic = "\n".join(part for part in (out, err) if part).strip()
-        if timed or is_registry_failure(diagnostic) or "no space left on device" in diagnostic.lower():
+        diagnostic = download_diagnostic("\n".join(part for part in (out, err) if part)).strip()
+        if (timed or is_registry_failure(diagnostic) or is_download_failure(diagnostic)
+                or "no space left on device" in diagnostic.lower()):
             raise DockerBuildEnvironmentError(
                 f"依赖镜像准备失败（{'构建超时' if timed else '构建环境错误'}）：{diagnostic[-2000:]}")
         print(f"  依赖镜像构建失败，沿用逐条安装：{diagnostic[-2000:]}", file=sys.stderr)

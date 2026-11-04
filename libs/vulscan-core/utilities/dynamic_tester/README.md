@@ -18,7 +18,7 @@ python -m utilities.dynamic_tester /path/to/pipeline_output.json \
   --repo-path /path/to/repository --output-dir /tmp/dynamic-results
 ```
 
-网页的“Docker 构建代理 IP / 代理端口”均为可选项：全部留空时使用 Docker 现有网络配置；本机 mihomo 可填 `127.0.0.1` 和 HTTP/mixed 端口（例如 `7890`）。命令行 `scan` 和 `dynamic-test` 对应 `--docker-proxy http://127.0.0.1:7890`。代理只供构建期间下载依赖，不传入运行漏洞测试的容器。环回代理通过仅在构建期间存在的 Docker bridge 转发访问，无需修改 mihomo 配置或重启 Docker。基础镜像拉取仍使用 Docker daemon 自身的网络配置。
+网页的“Docker 下载代理 IP / 代理端口”均为可选项，命令行对应 `--docker-proxy http://127.0.0.1:7890`。镜像、共享依赖镜像和 C/C++ 工具链优先复用本机缓存。缺失镜像先从 DaoCloud 拉取；pip、npm、Go、apt、apk 优先使用 TUNA、npmmirror、goproxy.cn 或阿里云。国内源失败后，才通过此代理访问官方源，最多切换一次并共用原有总时间预算。未配置代理时，国内源失败会明确报错。官方基础镜像由当前任务通过代理下载、校验摘要后导入 Docker，无需修改 daemon 代理或重启 Docker；原始镜像版本、锁文件及包校验保持不变。环回代理只在依赖构建接管时经 Docker bridge 转发，代理不传入运行漏洞测试的容器。
 
 ## 构建环境
 

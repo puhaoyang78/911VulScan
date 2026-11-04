@@ -47,9 +47,9 @@ services:
     assert "unused-image:huge" not in dockerfile_bases(str(tmp_path), compose=True)
 
 
-def test_dockerfile_bases_ignores_variable_interpolation(tmp_path):
+def test_dockerfile_bases_resolves_declared_default_without_daemon_network(tmp_path):
     _write(tmp_path, "Dockerfile", "ARG BASE=python:3.12-slim\nFROM ${BASE}\n")
-    assert dockerfile_bases(str(tmp_path)) == ()
+    assert dockerfile_bases(str(tmp_path)) == ("python:3.12-slim",)
 
 
 def test_available_images_hides_untagged_entries():
@@ -69,10 +69,10 @@ def test_ensure_base_images_pulls_only_what_is_missing():
     result = ensure_base_images(("python:3.12-slim", "golang:1.26-alpine"), runner, timeout=30)
     assert result.cached == ("python:3.12-slim",)
     assert result.pulled == ("golang:1.26-alpine",)
-    assert [c for c in calls if c[0] == "docker" and c[1] == "pull"] == [["docker", "pull", "golang:1.26-alpine"]]
+    assert [c for c in calls if c[0] == "docker" and c[1] == "pull"] == [["docker", "pull", "m.daocloud.io/docker.io/library/golang:1.26-alpine"]]
 
 
-def test_ensure_base_images_failure_explains_the_daemon_boundary():
+def test_missing_proxy_reports_mirror_failure_without_official_attempt():
     def runner(command, **kwargs):
         if command[:3] == ["docker", "image", "inspect"]:
             return "", "No such image", 1, False
@@ -81,7 +81,7 @@ def test_ensure_base_images_failure_explains_the_daemon_boundary():
         ensure_base_images(("python:3.11-slim",), runner, timeout=10)
     message = str(excinfo.value)
     assert "python:3.11-slim" in message
-    assert "守护进程" in message, "必须说明镜像拉取不受构建代理控制"
+    assert "尚未配置 Docker 代理" in message and "未访问官方源" in message
 
 
 @pytest.mark.parametrize("text", [
@@ -107,3 +107,9 @@ def test_image_failure_kind_is_not_retried_and_labelled():
     assert execution.retryable is False
     assert execution.infrastructure_error is True
     assert execution.failure_kind == IMAGE
+
+
+def test_unknown_base_variable_is_reported_before_uncontrolled_daemon_pull(tmp_path):
+    _write(tmp_path, 'Dockerfile', 'ARG BASE\nFROM ${BASE}\n')
+    with pytest.raises(DockerBuildEnvironmentError,match='基础镜像变量'):
+        dockerfile_bases(str(tmp_path))

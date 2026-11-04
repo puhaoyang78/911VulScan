@@ -145,9 +145,11 @@ def test_timeout_stops_cli_and_descendant_producer(tmp_path, monkeypatch, manage
         monkeypatch.delenv("VULSCAN_DOCKER_OWNER", raising=False)
     marker = tmp_path / "late-write"
     child_code = f"import time; time.sleep(2); open({str(marker)!r},'w').write('leaked'); time.sleep(30)"
-    code = ("import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c'," +
+    # This stdlib-only fixture must not spend its 0.3s deadline importing the
+    # user's site/.pth hooks before it can create the descendant under test.
+    code = ("import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-S','-c'," +
             repr(child_code) + "]); print(p.pid,flush=True); time.sleep(30)")
-    out, err, status, timed = executor._run_command([sys.executable, "-c", code], 0.3)
+    out, err, status, timed = executor._run_command([sys.executable, "-S", "-c", code], 0.3)
     assert timed and status == -1
     pid = int(out.strip())
     # The OS may reap the child between checking its PID and reading its status.

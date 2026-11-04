@@ -45,7 +45,7 @@ def test_go_plan_reads_toolchain_version(tmp_path):
     root = _repo(tmp_path, {"go.mod": "module x\n\ngo 1.22.1\n", "go.sum": ""})
     plan = plan_for_repository("go", str(root))
     assert plan.base_image.startswith("golang:1.22")
-    assert plan.install_command == "go mod download"
+    assert plan.install_command == "go mod download all"
 
 
 def test_unsupported_or_manifestless_repos_have_no_plan(tmp_path):
@@ -78,7 +78,7 @@ def test_existing_image_skips_build(tmp_path):
     assert all("build" not in argv for argv in calls)
 
 
-def test_build_uses_manifests_and_proxy_args(tmp_path):
+def test_build_uses_manifests_and_keeps_proxy_idle_on_domestic_success(tmp_path):
     root = _repo(tmp_path, {"requirements.txt": "flask\n"})
     plan = plan_for_repository("python", str(root))
     seen = {}
@@ -92,11 +92,14 @@ def test_build_uses_manifests_and_proxy_args(tmp_path):
         return "", "", 0, False
 
     tag = ensure_dependency_image(plan, str(root), runner,
-                                  proxy_arguments=("--build-arg", "HTTP_PROXY=http://10.0.0.1:8080"))
+                                  proxy="http://10.0.0.1:8080")
     assert tag == plan.tag
     assert seen["dockerfile"].startswith(f"FROM {plan.base_image}")
     assert "requirements.txt" in seen["dockerfile"]
-    assert "HTTP_PROXY=http://10.0.0.1:8080" in seen["argv"]
+    assert "HTTP_PROXY=http://10.0.0.1:8080" not in seen["argv"]
+    assert "HTTP_PROXY=" in seen["argv"]
+    assert "VULSCAN_DOWNLOAD_SOURCE=domestic" in seen["argv"]
+    assert "pypi.tuna.tsinghua.edu.cn" in seen["dockerfile"]
 
 
 def test_build_failure_degrades_without_raising(tmp_path):
@@ -106,7 +109,7 @@ def test_build_failure_degrades_without_raising(tmp_path):
     def runner(argv, **kwargs):
         if argv[1] == "image":
             return ("", "no image", 1, False) if argv[-1] == plan.tag else ("base", "", 0, False)
-        return "", "ERROR: No matching distribution found for project-only-dependency", 1, False
+        return "", "error: expected declaration before token", 1, False
 
     assert ensure_dependency_image(plan, str(root), runner) is None
 

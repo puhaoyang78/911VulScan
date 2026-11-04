@@ -27,7 +27,7 @@ def main():
 
     parser.add_argument("--repo-path", default=None, help="真实目标仓库路径（C/C++ 验证必需）")
     from utilities.docker_build import parse_docker_proxy
-    parser.add_argument("--docker-proxy", type=parse_docker_proxy, help="可选构建代理：http://IP:端口")
+    parser.add_argument("--docker-proxy", type=parse_docker_proxy, help="镜像和依赖下载备用代理：http://IP:端口")
 
     args = parser.parse_args()
 

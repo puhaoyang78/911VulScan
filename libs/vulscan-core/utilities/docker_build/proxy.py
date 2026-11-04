@@ -46,7 +46,7 @@ def parse_docker_proxy(value: str | None) -> str | None:
 
 def describe_proxy(proxy: str | None) -> str:
     """日志用的一句话描述；从不回显凭据（本模块不接受凭据）。"""
-    return f"构建代理 {proxy}" if proxy else "未启用构建代理（直连）"
+    return f"备用下载代理 {proxy}（国内源失败时启用）" if proxy else "未配置备用下载代理"
 
 
 def probe_proxy(proxy: str | None, timeout: float = 5.0, *, target: str | None = None) -> None:

@@ -1860,7 +1860,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Enable Docker-isolated dynamic testing (off by default)")
     from utilities.docker_build import parse_docker_proxy
     scan_p.add_argument("--docker-proxy", type=parse_docker_proxy,
-                        help="Optional HTTP proxy for Docker build dependencies: http://IP:port")
+                        help="Fallback HTTP proxy for Docker images and dependencies: http://IP:port")
     scan_p.add_argument("--no-skip-tests", action="store_true", help="Include test files in parsing (default: tests are skipped)")
     scan_p.add_argument("--library-mode", action="store_true",
                         help="Seed the exported public API as entry points (for libraries with no main/route/CLI entry point)")
@@ -2112,7 +2112,7 @@ def build_parser() -> argparse.ArgumentParser:
     dt_p.add_argument("--max-retries", type=int, default=3,
                       help="Max retries per finding on error (default: 3)")
     dt_p.add_argument("--docker-proxy", type=parse_docker_proxy,
-                      help="Optional HTTP proxy for Docker build dependencies: http://IP:port")
+                      help="Fallback HTTP proxy for Docker images and dependencies: http://IP:port")
     dt_p.add_argument(
         "--llm-config",
         default=None,

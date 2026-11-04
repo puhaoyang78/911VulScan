@@ -74,21 +74,24 @@ def test_toolchain_is_reused_when_the_image_exists():
     assert len(calls) == 1 and calls[0][:3] == ["docker", "image", "inspect"]
 
 
-def test_toolchain_is_built_once_with_proxy_and_shared_label():
+def test_toolchain_is_built_once_with_shared_label_and_proxy_idle():
     calls = []
     def runner(command, **kwargs):
         calls.append((command, kwargs))
         if command[:3] == ["docker", "image", "inspect"]:
-            return "", "Error: No such image", 1, False
+            return ("", "Error: No such image", 1, False) if command[-1].startswith('vulscan/') else ("base", "", 0, False)
         return "", "done", 0, False
 
     ensure_toolchain(native_toolchain("c"), runner,
-                     proxy_arguments=["--build-arg", "HTTP_PROXY=http://10.0.0.2:3128"],
+                     proxy="http://10.0.0.2:3128",
                      timeout=600)
-    build, kwargs = calls[1]
+    builds = [(command, kwargs) for command, kwargs in calls if command[:2] == ["docker", "build"]]
+    assert len(builds) == 1
+    build, kwargs = builds[0]
     assert build[:4] == ["docker", "build", "--builder", "default"]
     assert "io.vulscan.toolchain=1" in build
-    assert "HTTP_PROXY=http://10.0.0.2:3128" in build
+    assert "HTTP_PROXY=http://10.0.0.2:3128" not in build
+    assert "HTTP_PROXY=" in build
     assert kwargs["timeout"] == 600
     # 共享镜像绝不能带按发现回收的 owner/run 标签。
     assert not any("io.vulscan.owner=" in part for part in build)
@@ -97,7 +100,7 @@ def test_toolchain_is_built_once_with_proxy_and_shared_label():
 def test_toolchain_failure_is_an_environment_error():
     def runner(command, **kwargs):
         if command[:3] == ["docker", "image", "inspect"]:
-            return "", "No such image", 1, False
+            return ("", "No such image", 1, False) if command[-1].startswith('vulscan/') else ("base", "", 0, False)
         return "", "failed to solve: network unreachable", 1, False
     with pytest.raises(DockerBuildEnvironmentError, match="工具链镜像"):
         ensure_toolchain(native_toolchain("c"), runner, timeout=10)
@@ -131,25 +134,23 @@ def test_preflight_reports_missing_buildx(docker_present):
         preflight_module.verify_build_environment(None, runner)
 
 
-def test_preflight_accepts_a_reachable_proxy(docker_present):
-    import socket
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
-    try:
-        port = listener.getsockname()[1]
-        runner = _runner(("26.1.3", "", 0, False), ("v0.13.2", "", 0, False))
-        report = preflight_module.verify_build_environment(f"http://127.0.0.1:{port}", runner)
-        assert report["proxy"] == f"http://127.0.0.1:{port}"
-        assert report["server_version"] == "26.1.3"
-    finally:
-        listener.close()
-
-
-def test_preflight_rejects_an_unreachable_proxy(docker_present):
+def test_preflight_accepts_proxy_format_without_network(docker_present, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("缓存和国内源尚未失败，不得探测代理")
+    monkeypatch.setattr('utilities.docker_build.proxy.probe_proxy', forbidden)
     runner = _runner(("26.1.3", "", 0, False), ("v0.13.2", "", 0, False))
-    with pytest.raises(DockerBuildEnvironmentError, match="构建代理无法连接"):
-        preflight_module.verify_build_environment("http://127.0.0.1:9", runner)
+    report = preflight_module.verify_build_environment("http://127.0.0.1:7890", runner)
+    assert report["proxy"] == "http://127.0.0.1:7890"
+    assert report["server_version"] == "26.1.3"
+
+
+def test_preflight_defers_proxy_connection_until_domestic_failure(docker_present, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("预检和国内源成功时不得连接备用代理")
+    monkeypatch.setattr('utilities.docker_build.proxy.probe_proxy', forbidden)
+    runner = _runner(("26.1.3", "", 0, False), ("v0.13.2", "", 0, False))
+    report = preflight_module.verify_build_environment("http://127.0.0.1:9", runner)
+    assert report['proxy'] == 'http://127.0.0.1:9'
 
 
 # ------------------------------------------------------------------ failure taxonomy

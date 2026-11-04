@@ -47,7 +47,7 @@ FAILURE_LABELS = {
 DEFAULT_BUILD_TIMEOUT = 900       # 秒；首次构建需下载语言依赖
 DEFAULT_RUN_TIMEOUT = 120         # 秒；容器内执行
 DEFAULT_TOOLCHAIN_TIMEOUT = 1800  # 秒；工具链镜像一次性构建（含基础镜像拉取）
-DEFAULT_PULL_TIMEOUT = 600        # 秒；基础镜像拉取（由守护进程完成）
+DEFAULT_PULL_TIMEOUT = 600        # 秒；基础镜像准备（国内拉取与代理导入共用）
 
 _ENV_NAMES = {
     "build_timeout": "VULSCAN_DOCKER_BUILD_TIMEOUT",

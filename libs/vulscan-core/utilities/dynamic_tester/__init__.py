@@ -151,7 +151,7 @@ def _retry_stop_reason(execution) -> str:
     hint = {
         BUILD_TIMEOUT: "容器尚未执行，请为 Docker 构建配置代理或检查网络",
         TOOLCHAIN: "共享工具链镜像无法准备，属于宿主环境问题",
-        IMAGE: "基础镜像无法拉取，请为 Docker 守护进程配置代理或预先拉取",
+        IMAGE: "国内镜像源和任务代理未能完成拉取，请检查下载日志或预先拉取",
         ENVIRONMENT: "Docker 环境不可用，属于宿主环境问题",
         RUN_TIMEOUT: "容器执行超时",
         CLEANUP: "Docker 资源回收失败，需要人工核对",
@@ -180,7 +180,7 @@ def run_dynamic_tests(
         checkpoint_path: Path to checkpoint directory for resume support.
         repo_path: Repository root, staged under repository/ with its headers,
             modules, resources and manifests, excluding credentials and caches.
-        docker_proxy: Optional http://IP:port proxy for build dependencies.
+        docker_proxy: Optional http://IP:port fallback proxy for images and build dependencies.
 
     Returns:
         List of DynamicTestResult objects
@@ -307,7 +307,7 @@ def run_dynamic_tests(
                 and not should_skip_for_language(filename, repo_info["language"])[0]):
             pending_tests.append(finding)
     if pending_tests:
-        # 预检：守护进程、buildx 与代理可达性。放在任何模型调用之前，宿主问题只报
+        # 预检：守护进程、buildx 与备用代理格式。放在任何模型调用之前，宿主问题只报
         # 一次并给出可操作的说明，而不是让每条发现各自耗尽构建预算。
         from utilities.docker_build.preflight import verify_build_environment
         from utilities.dynamic_tester.docker_executor import _run_command
@@ -320,8 +320,7 @@ def run_dynamic_tests(
             probe_registry_or_raise(registry)
         dynamic_test_binding = registry.get("dynamic_test")
         from utilities.docker_build import (
-            available_images, build_proxy_arguments, dockerfile_bases,
-            ensure_base_images, ensure_toolchain, native_toolchain,
+            available_images, ensure_toolchain, native_toolchain,
         )
         from utilities import docker_resources
         from utilities.dynamic_tester.test_generator import resolve_native_language
@@ -340,11 +339,10 @@ def run_dynamic_tests(
         if dependency_plan is not None:
             dependency_image = None
             with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
-                with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
-                    dependency_image = ensure_dependency_image(
-                        dependency_plan, repo_path, _run_command,
-                        proxy_arguments=proxy_args, build_timeout=policy.build_timeout,
-                        pull_timeout=policy.pull_timeout)
+                dependency_image = ensure_dependency_image(
+                    dependency_plan, repo_path, _run_command,
+                    proxy=docker_proxy, build_timeout=policy.build_timeout,
+                    pull_timeout=policy.pull_timeout)
             if dependency_image:
                 repo_info["deps_image"] = dependency_image
                 repo_info["deps_hint"] = dependency_plan.prompt_note
@@ -359,11 +357,8 @@ def run_dynamic_tests(
         ) for f in pending_tests):
             toolchain = native_toolchain("c")
             with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
-                with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
-                    ensure_base_images(dockerfile_bases(toolchain.context), _run_command,
-                                       timeout=policy.pull_timeout)
-                    ensure_toolchain(toolchain, _run_command, proxy_arguments=proxy_args,
-                                     timeout=policy.toolchain_timeout)
+                ensure_toolchain(toolchain, _run_command, proxy=docker_proxy,
+                                 timeout=policy.toolchain_timeout, pull_timeout=policy.pull_timeout)
 
         print(f"  Docker 构建环境：server {environment['server_version']}，"
               f"{environment['proxy_description']}", file=sys.stderr)

@@ -36,7 +36,7 @@ func init() {
 	dynamicTestCmd.Flags().IntVar(&dynamicTestMaxRetries, "max-retries", 3, "每项发现出错后的最大重试次数")
 	dynamicTestCmd.Flags().StringVar(&dynamicTestLLMConfig, "llm-config", "", "模型配置名称（默认使用配置文件的 default_llm 或内置 vulscan-default）")
 	dynamicTestCmd.Flags().StringVar(&dynamicTestRepoPath, "repo-path", "", "真实目标仓库路径（C/C++ 验证必需；默认使用活动项目）")
-	dynamicTestCmd.Flags().StringVar(&dynamicTestDockerProxy, "docker-proxy", "", "可选 Docker 构建代理：http://IP:端口")
+	dynamicTestCmd.Flags().StringVar(&dynamicTestDockerProxy, "docker-proxy", "", "Docker 镜像和依赖下载备用代理：http://IP:端口")
 }
 
 func runDynamicTest(cmd *cobra.Command, args []string) {

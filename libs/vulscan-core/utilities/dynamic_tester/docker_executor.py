@@ -33,7 +33,6 @@ from utilities.docker_build import (
     TOOLCHAIN,
     BuildPolicy,
     DockerBuildEnvironmentError,
-    build_proxy_arguments,
     dockerfile_bases,
     ensure_base_images,
     ensure_toolchain,
@@ -41,6 +40,8 @@ from utilities.docker_build import (
     native_toolchain,
     render_native_dockerfile,
 )
+from utilities.docker_build.downloads import build_with_downloads, prepare_downloads
+from utilities.docker_build.images import replace_base_references
 from utilities.dynamic_tester.diagnostics import bounded_diagnostic
 from utilities.dynamic_tester.source_context import stage_repository
 
@@ -683,7 +684,7 @@ def run_single_container(
         build_timeout: Max seconds for docker build (default: policy)
         source_file: Vulnerable source file to stage into the build context
         repo_path: Repository root staged under ``repository/``
-        docker_proxy: Optional ``http://IP:port`` proxy for build dependencies
+        docker_proxy: Optional ``http://IP:port`` fallback proxy for images and build dependencies
         policy: Time budgets; resolved from the environment when omitted
 
     Returns:
@@ -724,27 +725,25 @@ def run_single_container(
         infrastructure_phase = False  # Generated staging errors remain eligible for repair.
         _write_test_files(work_dir, generation, source_file=source_file, repo_path=repo_path)
         _label_compose(work_dir, run_id)
+        prepare_downloads(work_dir, compose=bool(generation.get("docker_compose") and generation.get("needs_attacker_server")))
         receipt = _staged_artifacts(work_dir, source_file)
         result.reproduction.update(receipt)
 
         infrastructure_phase = True
         with docker_resources.build_admission(timeout=build_timeout, runner=_run_command):
             docker_resources.bind_run_daemon(run_id, runner=_run_command)
-            with build_proxy_arguments(docker_proxy, _run_command) as proxy_args:
-                # 共享工具链在每条发现的构建之前准备好：一次下载，后续只复用。
-                environment_failure = TOOLCHAIN
-                _prepare_native_toolchain(generation, proxy_args, policy)
-                # 基础镜像由守护进程拉取，构建代理管不到；缺失时在这里失败并说明，
-                # 而不是让模型重写三次仍然拉不下来。
-                environment_failure = IMAGE
-                _prepare_base_images(
-                    work_dir, policy,
-                    compose=bool(generation.get("docker_compose") and generation.get("needs_attacker_server")),
-                )
-                environment_failure = None
-                result = _execute_staged(generation, work_dir, run_id, safe_id, image_tag,
-                                         network_name, container_timeout, build_timeout,
-                                         proxy_args)
+            environment_failure = TOOLCHAIN
+            _prepare_native_toolchain(generation, docker_proxy, policy)
+            environment_failure = IMAGE
+            _prepare_base_images(
+                work_dir, policy, proxy=docker_proxy,
+                compose=bool(generation.get("docker_compose") and generation.get("needs_attacker_server")),
+            )
+            environment_failure = None
+            # 摘要镜像可能已替换为等价的已校验本地引用，记录实际构建文件。
+            receipt = _staged_artifacts(work_dir, source_file)
+            result = _execute_staged(generation, work_dir, run_id, safe_id, image_tag,
+                                     network_name, container_timeout, build_timeout, docker_proxy)
         result.reproduction.update(receipt)
     except DockerBuildEnvironmentError as exc:
         result.fail(environment_failure or ENVIRONMENT, str(exc))
@@ -776,35 +775,36 @@ def run_single_container(
     return result
 
 
-def _prepare_native_toolchain(generation: dict, proxy_args, policy: BuildPolicy) -> None:
+def _prepare_native_toolchain(generation: dict, proxy, policy: BuildPolicy) -> None:
     """确保原生编译工具链镜像可用；非原生语言无需准备。"""
     language = generation.get("native_language")
     if not language:
         return
     ensure_toolchain(native_toolchain(language), _run_command,
-                     proxy_arguments=proxy_args, timeout=policy.toolchain_timeout)
+                     proxy=proxy, timeout=policy.toolchain_timeout, pull_timeout=policy.pull_timeout)
 
 
 def _prepare_base_images(work_dir: str, policy: BuildPolicy, *,
-                         compose: bool = False) -> None:
+                         proxy: str | None = None, compose: bool = False) -> None:
     """只为实际构建入口准备基础镜像，不扫描仓库副本内无关的 Dockerfile。"""
     bases = dockerfile_bases(work_dir, compose=compose)
     if bases:
-        ensure_base_images(bases, _run_command, timeout=policy.pull_timeout)
+        pulled = ensure_base_images(bases, _run_command, timeout=policy.pull_timeout, proxy=proxy)
+        replace_base_references(work_dir, pulled.replacements, compose=compose)
 
 
 def _execute_staged(generation, work_dir, run_id, safe_id, image_tag, network_name,
-                    container_timeout, build_timeout, proxy_args=()):
+                    container_timeout, build_timeout, proxy=None):
     if generation.get("docker_compose") and generation.get("needs_attacker_server"):
         # Multi-service: use docker compose with explicit project name
         # (#315: the run_id prefix — the parallel-run collision guard
         # the :408 comment names — now on the project name too)
         result = _run_compose(work_dir, compose_project_name(run_id, safe_id),
-                              container_timeout, build_timeout, proxy_args)
+                              container_timeout, build_timeout, proxy)
     else:
         # Single container: docker build + run
         result = _run_single(work_dir, image_tag, network_name,
-                             container_timeout, build_timeout, proxy_args)
+                             container_timeout, build_timeout, proxy)
     return result
 
 
@@ -814,17 +814,17 @@ def _run_single(
     network_name: str,
     container_timeout: int,
     build_timeout: int,
-    proxy_args=(),
+    proxy=None,
 ) -> DockerExecutionResult:
     """Build and run a single Docker container."""
     result = DockerExecutionResult()
 
     # Build
-    stdout, stderr, code, timed_out = _run_recorded_command(
-        result, "build", ["docker", "build", "--builder", "default", "-t", image_tag,
-                           *_resource_labels(image_tag), *proxy_args, "."],
-        timeout=build_timeout,
-        cwd=work_dir,
+    stdout, stderr, code, timed_out = build_with_downloads(
+        ["docker", "build", "--builder", "default", "-t", image_tag,
+         *_resource_labels(image_tag), "."],
+        lambda argv, **kw: _run_recorded_command(result, "build", argv, **kw),
+        proxy=proxy, timeout=build_timeout, cwd=work_dir,
     )
     if code != 0 or timed_out:
         diagnostic = ("\n".join(part for part in (stdout, stderr) if part)
@@ -914,7 +914,7 @@ def _run_compose(
     project_name: str,
     container_timeout: int,
     build_timeout: int,
-    proxy_args=(),
+    proxy=None,
 ) -> DockerExecutionResult:
     """Build and run multi-service test via docker compose.
 
@@ -926,8 +926,10 @@ def _run_compose(
     compose_base = ["docker", "compose", "-f", os.path.join(work_dir, "docker-compose.yml"), "-p", project_name]
 
     try:
-        stdout, stderr, code, timed_out = _run_recorded_command(
-            result, "build", compose_base + ["build", "--builder", "default", *proxy_args], timeout=build_timeout, cwd=work_dir)
+        stdout, stderr, code, timed_out = build_with_downloads(
+            compose_base + ["build", "--builder", "default"],
+            lambda argv, **kw: _run_recorded_command(result, "build", argv, **kw),
+            proxy=proxy, timeout=build_timeout, cwd=work_dir)
         if code != 0 or timed_out:
             diagnostic = ("\n".join(part for part in (stdout, stderr) if part)
                           or f"Docker Compose 构建退出码：{code}")

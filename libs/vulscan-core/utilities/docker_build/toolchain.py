@@ -15,8 +15,12 @@ BuildKit 不会提交任何层，下一次发现又从零开始下载，于是�
 from dataclasses import dataclass
 import hashlib
 import os
+from pathlib import Path
+import tempfile
 
 from utilities.docker_build.errors import DockerBuildEnvironmentError
+from utilities.docker_build.downloads import build_with_downloads, download_diagnostic, render_downloads
+from utilities.docker_build.images import dockerfile_bases, ensure_base_images, log_download
 
 _TEMPLATES = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -85,26 +89,32 @@ def _present(image: str, runner) -> bool:
     return code == 0 and not timed and bool(out.strip())
 
 
-def ensure_toolchain(toolchain: Toolchain, runner, proxy_arguments=(), timeout: int = 1800) -> str:
+def ensure_toolchain(toolchain: Toolchain, runner, proxy: str | None = None, timeout: int = 1800,
+                     pull_timeout: int = 600) -> str:
     """确保工具链镜像存在；不存在则构建一次。返回镜像引用。
 
     调用方必须已经持有 Docker 构建准入锁（``docker_resources.build_admission``），
     否则并发运行会同时构建同一份工具链。
     """
     if _present(toolchain.image, runner):
+        log_download(f"共享工具链镜像缓存命中：{toolchain.image}", status="success")
         return toolchain.image
+    ensure_base_images(dockerfile_bases(toolchain.context), runner, timeout=pull_timeout, proxy=proxy)
     command = [
         "docker", "build", "--builder", "default",
         "-t", toolchain.image,
         # 只标记为 VulScan 工具链；不带 owner/run 标签，避免被按发现回收时删除。
         "--label", "io.vulscan.toolchain=1",
-        *proxy_arguments,
         ".",
     ]
-    out, err, code, timed = runner(command, timeout=timeout, cwd=toolchain.context)
+    with tempfile.TemporaryDirectory(prefix="vulscan-toolchain-") as tmp:
+        recipe = Path(tmp) / "Dockerfile"
+        recipe.write_text(render_downloads(Path(toolchain.dockerfile).read_text(encoding="utf-8")), encoding="utf-8")
+        command[-1:-1] = ["-f", str(recipe)]
+        out, err, code, timed = build_with_downloads(command, runner, proxy=proxy, timeout=timeout, cwd=toolchain.context)
     if code == 0 and not timed:
         return toolchain.image
-    diagnostic = "\n".join(part for part in (out, err) if part)
+    diagnostic = download_diagnostic("\n".join(part for part in (out, err) if part))
     reason = "构建超时" if timed else f"构建退出码 {code}"
     raise DockerBuildEnvironmentError(
         f"共享工具链镜像 {toolchain.image} 无法准备（{reason}）。"

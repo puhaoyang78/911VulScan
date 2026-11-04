@@ -38,8 +38,8 @@
         <fieldset><legend><span class="section-no">03</span>验证与扫描范围</legend>
           <div class="checkrow"><input type="checkbox" id="verify" name="verify" checked><label for="verify">模型复核<span class="hint">从攻击者角度检查候选问题的可利用性。</span></label></div>
           <div class="checkrow"><input type="checkbox" id="dynamic_test" name="dynamic_test"><label for="dynamic_test">动态测试（Docker）<span class="hint">在隔离容器中构建并运行测试，需要本机 Docker。</span></label></div>
-          <div class="two-col"><div><label for="docker-proxy-ip">Docker 构建代理 IP（可选）</label><input type="text" id="docker-proxy-ip" name="docker_proxy_ip" placeholder="127.0.0.1" autocomplete="off" aria-describedby="docker-proxy-hint"></div><div><label for="docker-proxy-port">代理端口（可选）</label><input type="text" id="docker-proxy-port" name="docker_proxy_port" inputmode="numeric" placeholder="7890" autocomplete="off" aria-describedby="docker-proxy-hint"></div></div>
-          <p class="hint" id="docker-proxy-hint">用于 Docker 构建时下载依赖，支持 HTTP / mixed 代理端口。IP 和端口全部留空时使用 Docker 现有网络配置；本机 mihomo 可填写 127.0.0.1 和对应端口。</p>
+          <div class="two-col"><div><label for="docker-proxy-ip">Docker 下载代理 IP（可选）</label><input type="text" id="docker-proxy-ip" name="docker_proxy_ip" placeholder="127.0.0.1" autocomplete="off" aria-describedby="docker-proxy-hint"></div><div><label for="docker-proxy-port">代理端口（可选）</label><input type="text" id="docker-proxy-port" name="docker_proxy_port" inputmode="numeric" placeholder="7890" autocomplete="off" aria-describedby="docker-proxy-hint"></div></div>
+          <p class="hint" id="docker-proxy-hint">优先使用国内源；镜像或依赖下载失败后，使用此 HTTP / mixed 代理访问官方源。本机 Mihomo 可填写 127.0.0.1 和对应端口。</p>
           <div class="checkrow"><input type="checkbox" id="library_mode" name="library_mode"><label for="library_mode">库项目模式<span class="hint">以公开 API 作为分析入口。</span></label></div>
         </fieldset>
         <fieldset><legend><span class="section-no">04</span>扫描时间上限</legend>

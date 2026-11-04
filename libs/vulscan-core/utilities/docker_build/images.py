@@ -1,27 +1,19 @@
-"""基础镜像：本机清单与按需拉取。
-
-``--build-arg HTTP_PROXY`` 只影响 ``RUN`` 步骤，镜像**解析**（pull）由守护进程自己
-完成，构建参数管不到。因此模型生成的 ``FROM python:3.11-slim`` 在本机没有缓存时，
-即使代理填对了也会因为拉取失败而整条发现记 ERROR；而失败发生在构建阶段，重写
-测试毫无用处，旧的重试循环还要为此烧掉三次模型调用。
-
-这里做两件确定的事：
-
-* 读取本机已有镜像，交给生成提示词，让模型优先选择已缓存的基础镜像；
-* 构建前解析 Dockerfile 的 ``FROM``，只对缺失的镜像执行一次 ``docker pull``，
-  失败立即给出可操作的中文说明，不进入模型重试。
-"""
+"""本机基础镜像优先复用；缺失时先国内源，再通过任务代理获取官方源。"""
 
 from dataclasses import dataclass
 import os
 import re
+import sys
+from string import Template
+import time
 
 from utilities.docker_build.errors import DockerBuildEnvironmentError
+from utilities.docker_build.registry import image_reference, pull_via_proxy
+from utilities.docker_build.proxy import parse_docker_proxy
 
 _LIST = ["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"]
-# 形如 FROM [--platform=...] image[:tag|@digest] [AS name]
-_FROM = re.compile(r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)", re.IGNORECASE | re.MULTILINE)
 _SKIP_BASES = {"scratch"}
+_MIRROR = "m.daocloud.io"
 _REGISTRY_HINTS = (
     "failed to resolve source metadata",
     "failed to fetch anonymous token",
@@ -39,6 +31,7 @@ _REGISTRY_HINTS = (
 class PullResult:
     pulled: tuple[str, ...] = ()
     cached: tuple[str, ...] = ()
+    replacements: tuple[tuple[str, str], ...] = ()
 
 
 def is_registry_failure(text: str) -> bool:
@@ -63,7 +56,7 @@ def available_images(runner, limit: int = 40) -> tuple[str, ...]:
     return tuple(names)
 
 
-def dockerfile_bases(root: str, max_files: int = 8, *, compose: bool = False) -> tuple[str, ...]:
+def build_inputs(root: str, *, compose: bool = False) -> tuple[list[str], list[str]]:
     """只解析本次构建实际使用的 Dockerfile，并排除已命名的构建阶段。
 
     扫描仓库的副本可能包含任意数量的 Dockerfile；它们不是本次验证的构建入口。
@@ -101,25 +94,43 @@ def dockerfile_bases(root: str, max_files: int = 8, *, compose: bool = False) ->
     else:
         dockerfiles.append(os.path.join(root, "Dockerfile"))
 
+    return dockerfiles, images
+
+
+def _base_references(text: str):
+    """返回外部 FROM 的原文位置与已解析引用，供预拉取和摘要替换共用。"""
+    stages: set[str] = set()
+    arguments: dict[str, str] = {}
+    seen_from = False
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        argument = re.match(r'^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$', line.rstrip(), re.I)
+        if argument and not seen_from:
+            name, value = argument.groups()
+            if value is not None:
+                arguments[name] = Template(value.strip().strip('"\'')).safe_substitute(arguments)
+        match = re.match(r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", line, re.I)
+        if match:
+            seen_from = True
+            image = Template(match.group(1)).safe_substitute(arguments)
+            if '$' in image:
+                raise DockerBuildEnvironmentError(f"无法确定 Dockerfile 的基础镜像变量：{match.group(1)}；请在 ARG 中声明默认值")
+            if image.lower() not in stages and image.lower() not in _SKIP_BASES:
+                yield offset + match.start(1), offset + match.end(1), image
+            if match.group(2):
+                stages.add(match.group(2).lower())
+        offset += len(line)
+
+
+def dockerfile_bases(root: str, max_files: int = 8, *, compose: bool = False) -> tuple[str, ...]:
+    dockerfiles, images = build_inputs(root, compose=compose)
     for path in dockerfiles[:max_files]:
         if not os.path.isfile(path):
             continue
         with open(path, encoding="utf-8", errors="replace") as handle:
-            dockerfile = handle.read()
-        stages: set[str] = set()
-        for line in dockerfile.splitlines():
-            match = re.match(
-                r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?",
-                line, re.IGNORECASE,
-            )
-            if not match:
-                continue
-            image, alias = match.group(1), match.group(2)
-            if (image.lower() not in stages and image.lower() not in _SKIP_BASES
-                    and not image.startswith("$") and image not in images):
-                images.append(image)
-            if alias:
-                stages.add(alias.lower())
+            for _, _, image in _base_references(handle.read()):
+                if image not in images:
+                    images.append(image)
     return tuple(images)
 
 
@@ -129,26 +140,90 @@ def _present(ref: str, runner) -> bool:
     return code == 0 and not timed and bool(out.strip())
 
 
-def ensure_base_images(bases, runner, timeout: int = 600) -> PullResult:
-    """拉取缺失的基础镜像；任一失败即抛出环境错误。
+def log_download(message: str, *, status: str = "running") -> None:
+    print("  [Docker 下载] " + message, file=sys.stderr, flush=True)
+    from core import ui_events
+    ui_events.emit("activity", stage="dynamic-test", phase="environment", status=status, message=message)
 
-    顺序执行是刻意的：镜像层共享，并发拉取只会让日志与错误归属变复杂。
-    """
-    pulled, cached = [], []
+
+def ensure_base_images(bases, runner, timeout: int = 600, *, proxy: str | None = None) -> PullResult:
+    """每个镜像最多一次国内拉取、一次官方代理拉取，不改变 daemon 的配置。"""
+    proxy = parse_docker_proxy(proxy)
+    pulled, cached, replacements = [], [], []
     for ref in bases:
         if _present(ref, runner):
+            log_download(f"本机镜像缓存命中：{ref}", status="success")
             cached.append(ref)
             continue
-        out, err, code, timed = runner(["docker", "pull", ref], timeout=timeout)
+        registry, repository, version = image_reference(ref)
+        if '@' in ref:
+            local = 'vulscan/base-cache:' + version.removeprefix('sha256:')
+            if _present(local, runner):
+                cached.append(ref)
+                replacements.append((ref, local))
+                log_download(f"已校验摘要的本机镜像缓存命中：{ref}", status="success")
+                continue
+        mirror = f"{_MIRROR}/{registry}/{repository}" + ('@' if '@' in ref else ':') + version
+        deadline = time.monotonic() + timeout
+        log_download(f"国内镜像源：{mirror}")
+        mirror_cached = _present(mirror, runner)
+        if mirror_cached:
+            log_download(f"国内镜像引用的本机缓存命中：{mirror}", status="success")
+            out, err, code, timed = '', '', 0, False
+        else:
+            out, err, code, timed = runner(["docker", "pull", mirror], timeout=min(90, timeout / 2 if proxy else timeout))
         if code == 0 and not timed:
-            pulled.append(ref)
+            if '@' in ref:
+                local = 'vulscan/base-cache:' + version.removeprefix('sha256:')
+            else:
+                local = ref
+            _out, _err, tag_code, tag_timed = runner(['docker', 'tag', mirror, local], timeout=30)
+            if tag_code or tag_timed:
+                raise DockerBuildEnvironmentError('国内镜像已拉取但创建本地引用失败：' + (_err or _out))
+            if local != ref:
+                replacements.append((ref, local))
+            log_download(f"国内镜像源成功：{ref}，未启用任务代理", status="success")
+            (cached if mirror_cached else pulled).append(ref)
             continue
         diagnostic = "\n".join(part for part in (out, err) if part)
         reason = "拉取超时" if timed else f"拉取退出码 {code}"
-        raise DockerBuildEnvironmentError(
-            f"基础镜像 {ref} 无法准备（{reason}）。镜像拉取由 Docker 守护进程完成，"
-            "构建代理只影响构建步骤内的下载；请为该守护进程配置代理、在宿主机预先 "
-            f"`docker pull {ref}`，或让生成结果改用本机已有镜像。\n"
-            + diagnostic[-2000:]
-        )
-    return PullResult(pulled=tuple(pulled), cached=tuple(cached))
+        log_download(f"国内镜像源失败：{mirror}（{reason}）；{diagnostic[-1200:]}", status="error")
+        if not proxy:
+            raise DockerBuildEnvironmentError(
+                f"基础镜像 {ref} 的国内源不可用，尚未配置 Docker 代理；未访问官方源。\n" + diagnostic[-2000:])
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise DockerBuildEnvironmentError(f"基础镜像 {ref} 的拉取总预算已耗尽")
+        log_download(f"切换官方镜像源 {registry}/{repository}，使用任务代理 {proxy}（仅此一次）")
+        local = pull_via_proxy(ref, proxy, runner, remaining)
+        if local != ref:
+            replacements.append((ref, local))
+        pulled.append(ref)
+        log_download(f"官方镜像代理下载、摘要校验与导入成功：{ref}", status="success")
+    return PullResult(pulled=tuple(pulled), cached=tuple(cached), replacements=tuple(replacements))
+
+
+def replace_base_references(root: str, replacements, *, compose: bool = False) -> None:
+    """只有已校验的摘要镜像需要改为本地引用；不改变版本或阶段名。"""
+    if not replacements:
+        return
+    mapping = dict(replacements)
+    paths, _ = build_inputs(root, compose=compose)
+    for path in paths:
+        with open(path, encoding='utf-8') as handle:
+            text = handle.read()
+        for start, end, image in reversed(list(_base_references(text))):
+            if image in mapping:
+                text = text[:start] + mapping[image] + text[end:]
+        with open(path, 'w', encoding='utf-8') as handle:
+            handle.write(text)
+    if compose:
+        import yaml
+        path = os.path.join(root, 'docker-compose.yml')
+        with open(path, encoding='utf-8') as handle:
+            data = yaml.safe_load(handle)
+        for service in data.get('services', {}).values():
+            if isinstance(service, dict) and not service.get('build') and service.get('image') in mapping:
+                service['image'] = mapping[service['image']]
+        with open(path, 'w', encoding='utf-8') as handle:
+            yaml.safe_dump(data, handle, sort_keys=False)
