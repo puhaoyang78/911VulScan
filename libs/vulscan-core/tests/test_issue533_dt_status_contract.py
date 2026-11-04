@@ -125,10 +125,11 @@ class TestStatusContract:
         assert agg["status"] == "partial"
 
     def test_scanner_block_orders_helper_before_degrade(self):
-        """The wiring-order tripwire (the review round): the helper assignment
-        sits INSIDE the dynamic-test step_context body BEFORE the degrade
-        except (a regression moving it after the catch would erase the
-        counted-failure evidence with the skip dict)."""
+        """The shared result summary precedes the optional-step catch.
+
+        A caught failure must retain its error state and cause rather than
+        replacing counted results with an ordinary skipped-step summary.
+        """
         repo = os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__)))))
         with open(os.path.join(repo, "libs", "vulscan-core",
@@ -137,7 +138,11 @@ class TestStatusContract:
         block = src[src.index('step_context("dynamic-test"'):]
         block = block[:block.index("with step_context", 10) if "with step_context" in block[10:] else len(block)]
         i_helper = block.index("dynamic_test_step_summary(")
-        i_degrade = block.index('ctx.summary = {"skipped": True')
+        i_degrade = block.index("except Exception as e:")
         assert i_helper < i_degrade, (
             "the summary assignment must precede the degrade except; "
             f"helper at {i_helper}, degrade at {i_degrade}")
+        handler = block[i_degrade:]
+        assert 'ctx.status = "error"' in handler
+        assert "ctx.errors.append(str(e))" in handler
+        assert 'ctx.summary = {"error_count": 1, "reason": str(e)}' in handler
