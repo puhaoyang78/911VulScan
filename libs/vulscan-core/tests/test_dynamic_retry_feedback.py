@@ -147,6 +147,39 @@ def test_structured_failure_evidence_and_exit_zero_stderr_reach_next_prompt(harn
     assert results[0].retry_count == 1
 
 
+def test_cyclic_fixture_reaches_generation_and_execution(harness, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "target.py").write_text("VALUE = 42\n")
+    (repo / "fixtures").mkdir()
+    (repo / "fixtures/self").symlink_to("self")
+    result = harness.run([execution("NOT_REPRODUCED")], repo_path=str(repo))
+    assert len(harness.prompts) == len(harness.executed) == 1
+    assert result[0].status == "NOT_REPRODUCED"
+    assert "fixtures/self" in harness.prompts[0]
+
+
+def test_empty_queue_does_not_prepare_unused_source(harness, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "external").symlink_to(tmp_path / "host-private")
+    assert harness.run([], count=0, repo_path=str(repo)) == []
+    assert harness.prompts == harness.executed == harness.docker_commands == []
+
+
+def test_saved_tests_restore_without_preparing_source_or_generating_again(harness, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "target.py").write_text("VALUE = 42\n")
+    harness.run([execution("NOT_REPRODUCED")], repo_path=str(repo))
+    calls = len(harness.docker_commands)
+    (repo / "external").symlink_to(tmp_path / "host-private")
+    results = harness.run([], repo_path=str(repo))
+    assert results[0].status == "NOT_REPRODUCED"
+    assert len(harness.prompts) == len(harness.executed) == 1
+    assert len(harness.docker_commands) == calls
+
+
 @pytest.mark.parametrize("channel", ["build_error", "stderr", "stdout", "evidence"])
 def test_long_diagnostics_keep_end_and_expose_truncation(harness, channel):
     diagnostic = "START_DIAGNOSTIC\n" + "build chatter\n" * 4000 + "\nfatal error: LAST_DIAGNOSTIC"

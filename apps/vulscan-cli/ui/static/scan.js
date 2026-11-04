@@ -14,6 +14,7 @@
  }
  const active=s=>['queued','running','cancelling'].includes(s);
  const incompleteReview=s=>['error','inconclusive','interrupted'].includes(s);
+ function stageVisible(data,key){const item=data?.stages?.[key];return !(item?.status==='skipped'&&item.details==='not_requested');}
  function stageHighlights(key,summary={}){
   const fields={parse:[['total_units','解析对象'],['language','语言'],['processing_level','扫描范围']],'app-context':[['application_type','项目类型'],['context_source','上下文来源']],'llm-reachability':[['units_reviewed','检查对象'],['entry_points_promoted','补充入口'],['units_touched','更新对象']],enhance:[['units_enhanced','完成增强'],['incomplete_count','未返回完整结果'],['error_count','处理错误']],analyze:[['analyzed','完成分析'],['total_units','分析范围'],['error_count','分析错误']],verify:[['findings_input','复核范围']],'dynamic-test':[['findings_tested','测试范围'],['confirmed','已复现'],['not_reproduced','未复现'],['blocked','测试受阻'],['inconclusive','无法确定'],['errors','测试错误']]};
   const labels={web_app:'Web 应用',cli_tool:'命令行工具',library:'代码库 / SDK',agent_framework:'Agent 框架',generated:'自动分析',repo_manual:'仓库配置',threat_model:'仓库安全模型',reachable:'可达代码',all:'全部代码',file:'文件级'};
@@ -56,7 +57,7 @@
   if(!stage)return null;
   return {stage,status:/^warning:/.test(low)?'error':/^-\s*skipping/.test(low)?'skipped':'running',activity:/docker not found/.test(low)?'未找到 Docker':s};
  }
- globalThis.VulscanScan={classifyLine,stageFromLog,matchesFinding,legacyRecord,findingTitle,stageHighlights};
+ globalThis.VulscanScan={classifyLine,stageFromLog,matchesFinding,legacyRecord,findingTitle,stageHighlights,stageVisible};
  if(typeof document==='undefined')return;
  const $=id=>document.getElementById(id);
  const node=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
@@ -126,7 +127,7 @@
   }
  }
  function renderStages(items){
-  const rank=Object.keys(stages),keys=[...new Set([...(snapshot?.stage_order||[]),...Object.keys(items)])].filter(k=>k!=='scan'||!items.parse||k===selectedStage&&!followStage).sort((a,b)=>(rank.indexOf(a)<0?100:rank.indexOf(a))-(rank.indexOf(b)<0?100:rank.indexOf(b)));
+  const rank=Object.keys(stages),keys=[...new Set([...(snapshot?.stage_order||[]),...Object.keys(items)])].filter(k=>stageVisible(snapshot,k)&&(k!=='scan'||!items.parse||k===selectedStage&&!followStage)).sort((a,b)=>(rank.indexOf(a)<0?100:rank.indexOf(a))-(rank.indexOf(b)<0?100:rank.indexOf(b)));
   if(followStage||!keys.includes(selectedStage))selectedStage=keys.includes(snapshot?.stage)?snapshot.stage:keys.filter(k=>items[k]).at(-1)||keys[0]||'';
   $('follow-stage').setAttribute('aria-pressed',String(followStage));text('follow-stage',followStage?'跟随进度':'恢复跟随');
   if(!stageRows.size&&keys.length)$('stage-list').replaceChildren();
@@ -220,6 +221,7 @@
  $('finding-close').addEventListener('click',()=>$('finding-dialog').close());$('finding-dialog').addEventListener('close',()=>{currentFinding='';detailValue='';});
  $('finding-activity').addEventListener('click',()=>{const id=currentFinding;$('finding-dialog').close();$('activity-finding').value=id;filterActivity();showView('activity');});
  function renderActivity(events){
+  events=events.filter(e=>stageVisible(snapshot,e.stage));
   const live=new Set(events.map(e=>e.seq));activityRows.forEach((row,seq)=>{if(!live.has(seq)){row.remove();activityRows.delete(seq);}});
   events.forEach(e=>{
    if(activityRows.has(e.seq))return;const key=e.stage||'other';let group=activityGroups.get(key);

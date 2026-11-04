@@ -1661,8 +1661,9 @@ def scan_repository(
             except Exception as e:
                 print(f"  WARNING: Dynamic test failed: {e}", file=sys.stderr)
                 print("  Continuing without dynamic-test results.", file=sys.stderr)
-                ctx.status = "skipped"
-                ctx.summary = {"skipped": True, "reason": str(e)}
+                ctx.status = "error"
+                ctx.errors.append(str(e))
+                ctx.summary = {"error_count": 1, "reason": str(e)}
                 _record_skip(result, "dynamic-test", "failed")
                 # #799: the failed attempt is the ONE skip class the Step-6
                 # build could not know — REBUILD the output through the same

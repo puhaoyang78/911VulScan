@@ -153,6 +153,7 @@ def walk_repository(
     stats: dict,
     unreadable_examples_limit: int = 5,
     note_excluded=None,
+    on_symlink: Callable[[Path, str], None] | None = None,
 ) -> None:
     """Walk ``root``, calling ``on_file`` for every regular file.
 
@@ -169,6 +170,9 @@ def walk_repository(
         on_file: Called as ``on_file(entry, relative_path)`` for each regular file.
             The scanner decides whether it is a source file and what to record —
             this walker deliberately knows nothing about extensions.
+        on_symlink: Optional staging callback, called before following a link.
+            It owns link validation and preservation; links are not traversed.
+            Without it the scanner's existing containment policy is unchanged.
         stats: Mutated in place. ``directories_scanned`` / ``directories_excluded``
             / ``directories_unreadable`` are maintained here, plus an
             ``unreadable_examples`` list for diagnosis.
@@ -237,6 +241,10 @@ def walk_repository(
             continue
 
         entry_relative = f"{relative}/{entry.name}" if relative else entry.name
+
+        if on_symlink is not None and entry.is_symlink():
+            on_symlink(entry, entry_relative)
+            continue
 
         # Explicit stat rather than is_dir()/is_file(): both swallow OSError and
         # answer False, which silently drops anything the OS refuses to stat.

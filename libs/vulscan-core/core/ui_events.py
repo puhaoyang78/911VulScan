@@ -244,6 +244,8 @@ def command_output(phase):
 
 
 def skipped(step, reason):
+    if reason == "not_requested":
+        return  # The configured stage plan excludes opt-outs; reports keep their reason.
     emit("stage.changed", stage=step, status="error" if reason == "failed" else "skipped", message="阶段失败" if reason == "failed" else "跳过阶段", details=reason)
     if step == "dynamic-test":
         with _lock:

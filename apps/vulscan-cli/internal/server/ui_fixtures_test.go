@@ -54,6 +54,11 @@ func seedUIFixtures(t *testing.T, s *Server) {
 				e.Message = "扫描器启动"
 				e.StageOrder = []string{"parse", "app-context", "enhance", "analyze", "verify", "build-output", "dynamic-test", "report"}
 			})
+			// Historical snapshots contain opt-out events even though the phase
+			// was not configured. They must not appear as executed workflow steps.
+			emit("stage.changed", func(e *uiEvent) {
+				e.Stage, e.Status, e.Details = "llm-reachability", "skipped", "not_requested"
+			})
 			for _, step := range []string{"parse", "app-context", "enhance"} {
 				emit("stage.changed", func(e *uiEvent) { e.Stage = step; e.Status = "running"; e.Message = "阶段开始" })
 				emit("stage.changed", func(e *uiEvent) {

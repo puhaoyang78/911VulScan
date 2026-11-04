@@ -73,6 +73,22 @@ def test_disabled_outside_web_runner(monkeypatch, capsys):
     assert records(capsys) == []
 
 
+def test_opt_out_is_saved_but_not_published_as_an_executed_stage(monkeypatch, capsys):
+    from core.scanner import _record_skip
+    from core.schemas import ScanResult
+
+    monkeypatch.setenv("VULSCAN_JOB_ID", "fixture")
+    ui_events.start(verify=False, dynamic=False, context=False, enhance=False, report=False)
+    result = ScanResult(output_dir="unused")
+    for stage in ("app-context", "llm-reachability", "enhance", "verify", "dynamic-test", "report"):
+        _record_skip(result, stage, "not_requested")
+    events = records(capsys)
+    assert len(events) == 1 and events[0]["stage_order"] == ["parse", "analyze", "build-output"]
+    assert result.skipped_step_reasons["llm-reachability"] == "not_requested"
+    ui_events.skipped("dynamic-test", "no_candidates")
+    assert records(capsys)[0]["status"] == "skipped"  # Requested work with no candidates stays visible.
+
+
 def test_build_activity_tolerates_blank_pipe_chunks_without_hiding_raw_output(monkeypatch, capsys):
     monkeypatch.setenv("VULSCAN_JOB_ID", "fixture")
     ui_events.start(verify=True, dynamic=True)

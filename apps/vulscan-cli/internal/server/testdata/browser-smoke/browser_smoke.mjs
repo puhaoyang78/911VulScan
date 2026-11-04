@@ -153,7 +153,7 @@ const checkContrast=async(page,label,selectors)=>{
  },selectors);
  if(bad.length)throw Error(label+' contrast below 4.5: '+JSON.stringify(bad));
 };
-const ready = async (page, name, fn) => { try { await fn(); } catch (e) { const state=await page.evaluate(()=>({status:document.getElementById('status-text')?.dataset.state,logCount:document.getElementById('log-count')?.textContent,follow:document.getElementById('auto-scroll')?.checked,newLogs:document.getElementById('log-new')?.textContent}));note(name, `readiness: ${e.message.split('\n')[0]} ${JSON.stringify(state)}`); } };
+const ready = async (page, name, fn) => { try { await fn(); } catch (e) { const state=await page.evaluate(()=>({status:document.getElementById('status-text')?.dataset.state,phase:document.getElementById('overview-stage')?.textContent,processed:document.getElementById('overview-count')?.textContent,logCount:document.getElementById('log-count')?.textContent,follow:document.getElementById('auto-scroll')?.checked,newLogs:document.getElementById('log-new')?.textContent}));note(name, `readiness: ${e.stack||e.message} ${JSON.stringify(state)}`); } };
 const checkControls=async(page,name)=>{
  const issues=await page.evaluate(()=>{
   const issues=[],ids=new Set();
@@ -610,6 +610,17 @@ let summaryHTML = '';
   const stopped=await page.evaluate(async()=>await(await fetch('/scan/f0000005/snapshot')).json());
   if(Object.values(stopped.findings).some(f=>f.model_review==='pending'||['pending','running'].includes(f.dynamic))||Object.values(stopped.stages).some(s=>['queued','running'].includes(s.status)))throw Error('terminal task still shows pending work');
   await goto('f0000002');
+  if(await page.locator('.stage-select[data-stage="llm-reachability"]:visible').count())throw Error('unrequested phase appears in workflow');
+  await page.locator('#tab-activity').click();
+  if((await page.locator('#activity-groups').innerText()).includes('入口分析')||await page.locator('#activity-stage option[value="llm-reachability"]').count())throw Error('unrequested phase appears in activity');
+  await page.locator('#tab-overview').click();
+  await page.reload({waitUntil:'domcontentloaded'});
+  await page.waitForFunction(()=>document.querySelector('#overview-count').textContent.startsWith('94 / 987'));
+  if(await page.locator('.stage-select[data-stage="llm-reachability"]:visible').count())throw Error('history reload restored an unrequested phase');
+  await page.evaluate(async()=>{const s=await(await fetch('/scan/f0000002/snapshot')).json();s.revision+=10;s.stages['llm-reachability']={status:'error',details:'controlled entry analysis failure'};VulscanScan.applySnapshot(s);});
+  if(await page.locator('.stage-select[data-stage="llm-reachability"]:visible').count()!==1)throw Error('a genuinely failed phase was hidden');
+  await page.reload({waitUntil:'domcontentloaded'});
+  await page.waitForFunction(()=>document.querySelector('#overview-count').textContent.startsWith('94 / 987'));
   for(const [key,n]of[['candidates',6],['retained',3],['excluded',1],['reproduced',1]])if(await page.locator('#count-'+key).innerText()!==String(n))throw Error('incorrect projection '+key);
   if(!(await page.locator('#overview-count').innerText()).startsWith('94 / 987'))throw Error('processing denominator became finding count');
   const parseStep=page.locator('.stage-select[data-stage="parse"]');
@@ -670,7 +681,7 @@ let summaryHTML = '';
   await page.locator('#clear-activity').click();
   if((await page.locator('#activity-note').innerText()).includes('没有匹配'))throw Error('activity filter feedback was not cleared');
   await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.getElementById('count-reproduced')?.textContent==='1');
-  await page.locator('#tab-terminal').click();await page.waitForFunction(()=>document.getElementById('log-count').textContent.includes(' / 1526 行'));
+  await page.locator('#tab-terminal').click();await page.waitForFunction(()=>document.getElementById('log-count').textContent.includes(' / 1527 行'));
   const count=await page.locator('#log-count').innerText();if(!/1[,.]?5\d\d/.test(count.replaceAll(',','')))throw Error('long-log fixture was not fully received: '+count);
   if(await page.locator('.log-line').count()>250)throw Error('raw log DOM is unbounded');
   await page.fill('#log-query','中文注释');await page.waitForFunction(()=>document.getElementById('log-count').textContent.startsWith('匹配 1507 /'));

@@ -1,9 +1,11 @@
 import json
+import os
+from pathlib import Path
 
 import pytest
 
 from utilities.dynamic_tester.docker_executor import _write_test_files, _staged_artifacts
-from utilities.dynamic_tester.source_context import describe_repository, stage_repository
+from utilities.dynamic_tester.source_context import describe_repository, repository_files, stage_repository
 from utilities.dynamic_tester.test_generator import _build_finding_prompt
 from utilities.dynamic_tester.docker_templates import c_runner
 
@@ -54,6 +56,77 @@ def test_repository_escape_is_rejected_without_copying_host_file(tmp_path):
     with pytest.raises(ValueError, match="符号链接"):
         stage_repository(str(work), str(repo), str(target))
     assert not (work / "repository/leak.py").exists()
+
+
+def test_staging_preserves_internal_and_cyclic_links_without_traversal(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src/nested").mkdir(parents=True)
+    (repo / "fixtures").mkdir()
+    target = repo / "src/app.py"
+    target.write_bytes('VALUE = "中文"\r\n'.encode())
+    links = {"self": "self", "first": "second", "second": "first",
+             "missing": "absent", "code.py": "../src/app.py",
+             "directory": "../src", "deep-directory": "../src/nested",
+             "absolute": str(target), "absolute-via-alias": str(repo / "fixtures/deep-directory/../app.py")}
+    for name, value in links.items():
+        (repo / "fixtures" / name).symlink_to(value)
+    info = describe_repository(str(repo))
+    assert info["file_count"] == len(links) + 1
+    assert len(repository_files(str(repo))) == len(links) + 1
+    work = tmp_path / "work"
+    work.mkdir()
+    assert stage_repository(str(work), str(repo), str(target)) == "repository/src/app.py"
+    assert (work / "repository/src/app.py").read_bytes() == target.read_bytes()
+    for name, value in links.items():
+        staged = work / "repository/fixtures" / name
+        assert staged.is_symlink()
+        assert os.readlink(staged) == ("../src/app.py" if name.startswith("absolute") else value)
+    assert (work / "repository/fixtures/code.py").read_bytes() == target.read_bytes()
+    assert (work / "repository/fixtures/absolute-via-alias").read_bytes() == target.read_bytes()
+
+
+@pytest.mark.parametrize("private", [".env", ".git/config", ".ssh/id_rsa", ".npmrc"])
+def test_internal_alias_cannot_disclose_excluded_credentials(tmp_path, private):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secret = repo / private
+    secret.parent.mkdir(exist_ok=True)
+    secret.write_text("host-private-data")
+    (repo / "alias.py").symlink_to(private)
+    with pytest.raises(ValueError, match="alias.py.*凭据"):
+        describe_repository(str(repo))
+
+
+def test_link_chain_cannot_escape_via_dotdot_after_an_alias(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "secret").write_text("host-private-data")
+    (repo / "directory").symlink_to(".")
+    (repo / "bad").symlink_to("directory/../secret")
+    with pytest.raises(ValueError, match="bad.*仓库之外"):
+        describe_repository(str(repo))
+
+
+def test_looped_manifest_and_python_fixture_are_not_read_as_source(tmp_path):
+    (tmp_path / "package.json").symlink_to("package.json")
+    (tmp_path / "fixture.py").symlink_to("fixture.py")
+    info = describe_repository(str(tmp_path))
+    assert info["file_count"] == 2
+    assert info["manifests"] == {} and info["module_imports"] == {}
+
+
+def test_real_read_failure_names_the_path_and_remains_fatal(tmp_path, monkeypatch):
+    (tmp_path / "blocked").mkdir()
+    original = Path.iterdir
+
+    def unreadable(path):
+        if path == tmp_path / "blocked":
+            raise PermissionError("controlled access denied")
+        return original(path)
+
+    monkeypatch.setattr(Path, "iterdir", unreadable)
+    with pytest.raises(ValueError, match="blocked.*permission denied"):
+        describe_repository(str(tmp_path))
 
 
 def test_generated_manifest_does_not_overwrite_original(tmp_path):

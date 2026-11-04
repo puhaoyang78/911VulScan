@@ -36,6 +36,11 @@ func TestScanOverviewProgressAndCancellation(t *testing.T) {
 	}
 	checks := `
 const assert=require('node:assert/strict');const ui=VulscanScan;
+const historical={stages:{'llm-reachability':{status:'skipped',details:'not_requested'},'dynamic-test':{status:'skipped',details:'no_candidates'},enhance:{status:'error',details:'not_requested'}}};
+assert(!ui.stageVisible(historical,'llm-reachability'));
+assert(ui.stageVisible(historical,'dynamic-test'));
+assert(ui.stageVisible(historical,'enhance'));
+assert(ui.stageVisible(historical,'parse'));
 assert.equal(ui.classifyLine('11:22:33 [Enhance] 94/987 src/typecheck.c::tc_error neutral 7.5s (elapsed 3m11s, ETA ~30m23s, $0.0064)'),'progress');
 assert.equal(ui.classifyLine('source/error_handler.c::failed_call'),'other');
 assert.equal(ui.classifyLine('WARNING: provider failed'),'warning');

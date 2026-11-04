@@ -225,7 +225,6 @@ def run_dynamic_tests(
     from utilities.dynamic_tester.declared_runtime import derive_declared_runtimes
     repo_info["declared_runtimes"] = derive_declared_runtimes(repo_path)
     from utilities.dynamic_tester.source_context import describe_repository
-    repo_info["source_context"] = describe_repository(repo_path)
 
     if not findings:
         print("没有需要动态测试的发现。", file=sys.stderr)
@@ -307,6 +306,9 @@ def run_dynamic_tests(
                 and not should_skip_for_language(filename, repo_info["language"])[0]):
             pending_tests.append(finding)
     if pending_tests:
+        # No source preparation is needed for an empty queue or already saved
+        # results. Validate the real input before any new model/build work.
+        repo_info["source_context"] = describe_repository(repo_path)
         # 预检：守护进程、buildx 与备用代理格式。放在任何模型调用之前，宿主问题只报
         # 一次并给出可操作的说明，而不是让每条发现各自耗尽构建预算。
         from utilities.docker_build.preflight import verify_build_environment

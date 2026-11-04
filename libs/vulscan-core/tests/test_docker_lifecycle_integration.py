@@ -75,6 +75,35 @@ def generation(command_json):
             "test_filename": "fixture.py"}
 
 
+def test_real_repository_staging_preserves_fixture_links(daemon, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "source.txt"
+    source.write_text("controlled-source\n")
+    fixtures = repo / "fixtures"
+    fixtures.mkdir()
+    for name, target in {"self": "self", "first": "second", "second": "first",
+                         "missing": "absent", "source": "../source.txt"}.items():
+        (fixtures / name).symlink_to(target)
+    spec = generation(["sh", "-ec", """
+test -L /fixture/fixtures/self
+test "$(readlink /fixture/fixtures/self)" = self
+test "$(readlink /fixture/fixtures/first)" = second
+test "$(readlink /fixture/fixtures/second)" = first
+test "$(readlink /fixture/fixtures/missing)" = absent
+test "$(cat /fixture/fixtures/source)" = controlled-source
+test ! -e /fixture/fixtures/self
+test ! -e /fixture/fixtures/missing
+echo controlled-repository-links-ok
+"""])
+    spec["dockerfile"] = spec["dockerfile"].replace("\nCMD", "\nCOPY repository /fixture\nCMD")
+    result = executor.run_single_container(spec, "real-repository-links", source_file=str(source),
+                                           repo_path=str(repo), container_timeout=10, build_timeout=120)
+    assert result.success, result.__dict__
+    assert "controlled-repository-links-ok" in result.stdout
+    assert result.reproduction["cleanup"]["ok"]
+
+
 @pytest.mark.parametrize("outcome", ["success", "timeout", "build_failure"])
 def test_single_real_lifecycle(daemon, outcome):
     spec = generation(["sh", "-c", "echo controlled-success"])

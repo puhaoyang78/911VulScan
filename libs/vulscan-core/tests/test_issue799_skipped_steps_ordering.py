@@ -336,5 +336,8 @@ def test_a_failing_rebuild_never_aborts_the_scan(monkeypatch, tmp_path):
     # the scan completed; the failed class is recorded; the Step-6 file
     # survived with the Step-6 state (never worse than base)
     assert res.skipped_step_reasons["dynamic-test"] == "failed", res.skipped_step_reasons
+    stage = json.loads((tmp_path / "out/dynamic-test.report.json").read_text())
+    assert stage["status"] == "error"
+    assert stage["errors"] == ["the harness exploded"]
     po = _pipeline_output(tmp_path, "out")
     assert isinstance(po["pipeline_stats"]["skipped_steps"], list), po
