@@ -154,7 +154,7 @@ def pull_via_proxy(ref: str, proxy: str, runner, timeout: float) -> str:
             # Docker archive 接受压缩层；daemon 在 load 时继续验证 rootfs diff_ids。
             # 摘要引用不能通过 docker tag 创建，改用绑定已验证清单摘要的本地标签。
             archive = root / 'image.tar'
-            with tarfile.open(archive, 'w') as bundle:
+            with tarfile.open(archive, 'w', encoding='utf-8') as bundle:
                 for filename in names:
                     bundle.add(root / filename, arcname=filename)
                 data = json.dumps([{'Config': names[0], 'RepoTags': [target], 'Layers': names[1:]}]).encode()
