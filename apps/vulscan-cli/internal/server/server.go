@@ -730,6 +730,8 @@ type jobView struct {
 
 type indexData struct {
 	DeepSeekEndpoint    string
+	DockerProxyIP       string
+	DockerProxyPort     string
 	LLMConfigs          []string
 	RunningCount        int
 	DoneCount           int
@@ -804,6 +806,31 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			parsed, e := url.Parse(p.BaseURL)
 			if e == nil && parsed.Host != "" {
 				d.DeepSeekEndpoint = parsed.Scheme + "://" + parsed.Host
+			}
+		}
+	}
+	if u := who(r); u != nil {
+		proxy := ""
+		if u.User.DockerProxy != nil {
+			proxy = *u.User.DockerProxy
+		} else {
+			// Existing accounts already have a last-used proxy in job metadata.
+			// Include an empty value, and never borrow another account's jobs.
+			for _, j := range jobs {
+				if j.OwnerID == u.User.ID {
+					proxy = j.dockerProxy
+					break
+				}
+			}
+		}
+		if proxy != "" {
+			parsed, err := url.Parse(proxy)
+			if err == nil {
+				d.DockerProxyIP, d.DockerProxyPort, err = net.SplitHostPort(parsed.Host)
+			}
+			if err != nil {
+				http.Error(w, "无法读取已保存的代理设置，请检查账号配置", 500)
+				return
 			}
 		}
 	}
@@ -1051,6 +1078,14 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		os.RemoveAll(jobDir)
 		http.Error(w, "无法保存任务，请检查磁盘和权限", 500)
 		return
+	}
+	if ownerID != "" {
+		if err := s.accounts.saveDockerProxy(ownerID, dockerProxy); err != nil {
+			s.wg.Done()
+			os.RemoveAll(jobDir)
+			http.Error(w, "无法保存代理设置，请检查磁盘和权限", 500)
+			return
+		}
 	}
 
 	baseContext := context.Background()

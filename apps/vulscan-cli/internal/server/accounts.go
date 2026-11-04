@@ -34,6 +34,7 @@ type account struct {
 	PasswordHash string    `json:"password_hash"`
 	Salt         string    `json:"salt"`
 	CreatedAt    time.Time `json:"created_at"`
+	DockerProxy  *string   `json:"docker_proxy,omitempty"` // nil: pre-preference account; empty: explicitly disabled
 }
 
 type loginSession struct {
@@ -181,6 +182,21 @@ func (a *accountStore) hasUsers() bool {
 	defer a.mu.Unlock()
 	return len(a.state.Users) > 0
 }
+
+func (a *accountStore) saveDockerProxy(userID, proxy string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	u, ok := a.state.Users[userID]
+	if !ok {
+		return errors.New("账号不存在")
+	}
+	if u.DockerProxy != nil && *u.DockerProxy == proxy {
+		return nil
+	}
+	u.DockerProxy = &proxy
+	return a.updateLocked(func(st *accountState) { st.Users[userID] = u })
+}
+
 func (a *accountStore) resolve(token string) *identity {
 	if len(token) != 64 {
 		return nil
@@ -529,7 +545,9 @@ func (s *Server) changePassword(u *identity, old, password string) error {
 		return errors.New("密码已变更，请重新登录。")
 	}
 	return s.accounts.updateLocked(func(st *accountState) {
-		st.Users[current.ID] = updated
+		user := st.Users[current.ID]
+		user.Salt, user.PasswordHash = updated.Salt, updated.PasswordHash
+		st.Users[current.ID] = user
 		for k, v := range st.Sessions {
 			if v.UserID == current.ID && k != u.TokenHash {
 				delete(st.Sessions, k)

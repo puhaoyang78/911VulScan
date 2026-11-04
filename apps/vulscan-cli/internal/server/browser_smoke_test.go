@@ -189,6 +189,11 @@ func TestBrowserSmokeAccounts(t *testing.T) {
 	}
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
+	// Browser submissions exercise the real handlers and persistence only.
+	for n := 0; n < cap(s.sem); n++ {
+		s.sem <- struct{}{}
+	}
+	defer func() { s.mgr.cancelAll(); s.wg.Wait() }()
 	script, err := filepath.Abs("testdata/browser-smoke/accounts_browser.mjs")
 	if err != nil {
 		t.Fatal(err)

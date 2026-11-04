@@ -8,8 +8,142 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
+	"time"
 )
+
+func TestDockerProxyDefaultsArePrivateAndSurviveRestart(t *testing.T) {
+	isolatedModelConfig(t)
+	root := t.TempDir()
+	s, err := New("unused", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep real HTTP submissions queued; no repository, model or Docker runs.
+	for n := 0; n < cap(s.sem); n++ {
+		s.sem <- struct{}{}
+	}
+	service := httptest.NewServer(s.Handler())
+	defer func() { service.Close(); s.mgr.cancelAll(); s.wg.Wait() }()
+	alice, bob := realClient(t), realClient(t)
+	for name, client := range map[string]*http.Client{"alice": alice, "bob": bob} {
+		signIn(t, client, service.URL, "register", name)
+		userModel(t, client, service.URL, "fixture-key-"+name)
+	}
+	check := func(client *http.Client, host, port string) {
+		t.Helper()
+		code, body, _ := httpCall(t, client, "GET", service.URL+"/", nil, "")
+		if code != 200 {
+			t.Fatalf("index: %d", code)
+		}
+		for id, want := range map[string]string{"docker-proxy-ip": host, "docker-proxy-port": port} {
+			field := regexp.MustCompile(`<input[^>]*id="` + id + `"[^>]*value="([^"]*)"`).FindStringSubmatch(body)
+			if len(field) != 2 || field[1] != want {
+				t.Fatalf("%s: got %v, want %q", id, field, want)
+			}
+		}
+	}
+	submit := func(client *http.Client, host, port string, want int) string {
+		t.Helper()
+		token := currentAccount(t, client, service.URL)["csrf"].(string)
+		code, _, headers := httpCall(t, client, "POST", service.URL+"/scan", url.Values{
+			"repo": {"https://example.com/fixture.git"}, "provider": {"configured"},
+			"docker_proxy_ip": {host}, "docker_proxy_port": {port},
+		}, token)
+		if code != want {
+			t.Fatalf("submit: %d, want %d", code, want)
+		}
+		if code != http.StatusSeeOther {
+			return ""
+		}
+		id := filepath.Base(headers.Get("Location"))
+		j, ok := s.mgr.get(id)
+		if !ok || j.dynamicTest {
+			t.Fatal("proxy settings enabled dynamic tests or lost the queued job")
+		}
+		j.Cancel()
+		<-j.done
+		return id
+	}
+	deleteJob := func(client *http.Client, id string) {
+		t.Helper()
+		token := currentAccount(t, client, service.URL)["csrf"].(string)
+		code, _, _ := httpCall(t, client, "DELETE", service.URL+"/scan/"+id, nil, token)
+		if code != http.StatusNoContent {
+			t.Fatalf("delete: %d", code)
+		}
+	}
+	check(alice, "", "")
+	owner := s.accounts.resolve(sessionValue(t, alice, service.URL)).User.ID
+	s.mgr.add(&Job{ID: "old-proxy", OwnerID: owner, Status: StatusDone,
+		StartedAt: time.Now().Add(-2 * time.Hour), dockerProxy: "http://127.0.0.1:7890"})
+	check(alice, "127.0.0.1", "7890")
+	check(bob, "", "") // Existing history must not initialize another user's proxy.
+	s.mgr.add(&Job{ID: "old-empty", OwnerID: owner, Status: StatusDone, StartedAt: time.Now().Add(-time.Hour)})
+	check(alice, "", "") // The latest empty choice must not revive an older proxy.
+	s.mgr.remove("old-empty")
+	s.mgr.remove("old-proxy")
+	first := submit(alice, "127.0.0.1", "7891", http.StatusSeeOther)
+	submit(bob, "::1", "7892", http.StatusSeeOther)
+	check(alice, "127.0.0.1", "7891")
+	check(bob, "::1", "7892")
+	submit(alice, "127.0.0.1", "", http.StatusBadRequest)
+	check(alice, "127.0.0.1", "7891")
+	service.Close()
+	s.wg.Wait()
+	s, err = New("unused", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := 0; n < cap(s.sem); n++ {
+		s.sem <- struct{}{}
+	}
+	service = httptest.NewServer(s.Handler())
+	check(alice, "127.0.0.1", "7891")
+	check(bob, "::1", "7892")
+	alice = realClient(t)
+	signIn(t, alice, service.URL, "login", "alice")
+	check(alice, "127.0.0.1", "7891")
+	deleteJob(alice, first)
+	check(alice, "127.0.0.1", "7891")
+	cleared := submit(alice, "", "", http.StatusSeeOther)
+	deleteJob(alice, cleared)
+	check(alice, "", "")
+	check(bob, "::1", "7892")
+	restored, err := openAccounts(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := restored.resolve(sessionValue(t, alice, service.URL))
+	if u == nil || u.User.DockerProxy == nil || *u.User.DockerProxy != "" {
+		t.Fatal("explicitly cleared proxy was not persisted")
+	}
+}
+
+func TestDockerProxyPreferenceWriteFailureKeepsPreviousValue(t *testing.T) {
+	a, err := openAccounts(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.state.Users["fixture"] = account{ID: "fixture"}
+	if err := a.saveDockerProxy("fixture", "http://127.0.0.1:7890"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(a.dir, "accounts.json")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.saveDockerProxy("fixture", "http://127.0.0.1:7891"); err == nil {
+		t.Fatal("failed persistence was reported as success")
+	}
+	if got := a.state.Users["fixture"].DockerProxy; got == nil || *got != "http://127.0.0.1:7890" {
+		t.Fatal("failed persistence changed the visible preference")
+	}
+}
 
 func TestDockerProxyValidationAndPersistence(t *testing.T) {
 	isolatedModelConfig(t)

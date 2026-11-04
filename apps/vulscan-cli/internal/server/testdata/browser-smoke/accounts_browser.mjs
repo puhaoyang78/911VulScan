@@ -90,12 +90,31 @@ try {
     await clear.uncheck();
     if(!await page.locator('#settings-key').isEnabled()||!await page.locator('[data-key-status]').innerText().then(t=>t.includes('已配置')))throw Error('Clear-key cancel lost saved state');
   }
+  async function submitProxy(page,host,port) {
+    await visit(page,'/');
+    if(await page.locator('#dynamic_test').isChecked())throw Error('Proxy settings enabled dynamic tests');
+    await page.locator('#repo').fill('https://example.com/fixture.git');
+    await page.locator('#docker-proxy-ip').fill(host);
+    await page.locator('#docker-proxy-port').fill(port);
+    await Promise.all([page.waitForURL(/\/scan\/[a-f0-9]+$/),page.locator('#start-button').click()]);
+    await page.waitForFunction(()=>document.getElementById('status-text')?.dataset.state==='queued');
+    await page.locator('.brand').click();
+    await page.waitForURL(base+'/');
+    await page.reload();
+    if(await page.locator('#docker-proxy-ip').inputValue()!==host||await page.locator('#docker-proxy-port').inputValue()!==port)throw Error('Proxy lost after returning/reloading');
+  }
+  await submitProxy(a,'127.0.0.1','7890');
+  await submitProxy(b,'::1','7891');
+  await a.reload();
+  if(await a.locator('#docker-proxy-ip').inputValue()!=='127.0.0.1'||await a.locator('#docker-proxy-port').inputValue()!=='7890')throw Error('Proxy leaked across accounts');
+  await submitProxy(b,'','');
   // Both authenticated contexts remain usable; persisted cookies also work in
   // a fresh browser context without passing a password to the server again.
   const saved=await alice.storageState();
   const restored=await browser.newContext({storageState:saved});contexts.push(restored);
   const r=await restored.newPage();await r.goto(base+'/');
   await r.locator('[data-account-nav] .account-name').filter({hasText:aliceName}).waitFor();
+  if(await r.locator('#docker-proxy-ip').inputValue()!=='127.0.0.1'||await r.locator('#docker-proxy-port').inputValue()!=='7890')throw Error('Proxy lost with restored login');
   if (await r.getByText('legacy-private-browser-project',{exact:true}).count()) throw new Error('Restore leak');
   const capture=process.env.VULSCAN_SCREENSHOTS;
   if (capture) mkdirSync(capture,{recursive:true});
@@ -126,6 +145,8 @@ try {
   if (!await a.getByLabel('密码',{exact:true}).evaluate(el=>el===document.activeElement)) throw new Error('Keyboard focus order');
   await a.getByLabel('密码',{exact:true}).fill('87654321');
   await a.getByRole('button',{name:'登录',exact:true}).click();await a.waitForURL(base+'/');await noOverflow(a);
+  if(await a.locator('#docker-proxy-ip').inputValue()!=='127.0.0.1'||await a.locator('#docker-proxy-port').inputValue()!=='7890')throw Error('Proxy lost after password change and sign-in');
+  if(await b.locator('#docker-proxy-ip').inputValue()!==''||await b.locator('#docker-proxy-port').inputValue()!=='')throw Error('Cleared proxy returned');
   if (errors.length) throw new Error(errors.join('\n'));
-  console.log('ACCOUNTS-BROWSER OK: two-character Chinese/ASCII names, eight-character passwords, Unicode length boundaries, direct register/login/logout, two initial registrations, private legacy data, persistent cookies, isolated model settings, password confirmation/change, 4 viewport widths, light/dark, keyboard, 0 CSP/external-network errors');
+  console.log('ACCOUNTS-BROWSER OK: two-character Chinese/ASCII names, eight-character passwords, Unicode length boundaries, direct register/login/logout, two initial registrations, private legacy data, persistent cookies, isolated model settings and Docker proxy defaults, proxy return/reload/clear, password confirmation/change, 4 viewport widths, light/dark, keyboard, 0 CSP/external-network errors');
 } finally {for (const ctx of contexts) await ctx.close();await browser.close();}
