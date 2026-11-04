@@ -1,6 +1,7 @@
 """Hermetic CentOS 7 orchestration checks, not a real old-kernel deployment."""
 import json
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -101,7 +102,8 @@ class CentOSInstallerTests(unittest.TestCase):
         shutil.copy(SCRIPTS/'install-centos7.sh', self.root/'scripts/install-centos7.sh')
         shutil.copy(SCRIPTS/'centos7.Dockerfile', self.root/'scripts/centos7.Dockerfile')
         shutil.copy(SCRIPTS/'stop-centos7.sh', self.root/'scripts/stop-centos7.sh')
-        for name in ('scripts/install-deployment.sh', 'scripts/check-deployment.py', 'apps/vulscan-cli/main.go',
+        for name in ('scripts/install-deployment.sh', 'scripts/check-deployment.py',
+                     'scripts/configure-ubuntu-mirrors.sh', 'scripts/select-docker-packages.py', 'apps/vulscan-cli/main.go',
                      'libs/vulscan-core/vulscan/__main__.py', 'config/models.json', 'config/languages.json'):
             (self.root/name).write_text('fixture')
         self.unit = self.root/'systemd/vulscan.service'
@@ -185,6 +187,36 @@ class CentOSInstallerTests(unittest.TestCase):
         self.assertIn('libs/vulscan-core/vulscan/__main__.py', files)
         self.assertFalse(any('.env' in f or f.endswith('main_test.go') or f == 'apps/vulscan-cli/vulscan' for f in files))
         self.assertTrue(any(a[:2] == ['docker','build'] and a[2:4] == ['--network','host'] for a in self.actions()))
+
+    def test_context_contains_all_local_dockerfile_copy_sources(self):
+        self.run_script()
+        files = set((self.root/'context-files').read_text().splitlines())
+        for line in (self.root/'scripts/centos7.Dockerfile').read_text().splitlines():
+            if not line.startswith('COPY '):
+                continue
+            words = shlex.split(line, comments=True)
+            if words[1].startswith('--from='):
+                continue
+            for source in words[1:-1]:
+                source = source.rstrip('/')
+                with self.subTest(source=source):
+                    self.assertTrue(source in files or any(name.startswith(source+'/') for name in files),
+                                    f'Dockerfile COPY source missing from build context: {source}')
+
+    def test_missing_build_helpers_fail_before_build_and_preserve_old_service(self):
+        self.old_service()
+        for name in ('configure-ubuntu-mirrors.sh', 'select-docker-packages.py'):
+            source = self.root/'scripts'/name
+            contents = source.read_bytes()
+            with self.subTest(source=name):
+                source.unlink()
+                try:
+                    result = self.run_script(success=False)
+                finally:
+                    source.write_bytes(contents)
+                self.assertIn(f'缺少 scripts/{name}', result.stderr)
+                self.assertFalse(any(a[:2] in (['docker','build'], ['systemctl','stop']) for a in self.actions()))
+                self.assertIn(OLD, self.unit.read_text())
 
     def test_stop_waits_for_asynchronous_removal(self):
         self.old_service(); self.env['REMOVAL_DELAY'] = '3'

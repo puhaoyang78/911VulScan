@@ -206,7 +206,10 @@ if [ "$MODE" = check ]; then
     exit 0
 fi
 idle
-for source in apps/vulscan-cli libs/vulscan-core config/languages.json config/models.json scripts/install-deployment.sh scripts/check-deployment.py scripts/centos7.Dockerfile scripts/stop-centos7.sh; do
+build_sources=(apps/vulscan-cli libs/vulscan-core config/languages.json config/models.json
+    scripts/install-deployment.sh scripts/check-deployment.py scripts/configure-ubuntu-mirrors.sh
+    scripts/select-docker-packages.py scripts/centos7.Dockerfile)
+for source in "${build_sources[@]}" scripts/stop-centos7.sh; do
     [ -e "$ROOT/$source" ] || fail "缺少 $source；请解压完整源码部署包后执行。"
 done
 mkdir "$TMP/context"
@@ -217,8 +220,7 @@ tar -C "$ROOT" --exclude=.git --exclude='.env*' --exclude=.venv --exclude=.tools
     --exclude=test_output --exclude=test_data --exclude='*_test.go' --exclude='*.pyc' \
     --exclude='*.log' --exclude=apps/vulscan-cli/vulscan-cli --exclude=apps/vulscan-cli/vulscan \
     --exclude=libs/vulscan-core/parsers/go/go_parser/go_parser \
-    -cf "$TMP/source.tar" apps/vulscan-cli libs/vulscan-core config/languages.json config/models.json \
-    scripts/install-deployment.sh scripts/check-deployment.py scripts/centos7.Dockerfile
+    -cf "$TMP/source.tar" "${build_sources[@]}"
 tar -xf "$TMP/source.tar" -C "$TMP/context"
 # Engine 26 retains the legacy builder, avoiding a new host BuildKit runtime on
 # the old kernel. The application still uses its existing Buildx validation.
