@@ -1606,7 +1606,10 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
             # --- Totals from step reports ---
             total_duration_seconds = 0.0
             total_cost_usd = 0.0
-            for sr in _load_step_reports(results_dir):
+            # scan.report.json already aggregates its child steps. Sum the
+            # individual reports once; retain aggregate-only historical data.
+            total_reports = [sr for sr in _all_steps if sr.get("step") != "scan"] or _all_steps
+            for sr in total_reports:
                 total_duration_seconds += sr.get("duration_seconds", 0)
                 total_cost_usd += sr.get("cost_usd", 0)
 

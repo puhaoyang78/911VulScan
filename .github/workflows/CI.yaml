@@ -101,7 +101,8 @@ jobs:
   go-tests:
     name: Go build + integration (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Includes a fresh package installation before CLI integration tests.
+    timeout-minutes: 25
     env:
       VULSCAN_PYTHON: python
     strategy:

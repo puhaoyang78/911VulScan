@@ -127,6 +127,27 @@ def test_unreadable_optional_evidence_warns_without_claiming_no_test(tmp_path, m
     assert "动态测试输出未关联" in warning and "PermissionError" in warning
 
 
+@pytest.mark.parametrize("steps,duration,cost", [
+    ([("parse", 1, 0.1), ("verify", 2, 0.2), ("scan", 3, 0.3)], 3, 0.3),
+    ([("scan", 3, 0.3)], 3, 0.3),
+    ([("parse", 1, 0.1)], 1, 0.1),
+    ([], 0, 0),
+])
+def test_report_totals_do_not_count_scan_aggregate_twice(tmp_path, capsys, steps, duration, cost):
+    _, results, dataset = _fixture(tmp_path)
+    for name, elapsed, fee in steps:
+        _write(tmp_path / f"{name}.report.json", {
+            "step": name, "duration_seconds": elapsed, "cost_usd": fee,
+            "status": "success", "summary": {},
+        })
+    assert cli.cmd_report_data(SimpleNamespace(
+        results=str(results), dataset=str(dataset), no_llm=True)) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert data["total_duration_seconds"] == duration
+    assert data["total_cost_usd"] == pytest.approx(cost)
+    assert len(data["step_reports"]) == len(steps)  # Keep every saved execution record.
+
+
 def test_live_report_data_and_csv_keep_full_details_without_api(tmp_path, monkeypatch, capsys):
     result, results, dataset = _fixture(tmp_path)
     result["verification"]["explanation"] = "说明" * 300 + "仅在特定条件下成立。"
