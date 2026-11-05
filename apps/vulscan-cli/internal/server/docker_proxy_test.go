@@ -127,7 +127,7 @@ func TestDockerProxyPreferenceWriteFailureKeepsPreviousValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.state.Users["fixture"] = account{ID: "fixture"}
-	if err := a.saveDockerProxy("fixture", "http://127.0.0.1:7890"); err != nil {
+	if err := a.saveScanDefaults("fixture", "http://127.0.0.1:7890", scanOptions{DynamicTest: true}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(a.dir, "accounts.json")
@@ -137,11 +137,14 @@ func TestDockerProxyPreferenceWriteFailureKeepsPreviousValue(t *testing.T) {
 	if err := os.Mkdir(path, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.saveDockerProxy("fixture", "http://127.0.0.1:7891"); err == nil {
+	if err := a.saveScanDefaults("fixture", "http://127.0.0.1:7891", scanOptions{DynamicTest: false}); err == nil {
 		t.Fatal("failed persistence was reported as success")
 	}
 	if got := a.state.Users["fixture"].DockerProxy; got == nil || *got != "http://127.0.0.1:7890" {
 		t.Fatal("failed persistence changed the visible preference")
+	}
+	if got := a.state.Users["fixture"].ScanOptions; got == nil || !got.DynamicTest {
+		t.Fatal("failed persistence changed the visible scan options")
 	}
 }
 

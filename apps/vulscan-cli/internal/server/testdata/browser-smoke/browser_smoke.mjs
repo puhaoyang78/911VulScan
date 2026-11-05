@@ -297,12 +297,18 @@ let dompurifyProbeBlocked = 0;
     if(!await page.locator('.notice-toast[data-tone=error]').filter({hasText:'任务响应异常'}).isVisible())throw Error('submission error has no visible feedback component');
     await page.unroute('**/scan');
   });
-  await ready(page, 'index back navigation clears one-run key', async () => {
+  await ready(page, 'index back navigation restores temporary key', async () => {
     await page.fill('#api_key', 'smoke-fixture-not-a-real-key');
     await page.locator('a[href="/scan/jx"]').click();
     await page.waitForFunction(() => document.getElementById('status-text')?.dataset.state === 'done');
     await page.goBack({ waitUntil:'networkidle' });
-    await page.waitForFunction(() => document.getElementById('api_key')?.value === '' && !document.getElementById('start-button').disabled);
+    await page.waitForFunction(() => document.getElementById('api_key')?.value === 'smoke-fixture-not-a-real-key' && !document.getElementById('start-button').disabled);
+    await page.reload({waitUntil:'networkidle'});
+    await page.waitForFunction(() => document.getElementById('api_key')?.value === 'smoke-fixture-not-a-real-key');
+    if(!await page.locator('[data-key-status]').innerText().then(text=>text.includes('临时密钥')))throw Error('Temporary key has no status');
+    if(await page.evaluate(()=>JSON.stringify(localStorage).includes('smoke-fixture-not-a-real-key')))throw Error('Temporary key was written to durable browser storage');
+    await page.fill('#api_key','');await page.reload({waitUntil:'networkidle'});
+    if(await page.locator('#api_key').inputValue()!=='')throw Error('Cleared temporary key returned');
   });
   await drain(page, 'index');
   await page.close();
@@ -943,6 +949,18 @@ for(const [name,path]of[['index','/'],['scan','/scan/f0000002'],['report','/repo
   await page.locator('[data-theme-toggle]').click();
  });
  releaseFirst();await drain(page,'action components');await page.close();
+}
+// Browser restrictions keep scans usable and explain unavailable key memory.
+{
+ const page=await context.newPage();page.on('pageerror',e=>note('temporary key storage unavailable',e.message));
+ await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('blocked','SecurityError');}}));
+ await ready(page,'temporary key storage unavailable',async()=>{
+  await page.goto(baseURL+'/',{waitUntil:'networkidle'});
+  await page.fill('#api_key','blocked-storage-fixture');
+  await page.locator('.notice-toast[data-tone=error]').filter({hasText:'浏览器无法临时保存密钥'}).waitFor();
+  if(await page.locator('#api_key').inputValue()!=='blocked-storage-fixture'||!await page.locator('#api_key').isEnabled())throw Error('Storage restriction removed the entered key or disabled input');
+ });
+ await drain(page,'temporary key storage unavailable');await page.close();
 }
 // Restricted local storage must not break an offline report or its toggle.
 {

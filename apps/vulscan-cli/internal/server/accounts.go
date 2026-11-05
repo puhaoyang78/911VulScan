@@ -28,13 +28,25 @@ const guestCookie = "vulscan_form"
 const sessionLifetime = 7 * 24 * time.Hour
 const passwordIterations = 600000
 
+type scanOptions struct {
+	Provider    string   `json:"provider"`
+	Model       string   `json:"model"`
+	LLMConfig   string   `json:"llm_config,omitempty"`
+	Languages   []string `json:"languages"`
+	Verify      bool     `json:"verify"`
+	DynamicTest bool     `json:"dynamic_test"`
+	LibraryMode bool     `json:"library_mode"`
+	ScanTimeout string   `json:"scan_timeout"`
+}
+
 type account struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"password_hash"`
-	Salt         string    `json:"salt"`
-	CreatedAt    time.Time `json:"created_at"`
-	DockerProxy  *string   `json:"docker_proxy,omitempty"` // nil: pre-preference account; empty: explicitly disabled
+	ID           string       `json:"id"`
+	Username     string       `json:"username"`
+	PasswordHash string       `json:"password_hash"`
+	Salt         string       `json:"salt"`
+	CreatedAt    time.Time    `json:"created_at"`
+	DockerProxy  *string      `json:"docker_proxy,omitempty"` // nil: pre-preference account; empty: explicitly disabled
+	ScanOptions  *scanOptions `json:"scan_options,omitempty"`
 }
 
 type loginSession struct {
@@ -183,17 +195,16 @@ func (a *accountStore) hasUsers() bool {
 	return len(a.state.Users) > 0
 }
 
-func (a *accountStore) saveDockerProxy(userID, proxy string) error {
+func (a *accountStore) saveScanDefaults(userID, proxy string, options scanOptions) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	u, ok := a.state.Users[userID]
 	if !ok {
 		return errors.New("账号不存在")
 	}
-	if u.DockerProxy != nil && *u.DockerProxy == proxy {
-		return nil
-	}
+	options.Languages = append([]string(nil), options.Languages...)
 	u.DockerProxy = &proxy
+	u.ScanOptions = &options
 	return a.updateLocked(func(st *accountState) { st.Users[userID] = u })
 }
 

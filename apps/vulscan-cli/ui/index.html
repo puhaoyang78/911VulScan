@@ -26,25 +26,25 @@
           <p class="hint" id="ref-hint">留空使用默认分支。获取列表后点击选择，输入名称可筛选。</p>
           <p class="hint" id="repo-hint">仅扫描你有权测试的项目。私有仓库请使用本机 Git 凭据，不要把密码或令牌放进地址。</p>
           <label id="language-label">扫描语言</label><div class="language-grid" role="group" aria-labelledby="language-label">
-            <label><input type="checkbox" name="languages" value="c"> C / C++</label><label><input type="checkbox" name="languages" value="python"> Python</label><label><input type="checkbox" name="languages" value="javascript"> JavaScript</label><label><input type="checkbox" name="languages" value="go"> Go</label>
+            <label><input type="checkbox" name="languages" value="c"{{if index .SelectedLanguages "c"}} checked{{end}}> C / C++</label><label><input type="checkbox" name="languages" value="python"{{if index .SelectedLanguages "python"}} checked{{end}}> Python</label><label><input type="checkbox" name="languages" value="javascript"{{if index .SelectedLanguages "javascript"}} checked{{end}}> JavaScript</label><label><input type="checkbox" name="languages" value="go"{{if index .SelectedLanguages "go"}} checked{{end}}> Go</label>
 
   </div><p class="hint">不勾选时自动分析达到规模阈值的全部已检测语言。指定语言可缩小范围，减少时间与模型费用。</p>
         </fieldset>
         <fieldset><legend><span class="section-no">02</span>模型配置</legend>
-          <div class="two-col"><div><label for="provider">模型来源</label><select name="provider" id="provider"><option value="deepseek" selected>DeepSeek（默认）</option><option value="configured">使用个人模型配置</option></select></div><div id="deepseek-model"><label for="model">分析模型</label><select name="model" id="model" aria-describedby="model-hint"><option value="deepseek-flash" selected>deepseek-flash（默认）</option><option value="deepseek-v4-pro">deepseek-v4-pro</option></select></div></div>
-          <div id="deepseek-settings" data-key-field data-saved-key="{{.HasAPIKey}}" data-key-context="scan"><div class="credential-heading"><label for="api_key">DeepSeek API 密钥</label><span class="credential-state" data-key-status role="status" aria-live="polite" data-state="{{if .HasAPIKey}}saved{{else}}missing{{end}}">{{if .HasAPIKey}}已配置 · {{.APIKeySource}}{{else}}未配置{{end}}</span></div><input type="password" id="api_key" name="api_key" maxlength="2048" placeholder="{{if .HasAPIKey}}已保存密钥，留空使用{{else}}填写 DeepSeek API 密钥{{end}}" autocomplete="new-password" spellcheck="false" data-secret aria-describedby="key-hint key-environment" {{if not .HasAPIKey}}required{{end}}><p class="hint" id="key-hint">本次填写仅用于当前扫描。<a href="/settings">在用户设置中保存个人密钥</a></p><p class="hint" id="key-environment">环境变量：{{if .IsolatedModelConfig}}未读取，Web 账号使用独立配置。{{else if .HasAPIKey}}{{.APIKeySource}}{{else}}未检测到 DeepSeek 密钥。{{end}}</p><p class="privacy" id="endpoint-hint">API 地址：<strong>{{.DeepSeekEndpoint}}</strong></p><p class="hint" id="model-hint">其他模型与服务商可在<a href="/settings">用户设置</a>中配置。</p></div>
-          <div id="configured-settings" hidden><label for="llm_config">已有配置</label><select name="llm_config" id="llm_config" disabled><option value="">沿用配置文件中的默认值</option>{{range .LLMConfigs}}<option value="{{.}}">{{.}}</option>{{end}}</select><p class="hint">按已有配置选择各阶段的服务商、模型和凭据；此模式不使用上方 DeepSeek 密钥。未显式设置默认值时兼容已有配置；全新配置默认 deepseek-default。</p></div>
+          <div class="two-col"><div><label for="provider">模型来源</label><select name="provider" id="provider"><option value="deepseek"{{if eq .ScanOptions.Provider "deepseek"}} selected{{end}}>DeepSeek（默认）</option><option value="configured"{{if eq .ScanOptions.Provider "configured"}} selected{{end}}>使用个人模型配置</option></select></div><div id="deepseek-model"><label for="model">分析模型</label><select name="model" id="model" aria-describedby="model-hint"><option value="deepseek-flash"{{if eq .ScanOptions.Model "deepseek-flash"}} selected{{end}}>deepseek-flash（默认）</option><option value="deepseek-v4-pro"{{if eq .ScanOptions.Model "deepseek-v4-pro"}} selected{{end}}>deepseek-v4-pro</option></select></div></div>
+          <div id="deepseek-settings" data-key-field data-saved-key="{{.HasAPIKey}}" data-key-context="scan"><div class="credential-heading"><label for="api_key">DeepSeek API 密钥</label><span class="credential-state" data-key-status role="status" aria-live="polite" data-state="{{if .HasAPIKey}}saved{{else}}missing{{end}}">{{if .HasAPIKey}}已配置 · {{.APIKeySource}}{{else}}未配置{{end}}</span></div><input type="password" id="api_key" name="api_key" maxlength="2048" placeholder="{{if .HasAPIKey}}已保存密钥，留空使用{{else}}填写 DeepSeek API 密钥{{end}}" autocomplete="new-password" spellcheck="false" data-secret aria-describedby="key-hint key-environment" {{if not .HasAPIKey}}required{{end}}><p class="hint" id="key-hint">当前标签页临时记住，退出登录后清除。<a href="/settings">在用户设置中保存个人密钥</a></p><p class="hint" id="key-environment">环境变量：{{if .IsolatedModelConfig}}未读取，Web 账号使用独立配置。{{else if .HasAPIKey}}{{.APIKeySource}}{{else}}未检测到 DeepSeek 密钥。{{end}}</p><p class="privacy" id="endpoint-hint">API 地址：<strong>{{.DeepSeekEndpoint}}</strong></p><p class="hint" id="model-hint">其他模型与服务商可在<a href="/settings">用户设置</a>中配置。</p></div>
+          <div id="configured-settings" hidden><label for="llm_config">已有配置</label><select name="llm_config" id="llm_config" disabled><option value=""{{if eq .ScanOptions.LLMConfig ""}} selected{{end}}>沿用配置文件中的默认值</option>{{range .LLMConfigs}}<option value="{{.}}"{{if eq . $.ScanOptions.LLMConfig}} selected{{end}}>{{.}}</option>{{end}}</select><p class="hint">按已有配置选择各阶段的服务商、模型和凭据；此模式不使用上方 DeepSeek 密钥。未显式设置默认值时兼容已有配置；全新配置默认 deepseek-default。</p></div>
         </fieldset>
         <fieldset><legend><span class="section-no">03</span>验证与扫描范围</legend>
-          <div class="checkrow"><input type="checkbox" id="verify" name="verify" checked><label for="verify">模型复核<span class="hint">从攻击者角度检查候选问题的可利用性。</span></label></div>
-          <div class="checkrow"><input type="checkbox" id="dynamic_test" name="dynamic_test"><label for="dynamic_test">动态测试（Docker）<span class="hint">在隔离容器中构建并运行测试，需要本机 Docker。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="verify" name="verify"{{if .ScanOptions.Verify}} checked{{end}}><label for="verify">模型复核<span class="hint">从攻击者角度检查候选问题的可利用性。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="dynamic_test" name="dynamic_test"{{if .ScanOptions.DynamicTest}} checked{{end}}><label for="dynamic_test">动态测试（Docker）<span class="hint">在隔离容器中构建并运行测试，需要本机 Docker。</span></label></div>
           <div class="two-col"><div><label for="docker-proxy-ip">Docker 下载代理 IP（可选）</label><input type="text" id="docker-proxy-ip" name="docker_proxy_ip" value="{{.DockerProxyIP}}" placeholder="127.0.0.1" autocomplete="off" aria-describedby="docker-proxy-hint"></div><div><label for="docker-proxy-port">代理端口（可选）</label><input type="text" id="docker-proxy-port" name="docker_proxy_port" value="{{.DockerProxyPort}}" inputmode="numeric" placeholder="7890" autocomplete="off" aria-describedby="docker-proxy-hint"></div></div>
           <p class="hint" id="docker-proxy-hint">优先使用国内源；镜像或依赖下载失败后，使用此 HTTP / mixed 代理访问官方源。本机 Mihomo 可填写 127.0.0.1 和对应端口。</p>
-          <div class="checkrow"><input type="checkbox" id="library_mode" name="library_mode"><label for="library_mode">库项目模式<span class="hint">以公开 API 作为分析入口。</span></label></div>
+          <div class="checkrow"><input type="checkbox" id="library_mode" name="library_mode"{{if .ScanOptions.LibraryMode}} checked{{end}}><label for="library_mode">库项目模式<span class="hint">以公开 API 作为分析入口。</span></label></div>
         </fieldset>
         <fieldset><legend><span class="section-no">04</span>扫描时间上限</legend>
           <label for="scan-timeout">本次扫描最长运行时间</label>
-          <select id="scan-timeout" name="scan_timeout" aria-describedby="scan-timeout-hint"><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="2h" selected>2 小时（默认）</option><option value="4h">4 小时</option><option value="8h">8 小时</option><option value="24h">24 小时</option></select>
+          <select id="scan-timeout" name="scan_timeout" aria-describedby="scan-timeout-hint"><option value="30m"{{if eq .ScanOptions.ScanTimeout "30m"}} selected{{end}}>30 分钟</option><option value="1h"{{if eq .ScanOptions.ScanTimeout "1h"}} selected{{end}}>1 小时</option><option value="2h"{{if eq .ScanOptions.ScanTimeout "2h"}} selected{{end}}>2 小时（默认）</option><option value="4h"{{if eq .ScanOptions.ScanTimeout "4h"}} selected{{end}}>4 小时</option><option value="8h"{{if eq .ScanOptions.ScanTimeout "8h"}} selected{{end}}>8 小时</option><option value="24h"{{if eq .ScanOptions.ScanTimeout "24h"}} selected{{end}}>24 小时</option></select>
           <p class="hint" id="scan-timeout-hint">扫描累计用时的上限，超时后保留已有结果。</p><details class="task-settings"><summary>计时范围</summary><p class="hint">各阶段预计耗时见扫描详情。不含排队、克隆、补充报告和清理；辅助调用单独计时。</p></details>
         </fieldset>
         <p class="privacy">数据提示：扫描会将相关源代码发送给所选模型服务商，并产生相应 API 费用；启用动态测试还会在本机 Docker 中运行测试代码。</p>
@@ -225,7 +225,7 @@ refsButton.addEventListener('click', async function() {
   }
 });
 updateProvider();
-// Do not cache the key in localStorage, cookies, or task metadata.
+// Temporary keys stay in the tab session; durable settings are saved separately.
 let submitting = false;
 document.getElementById('scan-form').addEventListener('submit', async function(event) {
   event.preventDefault();
@@ -239,7 +239,6 @@ document.getElementById('scan-form').addEventListener('submit', async function(e
     if (!response.ok) throw new Error((await response.text()).trim() || '无法创建扫描，请稍后重试。');
     const destination = new URL(response.url, location.href);
     if (!response.redirected || destination.origin !== location.origin || !destination.pathname.startsWith('/scan/')) throw new Error('任务响应异常，请刷新任务列表确认状态。');
-    document.getElementById('api_key').value = '';
     location.assign(destination.href);
   } catch (error) {
     feedback.textContent = error instanceof TypeError ? '连接中断，任务可能已创建。请先刷新查看最近扫描，再决定是否重试。' : error.message;
@@ -252,7 +251,6 @@ window.addEventListener('pageshow', function() {
   document.getElementById('start-button').disabled = false;
   document.getElementById('start-button').setAttribute('aria-busy','false');
   document.getElementById('start-button').textContent = '开始安全扫描 →';
-  document.getElementById('api_key').value = '';
   updateProvider();
 });
 document.getElementById('scans-list').addEventListener('click', function(e) {

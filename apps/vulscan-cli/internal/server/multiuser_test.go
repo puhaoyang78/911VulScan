@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -98,6 +99,86 @@ func userModel(t *testing.T, c *http.Client, base, key string) {
 	code, body, _ = httpCall(t, c, "GET", base+"/settings", nil, "")
 	if code != 200 || strings.Contains(body, key) || !strings.Contains(body, "已保存密钥") {
 		t.Fatalf("settings exposed key or failed: %d", code)
+	}
+}
+
+func TestScanOptionsPersistPerAccountWithoutSavingTemporaryKeys(t *testing.T) {
+	isolatedModelConfig(t)
+	root := t.TempDir()
+	s, err := New("unused", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := 0; n < cap(s.sem); n++ {
+		s.sem <- struct{}{}
+	}
+	service := httptest.NewServer(s.Handler())
+	defer func() { service.Close(); s.mgr.cancelAll(); s.wg.Wait() }()
+	alice, bob := realClient(t), realClient(t)
+	signIn(t, alice, service.URL, "register", "alice")
+	signIn(t, bob, service.URL, "register", "bob")
+	check := func(client *http.Client, want scanOptions) {
+		t.Helper()
+		u := s.accounts.resolve(sessionValue(t, client, service.URL))
+		if u == nil || u.User.ScanOptions == nil || !reflect.DeepEqual(*u.User.ScanOptions, want) {
+			t.Fatalf("incorrect scan defaults: want %+v", want)
+		}
+		cfg, err := config.LoadFrom(u.ConfigPath)
+		if err != nil || len(cfg.ProviderNames()) != 0 || cfg.APIKey != "" {
+			t.Fatal("temporary scan key changed personal model configuration")
+		}
+	}
+	var paths []string
+	submit := func(client *http.Client, form url.Values, want int) {
+		t.Helper()
+		form.Set("repo", "https://example.com/fixture.git")
+		token := currentAccount(t, client, service.URL)["csrf"].(string)
+		code, _, headers := httpCall(t, client, "POST", service.URL+"/scan", form, token)
+		if code != want {
+			t.Fatalf("scan submission: %d, want %d", code, want)
+		}
+		if code != http.StatusSeeOther {
+			return
+		}
+		j, ok := s.mgr.get(filepath.Base(headers.Get("Location")))
+		if !ok || j.dynamicTest != (form.Get("dynamic_test") == "on") || j.libraryMode != (form.Get("library_mode") == "on") || j.verify != (form.Get("verify") == "on") {
+			t.Fatal("saved choices differ from actual queued scan flags")
+		}
+		j.Cancel()
+		<-j.done
+		paths = append(paths, filepath.Join(j.outDir, "meta.json"), filepath.Join(j.outDir, "snapshot.json"), filepath.Join(j.outDir, "logs.txt"))
+	}
+	aliceOptions := scanOptions{Provider: "deepseek", Model: "deepseek-v4-pro", Languages: []string{"python", "go"}, DynamicTest: true, LibraryMode: true, ScanTimeout: "4h"}
+	submit(alice, url.Values{"provider": {"deepseek"}, "model": {"deepseek-v4-pro"}, "api_key": {"temporary-private-scan-key"}, "languages": {"python", "go"}, "dynamic_test": {"on"}, "library_mode": {"on"}, "scan_timeout": {"4h"}}, http.StatusSeeOther)
+	bobOptions := scanOptions{Provider: "configured", Model: "deepseek-flash", LLMConfig: "deepseek-default", Verify: true, ScanTimeout: "2h"}
+	submit(bob, url.Values{"provider": {"configured"}, "llm_config": {"deepseek-default"}, "verify": {"on"}}, http.StatusSeeOther)
+	check(alice, aliceOptions)
+	check(bob, bobOptions)
+	submit(alice, url.Values{"provider": {"deepseek"}, "model": {"unsupported-model"}}, http.StatusBadRequest)
+	check(alice, aliceOptions)
+	service.Close()
+	s.wg.Wait()
+	s, err = New("unused", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := 0; n < cap(s.sem); n++ {
+		s.sem <- struct{}{}
+	}
+	service = httptest.NewServer(s.Handler())
+	check(alice, aliceOptions)
+	check(bob, bobOptions)
+	aliceOptions = scanOptions{Provider: "configured", Model: "deepseek-v4-pro", LLMConfig: "deepseek-pro", Verify: true, ScanTimeout: "30m"}
+	submit(alice, url.Values{"provider": {"configured"}, "llm_config": {"deepseek-pro"}, "verify": {"on"}, "scan_timeout": {"30m"}}, http.StatusSeeOther)
+	check(alice, aliceOptions) // Explicit false and automatic languages replace prior true/selected choices.
+	check(bob, bobOptions)
+	u := s.accounts.resolve(sessionValue(t, alice, service.URL))
+	paths = append(paths, filepath.Join(s.accounts.dir, "accounts.json"), u.ConfigPath)
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil || strings.Contains(string(data), "temporary-private-scan-key") {
+			t.Fatalf("temporary scan key persisted or artifact unreadable: %s (%v)", path, err)
+		}
 	}
 }
 

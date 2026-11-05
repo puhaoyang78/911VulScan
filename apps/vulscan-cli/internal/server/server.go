@@ -732,6 +732,8 @@ type indexData struct {
 	DeepSeekEndpoint    string
 	DockerProxyIP       string
 	DockerProxyPort     string
+	ScanOptions         scanOptions
+	SelectedLanguages   map[string]bool
 	LLMConfigs          []string
 	RunningCount        int
 	DoneCount           int
@@ -791,6 +793,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := indexData{
+		ScanOptions:         scanOptions{Provider: "deepseek", Model: "deepseek-flash", Verify: true, ScanTimeout: "2h"},
+		SelectedLanguages:   map[string]bool{},
 		Jobs:                views,
 		DeepSeekEndpoint:    deepSeekEndpointOrigin(cfg),
 		HasAPIKey:           apiKeySource != "",
@@ -810,6 +814,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if u := who(r); u != nil {
+		if u.User.ScanOptions != nil {
+			d.ScanOptions = *u.User.ScanOptions
+		}
 		proxy := ""
 		if u.User.DockerProxy != nil {
 			proxy = *u.User.DockerProxy
@@ -833,6 +840,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	for _, language := range d.ScanOptions.Languages {
+		d.SelectedLanguages[language] = true
 	}
 	for _, v := range views {
 		switch v.Status {
@@ -1080,10 +1090,23 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ownerID != "" {
-		if err := s.accounts.saveDockerProxy(ownerID, dockerProxy); err != nil {
+		options := scanOptions{Provider: "deepseek", Model: "deepseek-flash", Languages: languages,
+			Verify: verify, DynamicTest: dynamicTest, LibraryMode: libraryMode, ScanTimeout: scanTimeoutValue(scanTimeout)}
+		if previous := who(r).User.ScanOptions; previous != nil {
+			options.Model, options.LLMConfig = previous.Model, previous.LLMConfig
+		}
+		if r.FormValue("provider") == "configured" {
+			options.Provider, options.LLMConfig = "configured", llmConfig
+		} else {
+			options.Model = r.FormValue("model")
+			if options.Model == "" {
+				options.Model = "deepseek-flash"
+			}
+		}
+		if err := s.accounts.saveScanDefaults(ownerID, dockerProxy, options); err != nil {
 			s.wg.Done()
 			os.RemoveAll(jobDir)
-			http.Error(w, "无法保存代理设置，请检查磁盘和权限", 500)
+			http.Error(w, "无法保存扫描选项，请检查磁盘和权限", 500)
 			return
 		}
 	}
