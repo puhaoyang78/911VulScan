@@ -1,10 +1,10 @@
 # 911VulScan 中文版
 
-911VulScan 基于 Knostic [OpenAnt](https://github.com/knostic/OpenAnt)，保留上游 Apache 2.0 许可证和署名。`911-dev` 分支提供中文扫描工作台、中文漏洞报告、默认 DeepSeek 配置，以及 C/C++ 隔离动态测试模板和 Python、JavaScript/TypeScript、Go 的动态构建指导。
+911VulScan 基于 Knostic [OpenAnt](https://github.com/knostic/OpenAnt)，保留上游 Apache 2.0 许可证和署名。`911-dev` 分支提供终端漏洞挖掘与利用平台、中文漏洞报告、默认 DeepSeek 配置，以及 C/C++ 隔离动态测试模板和 Python、JavaScript/TypeScript、Go 的动态构建指导。
 
 ## 本分支的变化
 
-- 新的中文网页工作台：任务概览、分步扫描表单、模型选择、实时日志、摘要、扫描报告和单条漏洞报告。
+- 新的终端漏洞挖掘与利用平台：任务概览、分步扫描表单、模型选择、实时日志、摘要、扫描报告和单条漏洞报告。
 - 新安装默认使用 `deepseek-default`，所有七个扫描阶段使用 `deepseek-flash`；可选择 `deepseek-pro` 使用 `deepseek-v4-pro`。
 - 已有显式 `default_llm` 和旧版 Anthropic 配置继续生效，不自动改写用户配置。网页的“DeepSeek（默认）”是本次任务选择；“使用已有模型配置”沿用原配置。
 - 所有扫描模型调用增加简体中文叙述要求。报告标题、状态显示、摘要及修复建议采用中文；JSON 键、枚举、CWE/CVE、代码、文件路径和原始证据保持原样。
@@ -28,7 +28,7 @@ export VULSCAN_PYTHON="$PWD/.venv/bin/python"
 ./apps/vulscan-cli/bin/vulscan serve
 ```
 
-打开终端显示的本机地址，默认为 `http://127.0.0.1:8080`。服务不提供多用户身份认证，请保留回环地址监听，不要直接暴露到公网。网页产物保存在 `~/.vulscan/webui/`。
+打开终端显示的本机地址，默认为 `http://127.0.0.1:8080`，注册或登录后使用。通过一键部署脚本安装的服务支持局域网访问，地址为 `http://服务器内网IP:实际端口`，实际端口由安装器显示。网页产物保存在服务账号的 `~/.vulscan/webui/`，各账号的任务与模型配置独立。
 
 ## 配置 DeepSeek
 

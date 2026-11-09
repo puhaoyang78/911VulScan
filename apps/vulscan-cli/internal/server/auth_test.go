@@ -37,6 +37,41 @@ func TestMiddlewareRejectsRebindingHost(t *testing.T) {
 	}
 }
 
+func TestOpenerPolicyMatchesBrowserOrigin(t *testing.T) {
+	h := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	for _, tc := range []struct {
+		name, target, external, policy string
+	}{
+		{"loopback", "http://127.0.0.1:8080/", "", "same-origin"},
+		{"localhost", "http://LOCALHOST:8080/", "", "same-origin"},
+		{"other loopback", "http://127.0.0.2:8080/", "", "same-origin"},
+		{"LAN HTTP", "http://192.168.1.30:8080/", "", ""},
+		{"LAN HTTPS", "https://192.168.1.30:8080/", "", "same-origin"},
+		{"HTTPS proxy", "http://scan.example.com/", "https://scan.example.com", "same-origin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.target, nil)
+			if tc.external != "" {
+				req = req.WithContext(context.WithValue(req.Context(), externalOriginKey{}, tc.external))
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d", rec.Code)
+			}
+			if got := rec.Header().Get("Cross-Origin-Opener-Policy"); got != tc.policy {
+				t.Errorf("opener policy = %q, want %q", got, tc.policy)
+			}
+			if got := rec.Header().Get("Content-Security-Policy"); !strings.Contains(got, "script-src 'none'") || !strings.Contains(got, "frame-ancestors 'none'") {
+				t.Errorf("CSP was relaxed: %q", got)
+			}
+			if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+				t.Errorf("frame protection = %q", got)
+			}
+		})
+	}
+}
+
 // sameOriginOK (the CSRF gate for mutations) must reject a missing token's
 // preconditions: foreign Host, cross-site Sec-Fetch-Site, and a foreign Origin.
 func TestSameOriginOKRejections(t *testing.T) {

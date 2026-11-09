@@ -10,10 +10,10 @@ import (
 
 	"charm.land/huh/v2"
 	"github.com/fatih/color"
+	isatty "github.com/mattn/go-isatty"
 	"github.com/puhaoyang78/911VulScan/apps/vulscan-cli/internal/output"
 	"github.com/puhaoyang78/911VulScan/apps/vulscan-cli/internal/python"
 	"github.com/puhaoyang78/911VulScan/apps/vulscan-cli/internal/report"
-	isatty "github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 

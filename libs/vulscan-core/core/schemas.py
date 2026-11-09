@@ -360,6 +360,8 @@ class EnhanceResult:
     # #615: the degenerate-exit kind histogram (exit_kind's aggregate);
     # the empty dict = no incompletes (the present-only serialization)
     incomplete_summary: dict = field(default_factory=dict)
+    incomplete_examples: list[str] = field(default_factory=list)
+    closeout_summary: dict = field(default_factory=dict)
     usage: UsageInfo = field(default_factory=UsageInfo)
     # #802: the kept-set delta (``build_resume_delta``'s block) — same
     # shape + present-only semantics as AnalyzeResult's.
@@ -385,6 +387,10 @@ class EnhanceResult:
         result["total_units"] = self.total_units
         if self.incomplete_summary:
             result["incomplete_summary"] = self.incomplete_summary
+        if self.incomplete_examples:
+            result["incomplete_examples"] = self.incomplete_examples
+        if self.closeout_summary:
+            result["closeout_summary"] = self.closeout_summary
         if self.resume_delta:
             result["resume_delta"] = self.resume_delta
         if self.limit_mode:
@@ -560,6 +566,10 @@ class DynamicTestStepResult:
     blocked: int = 0
     inconclusive: int = 0
     errors: int = 0
+    # 阶段级故障（环境、内部异常）与单条测试失败分开计数。
+    fatal_error_count: int = 0
+    # 非空表示整段因环境原因跳过，例如 docker_unavailable。
+    skipped_reason: str = ""
     usage: UsageInfo = field(default_factory=UsageInfo)
 
     def to_dict(self) -> dict:
@@ -587,7 +597,7 @@ def dynamic_test_step_summary(result: "DynamicTestStepResult") -> dict:
     outside the five counted words); restored checkpoints ARE counted into
     their buckets, and SKIPPED rows are deliberately not counted as errors.
     """
-    return {
+    summary = {
         "findings_tested": result.findings_tested,
         "confirmed": result.confirmed,
         "not_reproduced": result.not_reproduced,
@@ -595,7 +605,17 @@ def dynamic_test_step_summary(result: "DynamicTestStepResult") -> dict:
         "inconclusive": result.inconclusive,
         "errors": result.errors,
         "error_count": result.errors,
+        # 单条失败与阶段失败分开：单条失败不把整步降成 partial。
+        # getattr 兼容旧测试替身和旧调用方。
+        "unit_errors": getattr(result, "errors", 0),
+        "fatal_error_count": getattr(result, "fatal_error_count", 0),
     }
+    skipped = getattr(result, "skipped_reason", "")
+    if skipped:
+        summary["skipped"] = True
+        summary["reason"] = skipped
+        summary["reason_code"] = skipped
+    return summary
 
 
 # ---------------------------------------------------------------------------

@@ -109,10 +109,10 @@ def check_port(port: int, *, automatic: bool = False) -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            listener.bind(("127.0.0.1", port))
+            listener.bind(("0.0.0.0", port))
         except OSError as exc:
             if automatic and exc.errno == errno.EADDRINUSE:
-                listener.bind(("127.0.0.1", 0))
+                listener.bind(("0.0.0.0", 0))
             else:
                 raise RuntimeError(f"端口 {port} 无法使用：{exc}；请用 --port 指定空闲端口，现有服务未停止。") from exc
         return listener.getsockname()[1]
@@ -130,7 +130,7 @@ def check_url(url: str) -> None:
                         and response.headers.get_content_type() == "text/html" and "<html" in page.lower()):
                     print("网页服务：" + url + "，正常", flush=True)
                     return
-                error = "响应不是扫描工作台页面"
+                error = "响应不是终端漏洞挖掘与利用平台页面"
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             error = str(exc)
         time.sleep(0.5)
@@ -260,7 +260,7 @@ def main() -> None:
     elif args.select_port is not None:
         print(check_port(args.select_port, automatic=True), flush=True)
     elif args.listen_port is not None:
-        print(f"部署端口：127.0.0.1:{check_port(args.listen_port)}，可用。", flush=True)
+        print(f"部署端口：0.0.0.0:{check_port(args.listen_port)}，可用。", flush=True)
     elif args.url:
         check_url(args.url)
         if args.service_pid is not None:

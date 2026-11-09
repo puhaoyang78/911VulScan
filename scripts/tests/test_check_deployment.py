@@ -75,7 +75,7 @@ class DeploymentCheckTests(unittest.TestCase):
                 self.application, self.content_type = application, content_type
                 # One real HTTP request; advance only the checker's retry clock.
                 with patch.object(checker.time, 'monotonic', side_effect=(0, 0, 61)), patch.object(checker.time, 'sleep'):
-                    with self.assertRaisesRegex(RuntimeError, '响应不是扫描工作台页面'):
+                    with self.assertRaisesRegex(RuntimeError, '响应不是终端漏洞挖掘与利用平台页面'):
                         checker.check_url(self.url)
 
     def test_port_preflight_rejects_other_listener(self):
@@ -96,6 +96,18 @@ class DeploymentCheckTests(unittest.TestCase):
         self.assertGreaterEqual(selected, 1024)
         self.assertEqual(checker.check_port(selected, automatic=True), selected)
 
+    def test_lan_port_preflight_checks_interfaces_beyond_localhost(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.2", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            # A localhost-only preflight misses a listener on another interface.
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as loopback:
+                loopback.bind(("127.0.0.1", port))
+            with self.assertRaisesRegex(RuntimeError, "--port"):
+                checker.check_port(port)
+            self.assertNotEqual(checker.check_port(port, automatic=True), port)
+
     def test_unknown_and_duplicate_counts_cannot_authorize_update(self):
         for body in ('', '<strong id="stat-running">—</strong>', self.body * 2):
             self.body = body
@@ -107,7 +119,7 @@ class DeploymentCheckTests(unittest.TestCase):
         path = self.home / '.vulscan/webui/.access/operator-token'
         path.parent.mkdir(parents=True)
         path.write_text(self.operator)
-        self.body = '<title>登录工作台 · 911VulScan</title>'
+        self.body = '<title>登录平台 · 911VulScan</title>'
         checker.check_idle(self.url, self.home)
         self.running = 2
         with self.assertRaisesRegex(RuntimeError, '仍有运行'):

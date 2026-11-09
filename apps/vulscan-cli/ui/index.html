@@ -4,16 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="csrf" content="{{.CSRF}}">
-<title>安全扫描工作台</title>
+<title>终端漏洞挖掘与利用平台</title>
 <script src="/assets/shell.js"></script><script defer src="/assets/account.js"></script><link rel="stylesheet" href="/assets/account.css"><link rel="stylesheet" href="/assets/tabler-1.4.0.min.css">
 <link rel="stylesheet" href="/assets/workbench.css">
 <link rel="stylesheet" href="/assets/index.css">
 </head>
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
-<header class="app-header"><a href="/" class="brand">安全扫描工作台</a><div class="header-actions"><nav data-account-nav aria-label="账号"></nav><button class="btn theme-toggle" type="button" data-theme-toggle aria-label="深色主题" aria-pressed="false" title="切换为深色主题"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="theme-moon" d="M20.8 13A9 9 0 0 1 11 3.2 9 9 0 1 0 20.8 13Z"/><g class="theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></svg><span data-theme-label>主题</span></button></div></header>
+<header class="app-header"><a href="/" class="brand">终端漏洞挖掘与利用平台</a><div class="header-actions"><nav data-account-nav aria-label="账号"></nav><button class="btn theme-toggle" type="button" data-theme-toggle aria-label="深色主题" aria-pressed="false" title="切换为深色主题"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="theme-moon" d="M20.8 13A9 9 0 0 1 11 3.2 9 9 0 1 0 20.8 13Z"/><g class="theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></svg><span data-theme-label>主题</span></button></div></header>
 <main class="main" id="main">
-  <div class="intro"><div><h1>安全扫描工作台</h1><p>扫描代码仓库，追踪发现与验证。</p></div></div>
+  <div class="intro"><div><h1>终端漏洞挖掘与利用平台</h1><p>扫描代码仓库，追踪发现与验证。</p></div></div>
   <section class="stats" aria-label="扫描任务概览"><div class="stat"><strong id="stat-total">{{len .Jobs}}</strong><span>全部任务</span></div><div class="stat stat-running"><strong id="stat-running">{{.RunningCount}}</strong><span>进行中 / 排队中</span></div><div class="stat stat-done"><strong id="stat-done">{{.DoneCount}}</strong><span>已完成</span></div><div class="stat"><strong id="stat-attention">{{.AttentionCount}}</strong><span>需处理</span></div></section>
   <div class="grid">
     <section class="card"><h2>新建扫描</h2>
@@ -57,7 +57,7 @@
   </section>
   </div>
 
-  <footer><span>中文安全扫描工作台</span></footer>
+  <footer><span>终端漏洞挖掘与利用平台</span></footer>
 </main>
 <dialog class="dialog" id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-message">
   <div class="dialog-inner">

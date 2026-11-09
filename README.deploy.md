@@ -20,7 +20,7 @@ sh scripts/install-deployment.sh --deploy
 
 安装目录必须能被服务账号读取和进入。直接以 root 部署时，将源码解压到 `/opt/911VulScan` 等共享程序目录，避免放在其他用户无法进入的 `/root` 下。已有 root 服务的数据不会被自动移动或改权限；切换账号前需停止旧服务，将其 `~/.vulscan` 迁移到新账号主目录并设置所有权，安装器发现未迁移的数据会停止更新。
 
-默认自动选端口：优先使用 `8080`，已被占用时由系统分配空闲端口，安装结束显示实际访问地址。重复部署优先沿用正在运行的服务端口；选定端口写入 systemd，重启后保留。从另一台电脑访问时，将 SSH 转发的目标端口设为安装器显示的端口，例如：
+默认自动选端口：优先使用 `8080`，已被占用时由系统分配空闲端口，安装结束显示实际端口。重复部署优先沿用正在运行的服务端口；选定端口写入 systemd，重启后保留。服务监听 `0.0.0.0:实际端口`，同一局域网内直接通过 `http://服务器内网IP:实际端口` 访问并登录；安装器显示的 `127.0.0.1` 地址用于服务器本机检查。需要通过 SSH 转发访问时，将目标端口设为实际端口，例如：
 
 ```sh
 ssh -N -L 8080:127.0.0.1:8080 用户名@服务器地址
@@ -77,9 +77,9 @@ journalctl -u vulscan -f
 
 来源：[CentOS 7 停止维护说明](https://www.redhat.com/en/topics/linux/centos-linux-eol)、[Docker 官方 EL7 归档](https://download.docker.com/linux/centos/7/x86_64/stable/Packages/)、[Node 22 平台要求](https://github.com/nodejs/node/blob/v22.x/BUILDING.md#platform-list)。
 
-## 多用户工作台与 HTTPS
+## 多用户平台与 HTTPS
 
-新用户打开工作台即可注册账号，注册完成后自动登录；无需初始化口令或创建管理员。已有账号直接登录。每个账号在“用户设置”单独配置服务商、模型与 API 密钥，不继承服务器的 CLI 配置或其他账号的密钥。扫描页输入的临时密钥仍仅用于该任务。
+新用户打开平台即可注册账号，注册完成后自动登录；无需初始化口令或创建管理员。已有账号直接登录。每个账号在“用户设置”单独配置服务商、模型与 API 密钥，不继承服务器的 CLI 配置或其他账号的密钥。扫描页输入的临时密钥仍仅用于该任务。
 
 旧账号、会话和扫描文件保留。旧版本已绑定的历史任务仍由原账号访问；未绑定的匿名历史文件留在原目录，不自动分配给新注册账号。
 
@@ -170,7 +170,7 @@ sh scripts/install-deployment.sh --install-deps --yes
 
 已存在但不能正常运行的同名用户插件不会被覆盖；请检查错误并自行移走后重试。安装后 Docker 若仍未发现插件（例如额外插件目录遮蔽）或运行失败，安装器会明确报错，不会修改 Docker 配置强行修复。Docker CE 的残留配置记录不视为已安装；即使 Engine 包来源混杂，只补用户插件也不会因此强行替换或阻塞现有 Engine。
 
-Go 使用官方元数据中最新稳定 **1.26.x**；Node.js 使用官方 **22.x LTS**（自带 npm）。下载后先验证 SHA-256，再解压到 `.tools/go`、`.tools/node`，启动器将这些目录加入自身 PATH，不改系统 PATH 或 shell 配置。已有合格版本优先复用。若 `.tools` 中存在不合格/未完成安装目录，安装器不会覆盖，请自行检查并移走后重试。
+Go 使用官方元数据中最新稳定 **1.26.x**；Node.js 使用官方 **22.x LTS**（自带 npm）。下载后先验证 SHA-256：普通 `--install-deps` 把 Go 装到 `~/.local/go`，并把 `~/.local/bin` 加入 PATH；`--deploy` 装到仓库内 `.tools/go`，方便服务账号读取。Node.js 仍装到 `.tools/node`。启动器会把这些目录加入自身 PATH，不改系统 PATH 或 shell 配置。已有合格版本优先复用。若目标目录中已有不合格/未完成安装，安装器不会覆盖，请自行检查并移走后重试。
 
 Docker 在 22.04/24.04/26.04 使用已配置的可信 Ubuntu APT 仓库中的 `docker.io`、`docker-compose-v2`、`docker-buildx`；这些包可能需要启用官方 `universe`/updates。仅使用 `--install-deps` 时不自行添加仓库/PPA；`--deploy` 会按需启用官方 Ubuntu `universe` 组件。20.04 冻结版本从 Docker 官方 HTTPS 仓库读取 Focal 元数据并验证每个 `.deb` 的 SHA-256，再由 APT 解析依赖，不添加新的 APT 信任密钥或源。APT 禁止自动移除包；只有需要安装 Engine/CLI 时，发现 Docker CE、Podman shim 或其他冲突安装才会报错，而不是替换、降级或迁移；用户级插件补齐不受此包迁移检查阻塞。
 

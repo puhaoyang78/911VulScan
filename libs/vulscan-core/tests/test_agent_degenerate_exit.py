@@ -157,8 +157,8 @@ def test_no_tool_calls_is_not_a_neutral_verdict():
     assert result.security_classification == "incomplete"
 
 
-def test_max_iterations_is_not_a_neutral_verdict():
-    """Sibling path: loop exhausts MAX_ITERATIONS without finishing."""
+def test_max_iterations_is_incomplete_not_neutral():
+    """轮数用尽是“没分析完”，先如实记未完成，由调用方再补一次分类。"""
     # Every iteration asks for a non-finish tool, so the loop never completes.
     looping = CompletionResult(
         content=[ToolUseBlock(id="t", name="search_usages", input={})],
@@ -169,6 +169,7 @@ def test_max_iterations_is_not_a_neutral_verdict():
     result = _run(agent)
     assert result.security_classification != "neutral"
     assert result.security_classification == "incomplete"
+    assert result.exit_kind == "max_iterations"
 
 
 def test_incomplete_unit_is_reported_under_incomplete_not_neutral():

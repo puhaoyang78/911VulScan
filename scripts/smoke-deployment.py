@@ -97,7 +97,7 @@ assert not (root / "openant").exists()
                             assert response.status == 200
                             assert response.headers.get('X-Application-Id') == 'vulscan'
                             page = response.read().decode()
-                            assert '安全扫描工作台' in page and '911VulScan' not in page
+                            assert '终端漏洞挖掘与利用平台' in page and '911VulScan' not in page
                         # Check exact packaged font/highlighter/theme bytes,
                         # not just an HTML page mentioning their filenames.
                         for name, folder in (("tabler-1.4.0.min.css", "design"),

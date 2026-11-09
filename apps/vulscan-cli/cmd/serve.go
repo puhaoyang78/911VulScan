@@ -19,7 +19,7 @@ import (
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "启动 911VulScan 中文网页工作台",
+	Short: "启动终端漏洞挖掘与利用平台",
 	Long: `启动本地网页服务（默认 http://127.0.0.1:8080），并自动打开浏览器。
 
 扫描结果保存在 ~/.vulscan/webui/，重启后仍可查看。
@@ -79,7 +79,7 @@ func runServe(cmd *cobra.Command, _ []string) {
 		os.Exit(2)
 	}
 
-	fmt.Println("911VulScan 中文工作台已启动：", url)
+	fmt.Println("终端漏洞挖掘与利用平台已启动：", url)
 	openBrowser(url)
 	fmt.Println("按 Ctrl+C 停止服务。")
 

@@ -35,6 +35,66 @@ from utilities.llm import (
 from utilities.file_io import normalize_results, read_json, open_utf8
 
 
+class DynamicTestUnavailable(RuntimeError):
+    """开始前的检查没通过，整段动态测试跳过。
+
+    这是环境问题，不是某条测试失败：扫描器应把动态测试步骤记为“已跳过”，
+    而不是把整次扫描标成出错。
+    """
+
+    def __init__(self, message: str, reason_code: str = "environment_unavailable"):
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+def _run_container_safely(generation, finding_id, **kwargs):
+    """单条发现的执行器异常不能终止整段测试。"""
+    try:
+        return run_single_container(generation, finding_id, **kwargs)
+    except Exception as exc:
+        from utilities.docker_build import ENVIRONMENT
+        from utilities.dynamic_tester.docker_executor import DockerExecutionResult
+
+        execution = DockerExecutionResult()
+        execution.fail(
+            ENVIRONMENT,
+            f"执行器内部错误：{type(exc).__name__}: {bounded_diagnostic(str(exc), 1000)}",
+        )
+        execution.retryable = False
+        return execution
+
+
+def _collect_safely(finding, generation, execution, generation_cost):
+    """结果整理异常也不能终止整段测试。"""
+    try:
+        return collect_result(finding, generation, execution, generation_cost)
+    except Exception as exc:
+        return DynamicTestResult(
+            finding_id=str(finding.get("id", "unknown")),
+            identity_key=finding.get("identity_key", ""),
+            status="ERROR",
+            details=f"结果整理失败：{type(exc).__name__}: {bounded_diagnostic(str(exc), 2000)}",
+            failure_phase="internal",
+            terminal_reason="unit_exception",
+        )
+
+
+def _save_checkpoint(checkpoint, finding_id, payload) -> bool:
+    try:
+        checkpoint.save(finding_id, payload)
+        return True
+    except Exception as exc:
+        print(f"  检查点保存失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+        return False
+
+
+def _write_summary(checkpoint, total, completed, errors, breakdown, usage) -> None:
+    try:
+        checkpoint.write_summary(total, completed, errors, breakdown,
+                                 phase="in_progress", usage=usage)
+    except Exception as exc:
+        print(f"  进度汇总写入失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+
 
 def should_skip_for_language(file_path: str, scan_language: str | None) -> tuple[bool, str]:
     """Whether a finding should be skipped for lack of a Docker template.
@@ -340,11 +400,15 @@ def run_dynamic_tests(
             repo_info["language"], repo_path, tuple(repo_info.get("base_images") or ()))
         if dependency_plan is not None:
             dependency_image = None
-            with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
-                dependency_image = ensure_dependency_image(
-                    dependency_plan, repo_path, _run_command,
-                    proxy=docker_proxy, build_timeout=policy.build_timeout,
-                    pull_timeout=policy.pull_timeout)
+            try:
+                with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
+                    dependency_image = ensure_dependency_image(
+                        dependency_plan, repo_path, _run_command,
+                        proxy=docker_proxy, build_timeout=policy.build_timeout,
+                        pull_timeout=policy.pull_timeout)
+            except DockerBuildEnvironmentError as exc:
+                raise DynamicTestUnavailable(
+                    f"依赖镜像准备失败：{exc}", "dependency_image_failed") from exc
             if dependency_image:
                 repo_info["deps_image"] = dependency_image
                 repo_info["deps_hint"] = dependency_plan.prompt_note
@@ -358,9 +422,13 @@ def run_dynamic_tests(
                 repo_info["language"],
         ) for f in pending_tests):
             toolchain = native_toolchain("c")
-            with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
-                ensure_toolchain(toolchain, _run_command, proxy=docker_proxy,
-                                 timeout=policy.toolchain_timeout, pull_timeout=policy.pull_timeout)
+            try:
+                with docker_resources.build_admission(timeout=policy.build_timeout, runner=_run_command):
+                    ensure_toolchain(toolchain, _run_command, proxy=docker_proxy,
+                                     timeout=policy.toolchain_timeout, pull_timeout=policy.pull_timeout)
+            except DockerBuildEnvironmentError as exc:
+                raise DynamicTestUnavailable(
+                    f"C/C++ 工具链准备失败：{exc}", "toolchain_unavailable") from exc
 
         print(f"  Docker 构建环境：server {environment['server_version']}，"
               f"{environment['proxy_description']}", file=sys.stderr)
@@ -543,6 +611,8 @@ def run_dynamic_tests(
                 docker_compose=cp_data.get("docker_compose", ""),
                 reproduction=(cp_data.get("reproduction")
                               if isinstance(cp_data.get("reproduction"), dict) else {}),
+                failure_phase=cp_data.get("failure_phase", ""),
+                retryable=cp_data.get("retryable") if type(cp_data.get("retryable")) is bool else None,
                 # Reconstruct the exploit-proof evidence too — it's serialized in the
                 # checkpoint but was dropped on resume, so a restored CONFIRMED finding
                 # silently lost its command_output/file_read/http_response proof.
@@ -608,7 +678,7 @@ def run_dynamic_tests(
 
         if generation is None:
             print("  测试生成失败。", file=sys.stderr)
-            result = collect_result(finding, None, None, generation_cost)
+            result = _collect_safely(finding, None, None, generation_cost)
             if _gen_exc_raised:
                 # keep the raised exception's own words (the None path has none)
                 result.details = f"测试生成异常：{_gen_exc_message[:2000]}"
@@ -623,16 +693,15 @@ def run_dynamic_tests(
             ui_events.dynamic(finding, result, phase="generation")
             ui_events.emit("progress.updated", stage="dynamic-test", processed=i + 1, total=total, unit="发现", message="测试生成失败")
             if checkpoint:
-                checkpoint.save(finding_id, result.to_dict())
+                _save_checkpoint(checkpoint, finding_id, result.to_dict())
                 # #311: the saved ERROR unit file IS the count — derive the
                 # summary from the unit files so this branch can no longer
                 # write errors: 0 for an errored run.
                 _counts = _summary_counts_from_checkpoints(current_checkpoints())
                 _completed = _counts["completed"]
                 _errors = _counts["errors"]
-                checkpoint.write_summary(total, _completed, _errors, _counts["error_breakdown"],
-                                         phase="in_progress",
-                                         usage=_summary_usage())
+                _write_summary(checkpoint, total, _completed, _errors,
+                               _counts["error_breakdown"], _summary_usage())
             continue
 
         # #786 (the #608 contract: get_totals reads are SANCTIONED readers
@@ -665,19 +734,22 @@ def run_dynamic_tests(
                     source_file = resolved
 
         # Step 2: Execute in Docker and retry on errors
-        execution = run_single_container(generation, finding_id,
-                                         source_file=source_file, repo_path=repo_path,
-                                         docker_proxy=docker_proxy, policy=policy)
-        result = collect_result(finding, generation, execution, generation_cost)
+        execution = _run_container_safely(
+            generation, finding_id, source_file=source_file, repo_path=repo_path,
+            docker_proxy=docker_proxy, policy=policy)
+        result = _collect_safely(finding, generation, execution, generation_cost)
         retry_count = 0
         failed_attempts: set[str] = set()
 
-        while result.status == "ERROR" and retry_count < max_retries:
+        while (result.status == "ERROR" or result.status == "INCONCLUSIVE" and result.retryable is True) and retry_count < max_retries:
             failure_kind = getattr(execution, "failure_kind", None)
             if failure_kind is None and getattr(execution, "execution_error", None):
                 # 未分类的执行错误（旧调用方或自定义执行器）：保守停止，
                 # 保持既有契约；已分类的 STAGING 仍可重试。
                 print("  Docker 环境或测试配置不可用，不再请求模型重试。", file=sys.stderr)
+                break
+            if result.retryable is False:
+                print("  当前运行环境无法通过重写测试修复，停止自动重试。", file=sys.stderr)
                 break
             if not getattr(execution, "retryable", True):
                 print(f"  {_retry_stop_reason(execution)}，不再请求模型重试。",
@@ -700,10 +772,13 @@ def run_dynamic_tests(
                 break
             failed_attempts.add(attempt_key)
             error_msg = error_feedback(result, execution)
-            error_type = ("构建" if execution.build_error or _error_category(result.details) == "build"
+            error_type = ("测试覆盖" if result.status == "INCONCLUSIVE" else
+                          "构建" if execution.build_error or result.failure_phase == "build" or _error_category(result.details) == "build"
                           else "运行时" if execution.exit_code != 0 else "应用")
 
+            ui_events.dynamic(finding, result, attempt=retry_count + 1, execution=execution)
             retry_count += 1
+            ui_events.dynamic(finding, status="RUNNING", attempt=retry_count + 1, phase="generation")
             print(f"  {error_type}出错，正在第 {retry_count}/{max_retries} 次重试，"
                   f"已附带错误反馈……", file=sys.stderr)
 
@@ -819,8 +894,11 @@ def run_dynamic_tests(
         # #311: the final summary derives from the unit files too — the
         # authoritative record, structurally identical to status().
         _counts = _summary_counts_from_checkpoints(current_checkpoints())
-        checkpoint.write_summary(total, _counts["completed"],
-                                 _counts["errors"], _counts["error_breakdown"], phase="done",
-                                 usage=_summary_usage())
+        try:
+            checkpoint.write_summary(total, _counts["completed"],
+                                     _counts["errors"], _counts["error_breakdown"], phase="done",
+                                     usage=_summary_usage())
+        except Exception as exc:
+            print(f"  最终进度汇总写入失败：{type(exc).__name__}: {exc}", file=sys.stderr)
 
     return results

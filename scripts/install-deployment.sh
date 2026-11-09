@@ -15,6 +15,7 @@ usage() {
 Usage: scripts/install-deployment.sh [options]
   --deploy          Ubuntu one-command install, verify and start vulscan.service.
                     Includes Docker startup and frozen Docker on Ubuntu 20.04.
+                    Listen on all IPv4 interfaces for access by LAN IP and port.
   --service-user USER  Account for --deploy (default: sudo caller/current user;
                     root-only installation creates the non-login vulscan user).
   --port PORT       Optional fixed port for --deploy (1024-65535). By default,
@@ -64,7 +65,12 @@ done
 [ "$ALLOW_OLD_DOCKER" = 0 ] || [ "$BOOTSTRAP" = 1 ] || fail '--allow-unsupported-docker requires --install-deps'
 [ "$CHECK" = 0 ] || [ "$DRY" = 0 ] || fail 'Choose --check or --dry-run, not both'
 # App-local tools never replace /usr/bin or /usr/local binaries.
-PATH="$ROOT/.tools/git/bin:$ROOT/.tools/go/bin:$ROOT/.tools/node/bin:$PATH"
+if [ "$DEPLOY" = 1 ]; then
+    GO_TOOLS_DIR="$ROOT/.tools/go"
+else
+    GO_TOOLS_DIR="${VULSCAN_GO_HOME:-$HOME/.local/go}"
+fi
+PATH="$ROOT/.tools/git/bin:$ROOT/.tools/go/bin:$HOME/.local/go/bin:$HOME/.local/bin:$ROOT/.tools/node/bin:$PATH"
 export PATH
 privileged() {
     if [ "$(id -u)" = 0 ]; then "$@"; else sudo -- "$@"; fi
@@ -280,7 +286,7 @@ if [ "$BOOTSTRAP" = 1 ]; then
     [ "$BUILD_PY" = 0 ] || printf '  Build checksum-pinned Python 3.12.16 from Huawei Cloud mirror into .tools/python (make altinstall; system Python unchanged).\n'
     [ "$BUILD_GIT" = 0 ] || printf '  Build Git 2.56.x from USTC verified source into .tools/git using its supported NO_RUST build; system Git unchanged.\n'
     [ "$FOCAL_DOCKER" = 0 ] || printf '  WARNING: Docker no longer supports Ubuntu 20.04. Optional frozen official Focal packages: Engine/CLI 28.1.1, containerd 1.7.27, Compose 2.35.1, Buildx 0.23.0. No current security support; upgrade Ubuntu recommended. Requires --allow-unsupported-docker.\n'
-    [ "$NEED_GO" = 0 ] || printf '  Download latest stable Go 1.26 patch from golang.google.cn metadata and Aliyun archives; verify SHA-256; install .tools/go.\n'
+    [ "$NEED_GO" = 0 ] || printf '  Download latest stable Go 1.26 patch from golang.google.cn metadata and Aliyun archives; verify SHA-256; install %s.\n' "$GO_TOOLS_DIR"
     [ "$NEED_NODE" = 0 ] || printf '  Download latest Node 22 LTS from npmmirror; verify vendor SHA-256 manifest; install .tools/node (includes npm).\n'
     [ "$LOCAL_PLUGINS" = 0 ] || printf '  Add only missing Docker CLI plugins (Compose=%s Buildx=%s) to %s; verify Docker package SHA-256 from the Aliyun mirror. Existing Engine and working plugins stay unchanged. No sudo/service changes for plugins.\n' "$NEED_COMPOSE" "$NEED_BUILDX" "$PLUGIN_DIR"
     [ "$NEED_ENGINE" = 0 ] || printf '  Docker package scripts may START/ENABLE Docker/containerd services (requires --start-docker).\n'
@@ -532,7 +538,8 @@ PY
             fetch "https://mirrors.aliyun.com/golang/$file" "$TMP/$file"
             (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Go checksum mismatch; archive not extracted.'
             tar -xzf "$TMP/$file" -C "$TMP"
-            mv "$TMP/go" "$ROOT/.tools/go"
+            mkdir -p "$(dirname "$GO_TOOLS_DIR")"
+            mv "$TMP/go" "$GO_TOOLS_DIR"
         fi
         if [ "$NEED_NODE" = 1 ]; then
             [ ! -e "$ROOT/.tools/node" ] || fail 'Existing .tools/node is incompatible; move it aside manually before retrying (not replaced automatically).'
@@ -629,7 +636,7 @@ print('Environment=' + q('HOME=' + home))
 print('Environment=' + q('DOCKER_CONFIG=' + docker_config))
 print('Environment=' + q('PATH=' + root + '/.tools/git/bin:' + root + '/.tools/go/bin:' + root + '/.tools/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'))
 print('ExecStartPre=' + command(root + '/.venv/bin/python', root + '/scripts/check-deployment.py', '--root', root, '--docker'))
-print('ExecStart=' + command(root + '/bin/vulscan', 'serve', '--addr', '127.0.0.1:' + port))
+print('ExecStart=' + command(root + '/bin/vulscan', 'serve', '--addr', '0.0.0.0:' + port))
 print('Restart=on-failure\nRestartSec=3\nTimeoutStartSec=300\nTimeoutStopSec=120\nKillMode=mixed\nUMask=0027\n\n[Install]\nWantedBy=multi-user.target')
 PYUNIT
     privileged install -d -m 0755 "$SYSTEMD_DIR"
@@ -645,5 +652,5 @@ PYUNIT
     service_pid=$(privileged systemctl show --property=MainPID --value vulscan)
     privileged "$ROOT/.venv/bin/python" "$ROOT/scripts/check-deployment.py" --root "$ROOT" --url "$SERVICE_URL" --service-pid "$service_pid" --service-uid "$service_uid" || fail 'Service startup/version check failed; inspect journalctl -u vulscan -n 80.'
     privileged systemctl is-active --quiet vulscan || fail 'vulscan.service is not running; inspect journalctl -u vulscan -n 80.'
-    printf '\n911VulScan ready: %s\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nNew users: register an account, then configure a personal model in User settings. Existing users can log in directly.\n' "$SERVICE_URL"
+    printf '\n911VulScan ready: %s\nListening: 0.0.0.0:%s\n局域网访问：http://服务器内网IP:%s\nService: systemctl status vulscan\nLogs: journalctl -u vulscan -f\nNew users: register an account, then configure a personal model in User settings. Existing users can log in directly.\n' "$SERVICE_URL" "$DEPLOY_PORT" "$DEPLOY_PORT"
 fi

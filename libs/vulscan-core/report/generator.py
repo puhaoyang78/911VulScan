@@ -241,6 +241,7 @@ def merge_dynamic_results(pipeline_data: dict, pipeline_path: str) -> dict:
     #     defect)
     merged_count = 0
     attempted_count = 0
+    attempted_statuses = {}
     skipped_count = 0
     refused_count = 0
     abstained_count = 0
@@ -333,12 +334,14 @@ def merge_dynamic_results(pipeline_data: dict, pipeline_path: str) -> dict:
                 **artifacts,
             }
             attempted_count += 1
+            attempted_statuses[status] = attempted_statuses.get(status, 0) + 1
 
     # #314 suggestion 3: what happened is SURFACED, never silent
     print(f"  已从 {dynamic_path.name} 合并 {merged_count} 条动态测试结果", file=sys.stderr)
     if attempted_count:
-        print(f"  [提示] {attempted_count} 条动态测试结果未复现漏洞，"
-              f"已记录为 dynamic_testing_attempted，不能视为已验证", file=sys.stderr)
+        from report.localization import dynamic_label
+        breakdown = "，".join(f"{dynamic_label(status)} {count} 项" for status, count in attempted_statuses.items())
+        print(f"  动态测试：{breakdown}；已保存测试记录，尚未确认复现。", file=sys.stderr)
     if skipped_count:
         print(f"  [提示] {skipped_count} 条动态测试结果已跳过，"
               f"该语言没有测试模板，未执行测试且未附加结果", file=sys.stderr)

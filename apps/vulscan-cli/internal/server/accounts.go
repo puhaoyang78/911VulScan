@@ -385,7 +385,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.ContainsAny(next, "\\\r\n") {
 		next = "/"
 	}
-	d := authPageData{Mode: mode, Title: map[string]string{"login": "登录工作台", "register": "创建账号"}[mode], CSRF: s.guestCSRF(w, r), Nonce: nonceFrom(r), Next: next}
+	d := authPageData{Mode: mode, Title: map[string]string{"login": "登录平台", "register": "创建账号"}[mode], CSRF: s.guestCSRF(w, r), Nonce: nonceFrom(r), Next: next}
 	code := 200
 	if r.Method == "POST" {
 		r.Body = http.MaxBytesReader(w, r.Body, 32<<10)

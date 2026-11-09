@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	isatty "github.com/mattn/go-isatty"
 	"github.com/puhaoyang78/911VulScan/apps/vulscan-cli/internal/config"
 	"github.com/puhaoyang78/911VulScan/apps/vulscan-cli/internal/git"
-	isatty "github.com/mattn/go-isatty"
 )
 
 // modeOpts collects the inputs to selectMode. Flag values come from the

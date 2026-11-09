@@ -109,21 +109,45 @@ def run_tests(
         )
 
     # Import and run
-    from utilities.dynamic_tester import run_dynamic_tests
+    from utilities.dynamic_tester import DynamicTestUnavailable, run_dynamic_tests
 
     print(f"[动态测试] 开始执行，最大重试次数：{max_retries}……",
           file=sys.stderr)
 
-    results = run_dynamic_tests(
-        pipeline_output_path,
-        output_dir,
-        max_retries=max_retries,
-        repo_path=repo_path,
-        registry=registry,
-        llm_config_name=llm_config_name,
-        usage_baseline=_baseline_holder,
-        docker_proxy=docker_proxy,
-    )
+    try:
+        results = run_dynamic_tests(
+            pipeline_output_path,
+            output_dir,
+            max_retries=max_retries,
+            repo_path=repo_path,
+            registry=registry,
+            llm_config_name=llm_config_name,
+            usage_baseline=_baseline_holder,
+            docker_proxy=docker_proxy,
+        )
+    except DynamicTestUnavailable as exc:
+        results_json_path = os.path.join(output_dir, "dynamic_test_results.json")
+        results_md_path = os.path.join(output_dir, "DYNAMIC_TEST_RESULTS.md")
+        write_json(results_json_path, {
+            "findings_tested": 0,
+            "results": [],
+            "skipped_reason": exc.reason_code,
+            "details": str(exc),
+        })
+        with open(results_md_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                "# 动态测试结果\n\n"
+                f"本次未执行动态测试：{exc}\n\n"
+                f"原因代码：`{exc.reason_code}`。这是运行环境问题，不是漏洞结论。\n"
+            )
+        print(f"[动态测试] 已跳过：{exc}", file=sys.stderr)
+        return DynamicTestStepResult(
+            results_json_path=results_json_path,
+            results_md_path=results_md_path,
+            findings_tested=0,
+            skipped_reason=exc.reason_code,
+            usage=tracking.get_usage(),
+        )
     # #333 (wave r1): rebuild the baseline from the refreshed holder — the
     # phase line now EXCLUDES the restored checkpoints' spend (it was
     # reported by their original run's line; including it again

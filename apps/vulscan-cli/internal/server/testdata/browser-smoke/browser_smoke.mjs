@@ -121,7 +121,7 @@ async function visit(name, path) {
   }
   if (['index', 'scan', 'summary', 'disclosure'].includes(name)) {
     const footer = await page.locator('footer').innerText();
-    if (!footer.includes('中文安全扫描工作台') || /911|Knostic|OpenAnt/.test(footer)) {
+    if (!footer.includes('终端漏洞挖掘与利用平台') || /911|Knostic|OpenAnt/.test(footer)) {
       note(name, `unexpected product footer: ${footer}`);
     }
   }

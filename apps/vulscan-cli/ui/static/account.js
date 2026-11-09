@@ -70,7 +70,12 @@
     update();
   });
   const nativeFetch = window.fetch.bind(window);
-  const login = () => { forgetScanKey(); location.assign('/login?next=' + encodeURIComponent(location.pathname + location.search)); };
+  let loginPending = false, logoutPending = false;
+  const login = () => {
+    if (loginPending || logoutPending) return;
+    loginPending = true;
+    forgetScanKey(); location.assign('/login?next=' + encodeURIComponent(location.pathname + location.search));
+  };
   document.querySelectorAll('[data-account-form]').forEach(form => {
     const confirmation = form.querySelector('[data-password-confirm]');
     if (confirmation) {
@@ -108,12 +113,17 @@
       const settings = document.createElement('a'); settings.className = 'btn'; settings.href = '/settings'; settings.textContent = '用户设置';
       const logout = document.createElement('button'); logout.className = 'btn'; logout.type = 'button'; logout.textContent = '退出';
       logout.addEventListener('click', async () => {
+        if (loginPending || logoutPending) return;
+        logoutPending = true;
         logout.disabled = true; logout.setAttribute('aria-busy','true');
         try {
           const response = await nativeFetch('/logout', {method:'POST',headers:{'X-CSRF-Token':csrf}});
-          if (response.ok || response.status === 401) { forgetScanKey(); location.assign('/login'); return; }
+          if (response.ok || response.status === 401) {
+            await response.arrayBuffer();
+            loginPending = true; forgetScanKey(); location.assign('/login'); return;
+          }
           throw new Error('退出失败，请重试。');
-        } catch (error) { VulscanUI.notify(error.message,{tone:'error',button:logout}); logout.disabled=false; logout.removeAttribute('aria-busy'); }
+        } catch (error) { logoutPending = false; VulscanUI.notify(error.message,{tone:'error',button:logout}); logout.disabled=false; logout.removeAttribute('aria-busy'); }
       });
       nav.replaceChildren(name,settings,logout);
     } catch (_) { /* Connection recovery is handled by each page. */ }
@@ -121,7 +131,10 @@
   account(true);
   setInterval(() => { if (!document.hidden) account(); }, 30000);
   window.addEventListener('focus', () => account());
-  window.addEventListener('pageshow', () => account());
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) { loginPending = false; logoutPending = false; }
+    account();
+  });
   const feedback = document.querySelector('[data-save-feedback]');
   if (feedback) VulscanUI.notify(feedback.textContent,{id:'settings-saved'});
 })();

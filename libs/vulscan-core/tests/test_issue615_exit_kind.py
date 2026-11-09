@@ -111,6 +111,24 @@ def test_the_histogram_counts_the_kinds():
     assert incomplete_count == 4  # all four incomplete rows
 
 
+def test_closeout_summary_is_present_only():
+    from core.schemas import EnhanceResult
+    r = EnhanceResult(enhanced_dataset_path="x",
+                      closeout_summary={"synthesized": 2})
+    assert r.to_dict()["closeout_summary"] == {"synthesized": 2}
+    assert "closeout_summary" not in EnhanceResult(enhanced_dataset_path="x").to_dict()
+
+
+def test_agent_result_closeout_is_serialized():
+    from utilities.agentic_enhancer.agent import AgentResult
+    r = AgentResult(
+        include_functions=[], usage_context="收尾", security_classification="unknown",
+        classification_reasoning="轮数用尽", confidence=0.2, iterations=20,
+        total_tokens=2, closeout="synthesized",
+    )
+    assert r.to_dict()["closeout"] == "synthesized"
+
+
 def test_the_enhance_result_carries_the_histogram():
     from core.schemas import EnhanceResult
     r = EnhanceResult(enhanced_dataset_path="x",

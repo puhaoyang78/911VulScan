@@ -37,6 +37,7 @@ from .llm import (
     PhaseBinding,
     simple_text,
 )
+from .llm.adapter import LLMToolArgumentsError
 from .agentic_enhancer import (
     enhance_unit_with_agent,
     load_index_from_file,
@@ -815,6 +816,60 @@ class ContextEnhancer:
 
         return dataset
 
+    def _closeout_single_shot(self, unit: dict) -> Optional[dict]:
+        """轮数用尽或工具参数坏掉后，单独问一次分类。
+
+        只用当前函数的代码，不调工具，要求模型直接回一个 JSON。
+        成功就返回正常的 agent_context；失败返回 None，由调用方记成未完成。
+        """
+        code = ""
+        section = unit.get("code")
+        if isinstance(section, dict):
+            code = section.get("primary_code") or ""
+        if not isinstance(code, str) or not code.strip():
+            return None
+        prompt = (
+            "你是代码安全分类器。只根据下面的函数代码给出分类，"
+            "只输出一个 JSON 对象，不要 Markdown，不要解释。\n"
+            '{"security_classification":"exploitable|vulnerable_internal|'
+            'security_control|neutral|unknown","classification_reasoning":'
+            '"不超过120字","confidence":0.0}\n'
+            "分类含义：\n"
+            "- exploitable：有外部输入到危险操作的路径\n"
+            "- vulnerable_internal：有危险操作，但当前函数看不到外部输入\n"
+            "- security_control：有危险操作，但已有有效防护\n"
+            "- neutral：没有安全相关的操作\n"
+            "- unknown：代码不足以判断\n"
+            f"函数：{unit.get('id', 'unknown')}\n"
+            f"代码：\n{code[:6000]}\n"
+        )
+        try:
+            text = simple_text(self.binding, prompt, tracker=self.tracker,
+                               max_tokens=2000)
+        except Exception:
+            return None
+        data = extract_json_object(text)
+        if not isinstance(data, dict):
+            return None
+        allowed = {"exploitable", "vulnerable_internal", "security_control",
+                   "neutral", "unknown"}
+        cls = str(data.get("security_classification", "")).strip().lower()
+        if cls not in allowed:
+            cls = "unknown"
+        try:
+            confidence = float(data.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return {
+            "include_functions": [],
+            "usage_context": "单次补充分类",
+            "security_classification": cls,
+            "classification_reasoning": str(
+                data.get("classification_reasoning", ""))[:500],
+            "confidence": max(0.0, min(1.0, confidence)),
+            "closeout": "fallback_single_shot",
+        }
+
     def enhance_dataset_agentic(
         self,
         dataset: dict,
@@ -1134,6 +1189,20 @@ class ContextEnhancer:
                 agent_ctx = unit.get("agent_context", {})
                 classification = agent_ctx.get("security_classification", "neutral")
 
+            except LLMToolArgumentsError as e:
+                # 工具参数已经按 MAX_TOOL_ARGUMENT_RETRIES 反馈重试过，仍然坏。
+                # 先如实记成未完成，下面再用一次纯文本分类补。
+                classification = INCOMPLETE_CLASSIFICATION
+                unit["agent_context"] = {
+                    "security_classification": INCOMPLETE_CLASSIFICATION,
+                    "classification_reasoning": (
+                        f"工具 {getattr(e, 'tool_name', '未知')} 的参数"
+                        "反馈重试后仍不是有效 JSON。"
+                    ),
+                    "confidence": 0.0,
+                    "exit_kind": "tool_argument_error",
+                }
+
             except Exception as e:
                 classification = "error"
                 error_info = _build_error_info(e)
@@ -1170,6 +1239,16 @@ class ContextEnhancer:
                         "security_classification": "error",
                         "confidence": 0.0
                     }
+
+            # 轮数用尽或工具参数坏掉：先试一次纯文本补充分类。
+            # 补上了就是正常结果；补不上才保持 incomplete。
+            if classification == INCOMPLETE_CLASSIFICATION:
+                fallback = self._closeout_single_shot(unit)
+                if fallback:
+                    base = unit.get("agent_context") or {}
+                    base.update(fallback)
+                    unit["agent_context"] = base
+                    classification = fallback["security_classification"]
 
             unit_elapsed = time.monotonic() - unit_start
             worker = threading.current_thread().name

@@ -50,6 +50,14 @@ class DynamicTestResult:
     identity_key: str = ""
     # Optional, observational only: actual staged files and command outcomes.
     reproduction: dict = field(default_factory=dict)
+    # Set by the fixed runner, independently of the Docker wrapper's exit code.
+    failure_phase: str = ""
+    retryable: bool | None = None
+    # 崩溃分类：给报告和人工复核看，不直接改变漏洞结论。
+    diagnostic_class: str = ""
+    crash: dict = field(default_factory=dict)
+    anchor: dict = field(default_factory=dict)
+    terminal_reason: str = ""
 
     def to_dict(self) -> dict:
         d = {
@@ -81,4 +89,16 @@ class DynamicTestResult:
             d["reproduction"] = self.reproduction
         if self.identity_key:
             d["identity_key"] = self.identity_key
+        if self.failure_phase:
+            d["failure_phase"] = self.failure_phase
+        if self.retryable is not None:
+            d["retryable"] = self.retryable
+        if self.diagnostic_class:
+            d["diagnostic_class"] = self.diagnostic_class
+        if self.crash:
+            d["crash"] = self.crash
+        if self.anchor:
+            d["anchor"] = self.anchor
+        if self.terminal_reason:
+            d["terminal_reason"] = self.terminal_reason
         return d

@@ -310,6 +310,13 @@ def enhance_dataset(
     error_summary = {}
     # #615: the degenerate-exit kind histogram (exit_kind's aggregate)
     incomplete_summary = {}
+    incomplete_examples = []
+    incomplete_labels = {"max_iterations": "达到分析轮数上限", "end_turn_without_finish": "模型未提交最终结果",
+                         "no_tool_calls": "模型未提交有效操作", "finish_truncated": "最终结果被截断"}
+    closeout_summary = {}
+    closeout_labels = {"synthesized": "轮数用尽后按已有信息收尾",
+                       "argument_error": "finish 参数损坏后按已有信息收尾",
+                       "fallback_single_shot": "单次补充分类"}
     context_key = "agent_context" if mode == "agentic" else "llm_context"
 
     incomplete_count = 0
@@ -326,6 +333,9 @@ def enhance_dataset(
             continue
         cls = ctx.get("security_classification", "unknown")
         classifications[cls] = classifications.get(cls, 0) + 1
+        closeout = ctx.get("closeout")
+        if isinstance(closeout, str) and closeout:
+            closeout_summary[closeout] = closeout_summary.get(closeout, 0) + 1
         # #293: the agent's degenerate exit is not a successful enhance
         if cls == "incomplete":
             incomplete_count += 1
@@ -333,6 +343,9 @@ def enhance_dataset(
             # and remedy (budget exhaustion vs cheap model behavior).
             kind = ctx.get("exit_kind") or "unstamped"
             incomplete_summary[kind] = incomplete_summary.get(kind, 0) + 1
+            if len(incomplete_examples) < 8:
+                incomplete_examples.append(
+                    f"{unit.get('id', '未知函数')}：{incomplete_labels.get(kind, '未返回完整结果')}")
 
     # Checkpoints are preserved as a permanent artifact alongside results.
     # Final summary (phase="done") is written by context_enhancer.
@@ -344,6 +357,13 @@ def enhance_dataset(
     print(f"[Enhance] Classifications: {classifications}", file=sys.stderr)
     if error_count:
         print(f"[Enhance] Errors: {error_count} ({error_summary})", file=sys.stderr)
+    _fallback_count = sum(closeout_summary.values())
+    print(f"[Enhance] 收尾：正常 {len(units) - error_count - incomplete_count - _fallback_count}，"
+          f"兜底 {_fallback_count}，未完成 {incomplete_count}"
+          f"（详见 enhance.report.json）", file=sys.stderr)
+    for _kind, _count in closeout_summary.items():
+        print(f"[Enhance]   兜底方式 {_kind}：{_count}"
+              f"（{closeout_labels.get(_kind, '其他')}）", file=sys.stderr)
 
     tracking.log_usage("Enhance", _phase_baseline["usage"])
 
@@ -361,6 +381,8 @@ def enhance_dataset(
         # #615: the kind histogram (the empty dict serializes without the
         # key via to_dict's present-only gate)
         incomplete_summary=incomplete_summary,
+        incomplete_examples=incomplete_examples,
+        closeout_summary=closeout_summary,
         # #802: the kept-set delta the resume paths hold at their
         # stale-restored intersections (present-only; None on a fresh run
         # or when nothing dropped).

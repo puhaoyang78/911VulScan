@@ -303,7 +303,7 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertIn('User=fixtureuser', unit)
         self.assertIn('SupplementaryGroups=docker', unit)
         self.assertIn('--docker', unit)
-        self.assertIn('127.0.0.1:8080', unit)
+        self.assertIn('"--addr" "0.0.0.0:8080"', unit)
         self.assertIn('TimeoutStopSec=120', unit)
         self.assertIn('KillMode=mixed', unit)
         self.assertIn('StartLimitIntervalSec=60', unit)
@@ -347,7 +347,7 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertIn('--url http://127.0.0.1:8081', actions)
         self.assertNotIn('--listen-port', actions)
         self.assertNotIn('--select-port', actions)
-        self.assertIn('"--addr" "127.0.0.1:8081"', (self.root / 'systemd/vulscan.service').read_text())
+        self.assertIn('"--addr" "0.0.0.0:8081"', (self.root / 'systemd/vulscan.service').read_text())
 
     def test_changing_port_checks_old_queue_and_new_port_before_stop(self):
         self.prepare_application()
@@ -398,7 +398,7 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertIn('911VulScan ready: http://127.0.0.1:43219', self.run_script('--deploy'))
         self.assertIn('--select-port 8080', self.actions())
         self.assertIn('--url http://127.0.0.1:43219', self.actions())
-        self.assertIn('"127.0.0.1:43219"', (self.root / 'systemd/vulscan.service').read_text())
+        self.assertIn('"0.0.0.0:43219"', (self.root / 'systemd/vulscan.service').read_text())
         (self.root / 'actions').write_text('')
         self.run_script('--deploy')
         self.assertIn('--idle-url http://127.0.0.1:43219', self.actions())
@@ -415,7 +415,22 @@ case "$url" in *mode=json*) cat "$TEST_ROOT/go.json" > "$out";; *) printf 'inval
         self.assertIn('--idle-url http://127.0.0.1:33711', actions)
         self.assertIn('--url http://127.0.0.1:33711', actions)
         self.assertNotIn('--select-port', actions)
-        self.assertIn('"127.0.0.1:33711"', (self.root / 'systemd/vulscan.service').read_text())
+        self.assertIn('"0.0.0.0:33711"', (self.root / 'systemd/vulscan.service').read_text())
+
+    def test_redeploy_enables_lan_access_without_changing_existing_port(self):
+        self.prepare_application()
+        self.run_script('--deploy', '--port', '33711')
+        unit = self.root / 'systemd/vulscan.service'
+        unit.write_text(unit.read_text().replace('"0.0.0.0:33711"', '"127.0.0.1:33711"'))
+        (self.root / 'actions').write_text('')
+        output = self.run_script('--deploy')
+        self.assertIn('"--addr" "0.0.0.0:33711"', unit.read_text())
+        self.assertIn('局域网访问：http://服务器内网IP:33711', output)
+        actions = self.actions()
+        self.assertIn('--idle-url http://127.0.0.1:33711', actions)
+        self.assertLess(actions.index('--idle-url'), actions.index('service stop vulscan'))
+        self.assertIn('--url http://127.0.0.1:33711', actions)
+        self.assertNotIn('--select-port', actions)
 
     def test_stopped_service_selects_another_port_if_previous_port_is_occupied(self):
         self.prepare_application()

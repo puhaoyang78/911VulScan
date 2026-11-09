@@ -144,7 +144,18 @@ def step_context(step: str, output_dir: str, inputs: dict | None = None, *, pers
             _incomplete_count = (_incomplete
                                  if isinstance(_incomplete, int) and _incomplete > 0
                                  else 0)
-            if report.errors or _error_count or _incomplete_count:
+            if "fatal_error_count" in _summary:
+                # 动态测试把“阶段故障”和“单条测试失败”分开：单条失败只是结果，
+                # 不把整步降成 partial；只有阶段故障或错误率过半才降级。
+                _fatal = _summary.get("fatal_error_count")
+                _fatal = _fatal if isinstance(_fatal, int) and _fatal > 0 else 0
+                _unit_errors = _summary.get("unit_errors")
+                _tested = _summary.get("findings_tested")
+                _too_many = (isinstance(_unit_errors, int) and isinstance(_tested, int)
+                             and _tested > 0 and _unit_errors / _tested > 0.5)
+                if report.errors or _fatal or _incomplete_count or _too_many:
+                    report.status = "partial"
+            elif report.errors or _error_count or _incomplete_count:
                 report.status = "partial"
 
         report.duration_seconds = round(time.monotonic() - start, 2)

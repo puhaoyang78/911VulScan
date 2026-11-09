@@ -585,7 +585,14 @@ func securityHeaders(h http.Handler) http.Handler {
 		// makes Chromium send Origin: null; same-origin still suppresses
 		// referrers to every external site without breaking CSRF checks.
 		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		// Browsers enforce COOP only for trustworthy origins. Keep it on
+		// HTTPS and loopback; plain HTTP LAN origins otherwise emit an error
+		// for a header they cannot apply. Forwarded headers remain untrusted.
+		external, _ := r.Context().Value(externalOriginKey{}).(string)
+		host := strings.ToLower((&url.URL{Host: r.Host}).Hostname())
+		if r.TLS != nil || strings.HasPrefix(external, "https://") || hostIsLoopback(host) {
+			w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		}
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
 		w.Header().Set("Permissions-Policy", "geolocation=(), camera=(), microphone=(), payment=()")
@@ -974,7 +981,7 @@ func parseDockerProxy(host, port string) (string, error) {
 
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
-		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
+		http.Error(w, "已拒绝跨站请求，请从本机平台重试", http.StatusForbidden)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -1724,7 +1731,7 @@ func scanActive(status string) bool {
 // Cancellation is asynchronous: 202 means requested, NOT cleanup completed.
 func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
-		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
+		http.Error(w, "已拒绝跨站请求，请从本机平台重试", http.StatusForbidden)
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(s.csrfFor(r))) != 1 {
@@ -1756,7 +1763,7 @@ func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
-		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
+		http.Error(w, "已拒绝跨站请求，请从本机平台重试", http.StatusForbidden)
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(s.csrfFor(r))) != 1 {
@@ -2522,7 +2529,7 @@ type refOption struct {
 // performs `git ls-remote` against the same URL policy as cloneRepo.
 func (s *Server) handleRefs(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
-		http.Error(w, "已拒绝跨站请求，请从本机工作台重试", http.StatusForbidden)
+		http.Error(w, "已拒绝跨站请求，请从本机平台重试", http.StatusForbidden)
 		return
 	}
 	repo := strings.TrimSpace(r.URL.Query().Get("repo"))

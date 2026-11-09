@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}}</title><script src="/assets/shell.js"></script><link rel="stylesheet" href="/assets/tabler-1.4.0.min.css"><link rel="stylesheet" href="/assets/workbench.css"><link rel="stylesheet" href="/assets/account.css"><script defer src="/assets/account.js"></script></head>
-<body><a class="skip-link" href="#main">跳到主要内容</a><header class="app-header"><a class="brand" href="/">安全扫描工作台</a><div class="header-actions"><button class="btn theme-toggle" type="button" data-theme-toggle aria-label="深色主题" aria-pressed="false"><span data-theme-label>主题</span></button></div></header>
+<body><a class="skip-link" href="#main">跳到主要内容</a><header class="app-header"><a class="brand" href="/">终端漏洞挖掘与利用平台</a><div class="header-actions"><button class="btn theme-toggle" type="button" data-theme-toggle aria-label="深色主题" aria-pressed="false"><span data-theme-label>主题</span></button></div></header>
 <main id="main" class="auth-main"><div class="auth-intro"><h1>{{.Title}}</h1><p>代码安全扫描 · 模型复核 · 动态测试</p></div><section class="card auth-card">
 {{if .Error}}<p class="account-feedback" role="alert">{{.Error}}</p>{{end}}
 <form method="post" action="/{{.Mode}}" data-account-form>
@@ -11,4 +11,4 @@
 <button class="btn btn-primary account-submit" type="submit">{{if eq .Mode "login"}}登录{{else}}注册并登录{{end}}</button>
 </form>
 <div class="auth-switch">{{if eq .Mode "login"}}还没有账号？<a href="/register">创建账号</a>{{else}}已有账号？<a href="/login">登录</a>{{end}}</div>
-</section><footer>中文安全扫描工作台</footer></main></body></html>
+</section><footer>终端漏洞挖掘与利用平台</footer></main></body></html>

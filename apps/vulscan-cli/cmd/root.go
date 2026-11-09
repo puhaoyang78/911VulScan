@@ -35,7 +35,7 @@ var rootCmd = &cobra.Command{
 动态验证：在 Docker 隔离环境中运行复现测试
 
 常用命令：
-  serve             启动中文网页工作台
+  serve             启动终端漏洞挖掘与利用平台
   setup llm         配置模型供应商与 API 密钥
   scan              完整扫描：解析 → 增强 → 检测 → 验证 → 报告
   diff              扫描与基准提交或 GitHub PR 相比发生变化的代码

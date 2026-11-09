@@ -125,6 +125,7 @@ class AgentResult:
         # classification cannot split the 4-vs-41. Empty string = a
         # completed analysis (NOT an incomplete marker).
         exit_kind: str = "",
+        closeout: str = "",
     ):
         self.include_functions = include_functions
         self.usage_context = usage_context
@@ -141,6 +142,7 @@ class AgentResult:
         self.cost_usd = cost_usd
         # #216: this unit's unpriced models (incomplete-cost marker).
         self.unpriced_models = unpriced_models
+        self.closeout = closeout
         # #626: this unit's cache-unpriced models — a DIFFERENT kind (the
         # model IS priced; only its cache multipliers are absent). Never
         # merged with the above: merging asserts a false statement about a
@@ -161,6 +163,7 @@ class AgentResult:
             # #615: present-only — a completed analysis (exit_kind="")
             # serializes without the key (the legacy byte-identity).
             **({"exit_kind": self.exit_kind} if self.exit_kind else {}),
+            **({"closeout": self.closeout} if self.closeout else {}),
             "agent_metadata": {
                 "iterations": self.iterations,
                 "total_tokens": self.total_tokens,
@@ -315,6 +318,18 @@ class ContextAgent:
         while iterations < MAX_ITERATIONS:
             iterations += 1
 
+            remaining = MAX_ITERATIONS - iterations + 1
+            tools = _TOOL_DEFS
+            if remaining <= 2:
+                messages.append(Message(role="user", content=[TextBlock(
+                    f"本次分析还剩 {remaining} 轮。请停止扩展无关调用链，整理已有上下文；"
+                    "信息足够时调用 finish，include_functions 只列已核实的相关函数。"
+                    "信息仍不足时明确说明未完成的部分，不得用 neutral 代替未完成分析。"
+                    + ("这是最后一轮，只能提交 finish 或说明无法完成。" if remaining == 1 else "")
+                )]))
+                if remaining == 1:
+                    tools = [tool for tool in _TOOL_DEFS if tool.name == "finish"]
+
             if self.verbose:
                 print(f"  Iteration {iterations}...")
 
@@ -326,7 +341,7 @@ class ContextAgent:
                     model=self.binding.model,
                     max_tokens=MAX_TOKENS_PER_RESPONSE,
                     system=SYSTEM_PROMPT,
-                    tools=_TOOL_DEFS,
+                    tools=tools,
                     messages=messages,
                 )
             except Exception as exc:
@@ -512,7 +527,7 @@ class ContextAgent:
                         print(f"    Agent: {block.text[:200]}...")
 
             # Check if we're done (finish tool called or no more tool use)
-            if stop_reason == "end_turn":
+            if stop_reason == "end_turn" and not any(isinstance(b, ToolUseBlock) for b in assistant_content):
                 # Model finished without calling finish tool
                 # Return default result
                 if self.verbose:
@@ -562,7 +577,9 @@ class ContextAgent:
                     if self.verbose:
                         print(f"    Tool: {tool_name}({json.dumps(tool_input)[:100]}...)")
 
-                    tool_outcome = self.tool_executor.execute(tool_name, tool_input)
+                    tool_outcome = (self.tool_executor.execute(tool_name, tool_input)
+                                    if any(tool.name == tool_name for tool in tools)
+                                    else {"error": "已到分析收尾阶段，请提交 finish 或说明无法完成；不再执行新的搜索。"})
 
                     if self.verbose:
                         result_preview = str(tool_outcome)[:200]
@@ -730,6 +747,8 @@ class ContextAgent:
         return AgentResult(
             include_functions=[],
             usage_context="Analysis terminated - max iterations reached",
+            # 轮数用尽是“没分析完”，不是“分类为 unknown”。
+            # 调用方会先尝试一次单次补充分类；补不上再如实记未完成。
             security_classification=INCOMPLETE_CLASSIFICATION,
             classification_reasoning="Could not complete analysis within iteration limit",
             confidence=0.2,

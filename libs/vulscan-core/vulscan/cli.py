@@ -630,6 +630,8 @@ def cmd_enhance(args):
             # writer is the same shape)
             if getattr(result, "incomplete_summary", None):
                 ctx.summary["incomplete_summary"] = result.incomplete_summary
+            if getattr(result, "incomplete_examples", None):
+                ctx.summary["incomplete_examples"] = result.incomplete_examples
             ctx.outputs = {
                 "enhanced_dataset_path": result.enhanced_dataset_path,
             }

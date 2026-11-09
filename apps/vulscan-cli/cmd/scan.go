@@ -267,6 +267,7 @@ func runScan(cmd *cobra.Command, args []string) {
 			os.Exit(2)
 		}
 	}
+	applyScanInvokeBudget(!scanSkipDynamicTest, quiet)
 
 	repoPath, ctx, err := resolveRepoArg(args)
 	if err != nil {

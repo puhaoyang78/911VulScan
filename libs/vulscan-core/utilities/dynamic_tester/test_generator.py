@@ -450,6 +450,10 @@ def _native_guidance(language: str) -> str:
 - test_script 必须是可编译的 {language} 源码，test_filename 使用 {filename}。
 - 测试必须调用真实目标函数。若已提供目标源文件，用 #include 引入该文件；
   如目标包含 main，可用临时宏重命名 main。不得复制并改写目标逻辑来伪造复现。
+- 必须覆盖 finding.location 中的原始目标，不能把另一个文件的底层函数崩溃
+  当作该入口已复现。若只能测试底层函数，明确报告 INCONCLUSIVE 和未覆盖的入口。
+- 将每个独立触发输入分开测试，避免前一个崩溃阻断后续用例；优先用最小触发输入
+  直接调用原始目标，不要人为破坏无关对象或依赖清理函数制造二次崩溃。
 - 支持单编译单元及已预置的仓库内头文件；按提供的真实路径 #include 目标文件。
   缺失外部头文件、链接库或项目专用构建参数时，说明覆盖限制，
   不得编造替代依赖、声称已验证完整项目或自动关闭 sanitizer。
@@ -457,6 +461,7 @@ def _native_guidance(language: str) -> str:
   -fsanitize=address,undefined -fno-sanitize-recover=all 编译，并捕获崩溃诊断。
 - 程序的 main 必须主动调用测试入口、构造触发输入；不能只定义函数。
 - 当前 C/C++ 模板仅根据指向真实目标的 sanitizer 诊断和错误终止自动确认。
+  ASan 完整的 SEGV/BUS 读写诊断和关联目标的调用栈也可判定；单独的 DEADLYSIGNAL 不足。
   程序自行打印的 CONFIRMED 不构成验证，非 sanitizer 逻辑漏洞应说明需人工核验。
 - 正常退出时，程序应打印 schema 要求的单个 JSON 结果（details 使用简体中文）。
   未触发特定攻击仅可声明 NOT_REPRODUCED，不代表证明安全。崩溃由执行器收集。

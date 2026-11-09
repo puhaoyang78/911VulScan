@@ -1317,6 +1317,8 @@ def scan_repository(
                 if getattr(enhance_result, "incomplete_summary", None):
                     ctx.summary["incomplete_summary"] = \
                         enhance_result.incomplete_summary
+                if getattr(enhance_result, "incomplete_examples", None):
+                    ctx.summary["incomplete_examples"] = enhance_result.incomplete_examples
                 ctx.outputs = {
                     "enhanced_dataset_path": enhance_result.enhanced_dataset_path,
                 }
@@ -1328,6 +1330,9 @@ def scan_repository(
                 print(f"  Classifications: {enhance_result.classifications}", file=sys.stderr)
                 if enhance_result.error_summary:
                     print(f"  Errors: {enhance_result.error_count} ({enhance_result.error_summary})", file=sys.stderr)
+                if getattr(enhance_result, "closeout_summary", None):
+                    print(f"  收尾方式：{enhance_result.closeout_summary}（详见 enhance.report.json）",
+                          file=sys.stderr)
             except Exception as e:
                 print(f"  WARNING: Enhancement failed: {e}", file=sys.stderr)
                 print("  Continuing with the un-enhanced dataset.", file=sys.stderr)
@@ -1656,14 +1661,25 @@ def scan_repository(
 
                 result.dynamic_test_path = dt_result.results_json_path
 
-                print(f"  Dynamic test: {dt_result.confirmed} confirmed, "
-                      f"{dt_result.not_reproduced} not reproduced", file=sys.stderr)
+                _dt_skipped = getattr(dt_result, "skipped_reason", "")
+                if _dt_skipped:
+                    # 环境未就绪是整段跳过，不是任何一条测试失败；不要记成 error。
+                    ctx.status = "skipped"
+                    ctx.summary["skipped"] = True
+                    ctx.summary["reason"] = _dt_skipped
+                    _record_skip(result, "dynamic-test", "environment_unavailable")
+                    print(f"  动态测试已跳过：{_dt_skipped}"
+                          f"（详见 dynamic-test.report.json）", file=sys.stderr)
+                else:
+                    print(f"  Dynamic test: {dt_result.confirmed} confirmed, "
+                          f"{dt_result.not_reproduced} not reproduced", file=sys.stderr)
             except Exception as e:
-                print(f"  WARNING: Dynamic test failed: {e}", file=sys.stderr)
-                print("  Continuing without dynamic-test results.", file=sys.stderr)
+                print(f"  动态测试未完成：{e}", file=sys.stderr)
+                print("  已保留此前完成的步骤，继续生成报告。", file=sys.stderr)
                 ctx.status = "error"
                 ctx.errors.append(str(e))
-                ctx.summary = {"error_count": 1, "reason": str(e)}
+                ctx.summary = {"error_count": 1, "fatal_error_count": 1,
+                               "reason": str(e)}
                 _record_skip(result, "dynamic-test", "failed")
                 # #799: the failed attempt is the ONE skip class the Step-6
                 # build could not know — REBUILD the output through the same

@@ -191,6 +191,31 @@ try {
   await cached.goBack({waitUntil:'domcontentloaded'});
   await cached.locator('[data-account-nav] .account-name').filter({hasText:bobName}).waitFor();
   if(await cached.locator('#api_key').inputValue()!==''||await cached.evaluate(()=>sessionStorage.getItem('vulscan.scan-key'))!==null)throw Error('Cached tab restored a different account key');
+  // Concurrent expired-session responses must cause a single navigation.
+  const loginNavigations=[],failedNavigations=[];
+  b.on('request', request => {if(request.isNavigationRequest()&&new URL(request.url()).pathname==='/login')loginNavigations.push(request.url());});
+  b.on('requestfailed', request => {if(request.isNavigationRequest())failedNavigations.push(request.failure()?.errorText);});
+  await b.goto(base+'/');await b.locator('[data-account-nav] .account-name').waitFor();
+  await b.route(base+'/account',route=>route.fulfill({status:401,body:'登录已失效'}));
+  await b.evaluate(()=>{window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('focus'));});
+  await b.waitForURL('**/login?next=*');await b.waitForLoadState('networkidle');
+  if(loginNavigations.length!==1||failedNavigations.length)throw Error('Concurrent session expiry interrupted login navigation');
+  await b.unroute(base+'/account');
+  // While logout is in flight, background account checks must not redirect.
+  await b.goto(base+'/');await b.locator('[data-account-nav] .account-name').waitFor();
+  loginNavigations.length=0;failedNavigations.length=0;
+  let releaseLogout,logoutStarted,accountChecksDone,expiredChecks=0;
+  const logoutGate=new Promise(resolve=>{releaseLogout=resolve;});
+  const started=new Promise(resolve=>{logoutStarted=resolve;});
+  const checks=new Promise(resolve=>{accountChecksDone=resolve;});
+  b.on('response',response=>{if(response.url()===base+'/account'&&response.status()===401&&++expiredChecks>=2)accountChecksDone();});
+  await b.route(base+'/logout',async route=>{const response=await route.fetch();logoutStarted();await logoutGate;await route.fulfill({response});});
+  await b.getByRole('button',{name:'退出',exact:true}).click({noWaitAfter:true});await started;
+  await b.evaluate(()=>{window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('focus'));});
+  await checks;
+  if(b.url()!==base+'/'||loginNavigations.length)throw Error('Account refresh redirected before logout completed');
+  releaseLogout();await b.waitForURL('**/login');await b.waitForLoadState('networkidle');
+  if(loginNavigations.length!==1||failedNavigations.length)throw Error('Logout triggered competing login navigations');
   if (errors.length) throw new Error(errors.join('\n'));
   console.log('ACCOUNTS-BROWSER OK: direct register/login/logout, isolated model settings, tab-session keys without saved configuration, return/reload/clear/logout/account switch, persisted scan choices and Docker proxies, password change, 4 viewport widths, light/dark, keyboard, 0 CSP/external-network errors');
 } finally {for (const ctx of contexts) await ctx.close();await browser.close();}

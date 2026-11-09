@@ -146,7 +146,8 @@ def stage_result(report):
             "units_reviewed", "entry_points_promoted", "units_touched", "units_enhanced",
             "incomplete_count", "error_count", "analyzed", "findings_input", "findings_tested",
             "confirmed_vulnerabilities", "needs_review", "confirmed", "not_reproduced", "blocked",
-            "inconclusive", "errors", "classifications", "verdicts", "formats_generated", "error_summary")
+            "inconclusive", "errors", "classifications", "verdicts", "formats_generated", "error_summary",
+            "incomplete_summary", "incomplete_examples")
     visible = {}
     for key in keys:
         value = summary.get(key)
@@ -159,7 +160,11 @@ def stage_result(report):
         elif isinstance(value, list):
             visible[key] = [_bounded(v, 100) for v in value[:8] if isinstance(v, str)]
     errors = "\n".join(str(error) for error in report.errors)
-    detail = errors or str(summary.get("reason") or "")
+    examples = summary.get("incomplete_examples")
+    detail = errors
+    if isinstance(examples, list):
+        detail = "\n".join(v for v in (errors, *examples[:8]) if isinstance(v, str) and v)
+    detail = detail or str(summary.get("reason") or "")
     cost = None if report.token_usage.get("accounting_error") or report.token_usage.get("cost_incomplete") else report.cost_usd
     emit("stage.changed", stage=report.step, status=report.status,
          duration_seconds=report.duration_seconds, cost_usd=cost,
@@ -192,12 +197,17 @@ def dynamic(finding, result=None, *, status=None, attempt=None, phase="", execut
         elif getattr(execution, "execution_error", None):
             phase = "environment" if displayed == "environment_error" else "run"
     details = getattr(result, "details", "") or ""
+    result_phase = getattr(result, "failure_phase", "")
+    if result_phase in {"build", "run", "analysis", "environment"}:
+        phase = result_phase
+        if raw_status == "ERROR" and phase == "environment":
+            displayed = "environment_error"
     duration = getattr(result, "elapsed_seconds", None)
     duration = duration if type(duration) in (int, float) and math.isfinite(duration) and duration >= 0 else None
     _dynamic_states[route] = displayed
     emit("validation.updated", stage="dynamic-test", phase=phase, finding_id=route, attempt=attempt,
          finding=dict(finding_id=route, dynamic=displayed, dynamic_details=_bounded(details),
-                      attempt=attempt, failure_phase=phase if displayed in ("error", "environment_error") else ""),
+                      attempt=attempt, failure_phase=phase if displayed in ("error", "environment_error", "inconclusive") else ""),
          duration_seconds=duration,
          status=displayed, message="动态测试执行中" if raw_status == "RUNNING" else "动态测试结果",
          details=_bounded(details))

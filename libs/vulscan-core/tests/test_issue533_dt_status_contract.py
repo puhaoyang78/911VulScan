@@ -48,15 +48,27 @@ class TestStatusContract:
         # sites now write): a counted error must read partial. On the
         # pristine base the helper does not exist (the machinery RED).
         with step_context("dynamic-test", out) as ctx:
-            ctx.summary = dynamic_test_step_summary(_dt_result(errors=1))
+            ctx.summary = dynamic_test_step_summary(_dt_result(errors=2))
         with open(os.path.join(out, "dynamic-test.report.json")) as fh:
             report = json.load(fh)
         assert report["status"] == "partial", (
             f"a counted dynamic-test failure must not read success; got "
             f"{report['status']!r} — summary: {report.get('summary')}")
-        assert report["summary"]["error_count"] == 1
+        assert report["summary"]["error_count"] == 2
         # The errors key is a persisted contract — retained, not dropped.
-        assert report["summary"]["errors"] == 1
+        assert report["summary"]["errors"] == 2
+
+    def test_one_error_out_of_five_stays_success(self, tmp_path):
+        """单条失败是结果，不是阶段故障；只有错误率过半才降级。"""
+        out = str(tmp_path)
+        result = DynamicTestStepResult(
+            findings_tested=5, errors=1, results_json_path="/x.json",
+        )
+        with step_context("dynamic-test", out) as ctx:
+            ctx.summary = dynamic_test_step_summary(result)
+        with open(os.path.join(out, "dynamic-test.report.json")) as fh:
+            report = json.load(fh)
+        assert report["status"] == "success"
 
     def test_zero_errors_stay_success(self, tmp_path):
         out = str(tmp_path)
@@ -83,6 +95,7 @@ class TestStatusContract:
         assert set(s) == {
             "findings_tested", "confirmed", "not_reproduced", "blocked",
             "inconclusive", "errors", "error_count",
+            "unit_errors", "fatal_error_count",
         }
 
     def test_both_call_sites_use_the_helper(self):
@@ -145,4 +158,4 @@ class TestStatusContract:
         handler = block[i_degrade:]
         assert 'ctx.status = "error"' in handler
         assert "ctx.errors.append(str(e))" in handler
-        assert 'ctx.summary = {"error_count": 1, "reason": str(e)}' in handler
+        assert '"error_count": 1' in handler and '"fatal_error_count": 1' in handler
