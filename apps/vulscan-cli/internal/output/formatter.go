@@ -649,7 +649,7 @@ func PrintScanSummaryV2(data map[string]any) {
 
 // PrintVersion outputs version info.
 func PrintVersion(version, goVersion, pythonVersion string) {
-	bold.Printf("911VulScan ")
+	bold.Printf("终端漏洞挖掘与利用平台 ")
 	fmt.Println(version)
 	dim.Printf("  Go:     %s\n", goVersion)
 	if pythonVersion != "" {

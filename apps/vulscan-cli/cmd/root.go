@@ -24,9 +24,9 @@ var (
 // rootCmd represents the base command when called without any subcommands.
 var rootCmd = &cobra.Command{
 	Use:               "vulscan",
-	Short:             "911VulScan：大语言模型驱动的代码漏洞扫描",
+	Short:             "终端漏洞挖掘与利用平台：大语言模型驱动的代码漏洞扫描",
 	PersistentPreRunE: validateLegacyKeyFlag,
-	Long: `911VulScan 默认使用 DeepSeek 分析代码漏洞。
+	Long: `终端漏洞挖掘与利用平台默认使用 DeepSeek 分析代码漏洞。
 第三方来源与许可见随附 LICENSE 和 THIRD_PARTY_NOTICES.md。
 支持 Python、JavaScript/TypeScript、Go、C/C++ 等语言。
 
