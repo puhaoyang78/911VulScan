@@ -34,7 +34,7 @@ var chineseLabels = map[string]string{
 	"success": "成功", "failed": "失败", "interrupted": "已中断", "partial": "部分完成", "pending": "待处理",
 	"unknown": "未知", "not tested": "未测试", "test error": "测试错误", "not reproduced": "未复现",
 	"needs review": "需要复核", "critical": "严重", "high": "高危", "medium": "中危", "low": "低危",
-	"corrected": "复核后更正", "report-data": "报告数据生成", "generate-context": "上下文生成", "build-output": "结果整理", "patch": "修复生成", "detect": "漏洞检测",
+	"corrected": "复核后更正", "report-data": "报告数据生成", "generate-context": "上下文生成", "build-output": "准备候选数据", "patch": "修复生成", "detect": "漏洞检测",
 	"model": "模型评估", "derived": "规则推导", "parse": "代码解析", "context": "上下文分析",
 	"app_context": "应用上下文", "application_context": "应用上下文", "enhance": "上下文增强",
 	"analyze": "漏洞分析", "verify": "模型复核", "report": "报告生成", "dynamic_test": "动态测试",

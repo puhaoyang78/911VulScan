@@ -307,7 +307,7 @@ def merge_dynamic_results(pipeline_data: dict, pipeline_path: str) -> dict:
         # verification by omission.
         # Preserve existing PoC/configuration and execution receipts through the
         # same identity gate as the verdict. Do not infer missing observations.
-        artifacts = {key: r[key] for key in ("test_code", "dockerfile", "docker_compose")
+        artifacts = {key: r[key] for key in ("test_code", "dockerfile", "docker_compose", "poc_summary")
                      if isinstance(r.get(key), str) and r[key]}
         if isinstance(r.get("reproduction"), dict):
             artifacts["reproduction"] = r["reproduction"]
@@ -361,7 +361,7 @@ def merge_dynamic_results(pipeline_data: dict, pipeline_path: str) -> dict:
 
 
 def _dynamic_summary(value):
-    """Only verdict metadata goes to the LLM; raw proof is rendered verbatim."""
+    """Keep prose metadata; raw execution records stay outside model calls."""
     if not isinstance(value, dict):
         return value
     return {key: item for key, item in value.items()
@@ -1145,14 +1145,13 @@ def generate_disclosure(
     # never populated — so an unadjudicated Stage-1 candidate reads identically
     # to an attacker-simulation-confirmed finding.
     final_output = _disclosure_verdict_header(vulnerability_data) + final_output
-    # Keep the raw execution receipt outside model generation: no extra tokens,
-    # no paraphrased logs, and no invented build/trigger instructions.
+    # Present the saved explanation and exact PoC without a process transcript.
     from report.reproduction import render_reproduction
     dynamic_record = vulnerability_data.get("dynamic_testing")
     if not isinstance(dynamic_record, dict):
         dynamic_record = vulnerability_data.get("dynamic_testing_attempted")
     if isinstance(dynamic_record, dict):
-        final_output += "\n\n" + render_reproduction(dynamic_record)
+        final_output += "\n\n" + render_reproduction(dynamic_record, vulnerability_data)
 
     return final_output, _extract_usage(
         result.input_tokens,

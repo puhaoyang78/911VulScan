@@ -18,7 +18,7 @@ func readableFinding() Finding {
 		VulnerableCode: "copy(dst, input);", SuggestedFix: "if (length >= capacity) return ERROR;",
 		StepsToReproduce:   "使用超出目标容量的合成输入。",
 		Stage2Verification: "静态复核已完成；不等于动态复现。",
-		Reproduction:       "构建：fixture-build\n运行：fixture-run\n预期：拒绝输入\n实际输出：exit status 1\nAddressSanitizer: synthetic fixture only",
+		Reproduction:       "### PoC 与验证说明\n\nPoC 使用超长输入，测试捕获目标内存错误。\n\n#### 完整 PoC\n\n```c\nsynthetic_fixture();\n```",
 	}
 }
 
@@ -54,6 +54,7 @@ func TestFindingDetailsRenderAcrossLayouts(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := readableFinding()
+			f.DynamicTestDetails = "PRIVATE_EXECUTION_TRANSCRIPT"
 			d := baseReportData()
 			g := FindingGroup{Verdict: "vulnerable", Count: 1, Findings: []Finding{f}}
 			if tc.subgroups {
@@ -65,11 +66,13 @@ func TestFindingDetailsRenderAcrossLayouts(t *testing.T) {
 			if err := tc.render(d, &out); err != nil {
 				t.Fatal(err)
 			}
+			if strings.Contains(out.String(), f.DynamicTestDetails) || strings.Contains(out.String(), "完整测试输出") {
+				t.Fatal("raw execution logs appeared in the readable report")
+			}
 			for _, want := range []string{
 				"问题描述", f.Description, "CWE-120", f.CWEName, "影响", f.Impact,
 				"修复建议", f.Remediation, f.VulnerableCode, "修复示例", "未测试", "if (length &gt;= capacity) return ERROR;",
-				f.StepsToReproduce, f.Stage2Verification, "PoC 与测试记录", "exit status 1",
-				"AddressSanitizer: synthetic fixture only", "模型复核", "动态测试",
+				f.StepsToReproduce, f.Stage2Verification, "PoC 与验证说明", "synthetic_fixture();", "模型复核", "动态测试",
 			} {
 				if !strings.Contains(out.String(), want) {
 					t.Errorf("missing report detail %q", want)
@@ -113,7 +116,7 @@ func TestLegacyFindingShowsEvidenceGaps(t *testing.T) {
 	if err := RenderOverview(d, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"旧版分析", "CWE 未提供", "未提供影响评估", "未提供修复建议", "未提供代码片段", "未提供可用的修复代码示例", "尚未记录动态测试", "未记录动态测试输出"} {
+	for _, want := range []string{"旧版分析", "CWE 未提供", "未提供影响评估", "未提供修复建议", "未提供代码片段", "未提供可用的修复代码示例", "尚未记录动态测试", "未记录 PoC 与动态验证说明"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing legacy evidence gap %q", want)
 		}

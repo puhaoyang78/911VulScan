@@ -18,6 +18,7 @@ from utilities.dynamic_tester.reporter import generate_report
 GENERATION = {
     "dockerfile": "FROM fixture\nCOPY . /test\nCMD [\"python\", \"proof.py\"]\n",
     "test_script": "# synthetic fixture; not an exploit\nprint('observation')\n",
+    "poc_summary": "目标缺少长度检查，PoC 传入超长的合成输入并检查目标响应。",
     "test_filename": "proof.py", "requirements": "fixture==1\n",
     "requirements_filename": "requirements.txt",
 }
@@ -106,8 +107,12 @@ def test_records_actual_staging_and_commands_without_changing_execution(tmp_path
     assert result.status == "CONFIRMED"
     assert result.to_dict()["reproduction"] == receipt
     rendered = generate_report([result], "synthetic fixture")
-    for value in ("fixture HTTP 200", "--network none", "Docker 退出码 0", "类型：HTTP 响应", "proof.py"):
+    assert result.poc_summary == GENERATION["poc_summary"]
+    for value in (GENERATION["poc_summary"], GENERATION["test_script"], "fixture response differs", "proof.py"):
         assert value in rendered
+    for log in ("fixture HTTP 200", "--network none", "Docker 退出码", "标准输出", "build done"):
+        assert log not in rendered
+    assert result.to_dict()["evidence"][0]["content"] == "fixture HTTP 200"
 
 
 def test_actual_compose_not_unsafe_generated_draft(tmp_path, monkeypatch):
@@ -130,7 +135,9 @@ services:
     assert [c["stage"] for c in result.reproduction["commands"]] == ["build", "start", "observe", "cleanup"]
     assert result.reproduction["commands"][-2]["argv"][-4:] == ["logs", "--no-log-prefix", "-f", "test"]
     rendered = render_reproduction(collect_result({"id": "F"}, generation, result).to_dict())
-    assert "日志命令的退出码仅表示日志读取状态" in rendered
+    assert GENERATION["test_script"] in rendered
+    assert "docker-compose.yml" not in rendered
+    assert "privileged" not in rendered and "构建与运行命令" not in rendered
 
 
 @pytest.mark.parametrize("timed_out,code", [(False, 1), (True, -1)])
@@ -142,7 +149,9 @@ def test_build_failure_receipt_is_not_a_runtime_claim(monkeypatch, timed_out, co
     assert len(result.reproduction["commands"]) == 1
     assert result.reproduction["commands"][0]["stage"] == "build"
     assert result.reproduction["commands"][0]["exit_code"] == code
-    assert "last build error" in render_reproduction(result.to_dict())
+    assert "last build error" in result.to_dict()["details"]
+    rendered = render_reproduction(result.to_dict())
+    assert "last build error" not in rendered and "不能据此确认复现" in rendered
 
 
 def test_large_logs_are_redacted_and_explicitly_bounded(monkeypatch):
@@ -159,11 +168,11 @@ def test_absent_receipts_are_not_fabricated_and_poisoned_shapes_do_not_crash():
     legacy = DynamicTestResult("F", "CONFIRMED", "legacy", test_code="legacy script")
     assert "reproduction" not in legacy.to_dict()
     output = render_reproduction(legacy.to_dict())
-    assert "未记录测试输出" in output and "构建/运行命令未记录" in output
+    assert "旧记录缺少执行记录" in output and "生成稿" in output
     assert "legacy script" in output and "退出码 0" not in output
     output = render_reproduction({"status": {"unsafe": "value"}, "evidence": "not-list",
         "reproduction": {"commands": [None, {"stage": {}, "argv": 2}], "artifacts": [42]}})
-    assert "未知" in output and "命令参数未记录或格式无效" in output
+    assert "未知" in output and "未保存 PoC 源码" in output
 
 
 def test_fences_contain_embedded_markdown_and_do_not_rewrite_code():
@@ -175,8 +184,33 @@ def test_fences_contain_embedded_markdown_and_do_not_rewrite_code():
     assert block in output
 
 
+@pytest.mark.parametrize("status,outcome", [
+    ("CONFIRMED", "动态测试已复现该问题"),
+    ("NOT_REPRODUCED", "本次动态测试未复现该问题"),
+    ("BLOCKED", "动态测试受阻"),
+    ("INCONCLUSIVE", "无法确定是否复现"),
+    ("ERROR", "不能据此确认复现"),
+    ("SKIPPED", "本次未执行动态测试"),
+])
+def test_readable_summary_keeps_verdict_and_complete_poc_without_logs(status, outcome):
+    code = "// synthetic PoC\n" + "// long source line\n" * 300 + "return 0;\n"
+    record = {"status": status, "poc_summary": GENERATION["poc_summary"],
+              "details": "受控输入触发了预期的目标诊断。\nPRIVATE_LOG",
+              "reproduction": {"commands": [{"stage": "run", "stdout": "PRIVATE_LOG"}],
+                  "artifacts": [{"filename": "proof.c", "content": code},
+                                {"filename": "_vulscan_c_runner.py", "content": "INTERNAL_RUNNER"},
+                                {"filename": "Dockerfile", "content": "BUILD_SETUP"}]}}
+    output = render_reproduction(record)
+    assert output.index(GENERATION["poc_summary"]) < output.index("完整 PoC")
+    assert outcome in output and "受控输入触发了预期的目标诊断" in output
+    assert code in output
+    assert all(private not in output for private in ("PRIVATE_LOG", "INTERNAL_RUNNER", "BUILD_SETUP"))
+    assert record["reproduction"]["commands"][0]["stdout"] == "PRIVATE_LOG"
+
+
 def test_merge_keeps_receipts_only_after_identity_match(tmp_path):
     record = {"finding_id": "F", "identity_key": "stable", "status": "ERROR",
+              "poc_summary": GENERATION["poc_summary"],
               "test_code": "fixture-code", "dockerfile": "fixture-dockerfile",
               "reproduction": {"commands": [{"argv": ["docker", "build", "."]}]}}
     (tmp_path / "dynamic_test_results.json").write_text(json.dumps({"results": [record]}))
@@ -188,10 +222,21 @@ def test_merge_keeps_receipts_only_after_identity_match(tmp_path):
         if attached:
             assert block["reproduction"] == record["reproduction"]
             assert block["test_code"] == "fixture-code"
+            assert block["poc_summary"] == GENERATION["poc_summary"]
             assert "dynamic_testing" not in pipeline["findings"][0]
 
 
-def test_disclosure_inserts_verbatim_receipt_without_sending_it_to_llm():
+def test_legacy_design_does_not_repeat_outdated_verification_notes():
+    output = render_reproduction({"status": "CONFIRMED", "details": "实际捕获目标内存错误。"}, {
+        "description": "缺少下界检查。",
+        "steps_to_reproduce": "构造负下标作为目标函数的参数。\n\n旧的验证说明：未执行动态测试。",
+    })
+    assert "缺少下界检查" in output and "构造负下标" in output
+    assert "实际捕获目标内存错误" in output
+    assert "旧的验证说明" not in output and "未执行动态测试" not in output
+
+
+def test_disclosure_inserts_saved_poc_without_sending_it_to_llm():
     from utilities.llm import CompletionResult, PhaseBinding, TextBlock
     prompts = []
 
@@ -207,8 +252,9 @@ def test_disclosure_inserts_verbatim_receipt_without_sending_it_to_llm():
              "content": "UNIQUE_STAGED_CONTENT"}]}, "evidence": [{"type": "command_output", "content": "UNIQUE_PROOF"}]}
     finding = {"stage2_verdict": "agreed", "dynamic_testing_attempted": block}
     text, _ = generator.generate_disclosure(finding, "fixture", binding)
-    assert text.count("### PoC 与测试记录") == 1
-    assert "UNIQUE_STAGED_CONTENT" in text and "UNIQUE_PROOF" in text
+    assert text.count("### PoC 与验证说明") == 1
+    assert "UNIQUE_STAGED_CONTENT" in text and "fixture-details" in text
+    assert "UNIQUE_PROOF" not in text
     for value in ("UNIQUE_ARTIFACT", "UNIQUE_STAGED_CONTENT", "UNIQUE_PROOF"):
         assert value not in prompts[0]
     compact = generator._compact_for_summary({"findings": [finding]})
@@ -226,6 +272,7 @@ def test_checkpoint_resume_preserves_receipt_without_execution(tmp_path, monkeyp
     receipt = {"commands": [{"stage": "run", "argv": ["docker", "run", "fixture"],
                               "exit_code": 0, "stdout": "saved-observation"}]}
     record = DynamicTestResult("F", "CONFIRMED", "fixture", identity_key="stable", reproduction=receipt,
+                               poc_summary="已保存的 PoC 构造说明。",
                                evidence=[Evidence("http_response", "saved-response")]).to_dict()
     record["id"] = "F"  # StepCheckpoint.save stamps the checkpoint lookup key.
     (checkpoint / "F.json").write_text(json.dumps(record))
@@ -239,6 +286,7 @@ def test_checkpoint_resume_preserves_receipt_without_execution(tmp_path, monkeyp
     monkeypatch.setattr(dynamic, "get_global_tracker", lambda: TokenTracker())
     restored = dynamic.run_dynamic_tests(str(pipeline), str(output),
         registry=SimpleNamespace(get=lambda phase: object()))
+    assert restored[0].poc_summary == record["poc_summary"]
     assert restored[0].reproduction == receipt
     stored = json.loads((output / "dynamic_test_results.json").read_text())["results"][0]
     assert stored["reproduction"] == receipt

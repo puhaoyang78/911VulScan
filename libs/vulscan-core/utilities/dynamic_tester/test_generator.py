@@ -93,6 +93,9 @@ RULES:
    代码标识符、原始诊断输出和协议值保持原样。不得翻译机器字段。
 7. 对于 C/C++，必须遵循提示中的固定编译运行模板，不得通过 Python 模拟目标代码。
 8. CONFIRMED 必须附带非空且可核对的 evidence；只有状态字符串或空的测试输出不能确认漏洞。
+9. details 是面向报告读者的实测摘要：用 1–3 句话说明实际输入、调用的真实目标、观察到的
+   行为及验证结论。命令流水、标准输出、标准错误和堆栈放入 evidence，不要拼进 details。
+   未执行、测试受阻或结果不确定时如实说明，不得套用成功复现的措辞。
 
 DEPENDENCY INSTALLATION:
 - Do NOT pin exact versions unless the vulnerability is version-specific. Use >= or no version pin.
@@ -179,6 +182,7 @@ DOCKER-COMPOSE (only if the test needs multiple services):
 OUTPUT FORMAT:
 Return a JSON object with these keys:
 - "dockerfile": string — Complete Dockerfile content
+- "poc_summary": string — 用简体中文写一段简洁说明：漏洞的具体原因、PoC 构造了什么输入、如何调用真实目标、预期通过什么现象判断是否复现。此时尚未运行测试，不得声称已经成功验证，不要列命令或日志。
 - "test_script": string — Complete test source content (Python/JS/TS/Go/C/C++ depending on language)
 - "test_filename": string — Filename for the test script (e.g., "test_exploit.py")
 - "requirements": string — Dependencies file content (requirements.txt / package.json); empty for Go or dependency-free Python
@@ -591,7 +595,7 @@ def generate_test(
     # default to); keep rejecting non-str non-null values — a dict/number is
     # still a malformed generation.
     _OPTIONAL_STR_FIELDS = ("requirements", "requirements_filename",
-                            "docker_compose")
+                            "docker_compose", "poc_summary")
     for k in _OPTIONAL_STR_FIELDS:
         if k in parsed and parsed[k] is None:
             parsed[k] = ""
@@ -696,7 +700,7 @@ def regenerate_test(
     # default to); keep rejecting non-str non-null values — a dict/number is
     # still a malformed generation.
     _OPTIONAL_STR_FIELDS = ("requirements", "requirements_filename",
-                            "docker_compose")
+                            "docker_compose", "poc_summary")
     for k in _OPTIONAL_STR_FIELDS:
         if k in parsed and parsed[k] is None:
             parsed[k] = ""

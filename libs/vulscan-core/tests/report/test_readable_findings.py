@@ -162,7 +162,8 @@ def test_live_report_data_and_csv_keep_full_details_without_api(tmp_path, monkey
     assert finding["analysis"].endswith("仅在特定条件下成立。")
     assert finding["vulnerable_code"] == "return data[index];"
     assert finding["dynamic_test_status"] == "ERROR"
-    assert "构建/运行命令未记录" in finding["reproduction"]
+    assert "不能据此确认复现" in finding["reproduction"]
+    assert "最后验证记录" not in finding["reproduction"]
     assert finding["stage2_verification"].startswith("模型复核：结论一致。")
     assert "已复现" not in finding["stage2_verification"]
     output = tmp_path / "report.csv"
@@ -173,7 +174,26 @@ def test_live_report_data_and_csv_keep_full_details_without_api(tmp_path, monkey
     assert row["stage2_verdict"] == "vulnerable"  # backward-compatible final verdict
     assert row["suggested_fix_status"] == "proposed_unvalidated"
     assert row["dynamic_test_status"] == "ERROR"
-    assert "未记录命令退出码、标准输出和标准错误" in row["reproduction"]
+    assert "PoC 与验证说明" in row["reproduction"]
+    assert "构建与运行命令" not in row["reproduction"]
+
+
+def test_legacy_design_in_pipeline_reaches_live_report_and_csv(tmp_path, capsys):
+    _, results, dataset = _fixture(tmp_path)
+    pipeline = tmp_path / "pipeline_output.json"
+    data = json.loads(pipeline.read_text())
+    data["findings"][0]["steps_to_reproduce"] = "用越界索引调用 lookup。\n\n未执行动态测试。"
+    _write(pipeline, data)
+    assert cli.cmd_report_data(SimpleNamespace(results=str(results), dataset=str(dataset), no_llm=True)) == 0
+    finding = json.loads(capsys.readouterr().out)["data"]["findings"][0]
+    output = tmp_path / "report.csv"
+    export_csv(str(results), str(dataset), str(output))
+    with output.open(newline="", encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream))
+    for report in (finding["reproduction"], row["reproduction"]):
+        assert "PoC 构造思路（静态分析）：用越界索引调用 lookup。" in report
+        assert "未执行动态测试" not in report
+        assert "不能据此确认复现" in report
 
 
 @pytest.mark.parametrize("renderer", ["cli", "legacy"])

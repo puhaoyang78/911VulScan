@@ -1349,7 +1349,7 @@ def cmd_report_data(args):
                 _deferred = _deferred_edges(unit)
                 findings.append({
                     **fields,
-                    "reproduction": render_reproduction(dt_result) if dt_result else "未记录可关联的动态测试。未提供构建、触发或运行记录；不能据此声称已复现。",
+                    "reproduction": render_reproduction(dt_result, fields) if dt_result else "未记录可关联的动态测试。未提供构建、触发或运行记录；不能据此声称已复现。",
                     "verdict": verdict,
                     "verdict_color": verdict_colors.get(verdict, "#6c757d"),
                     "file": file_path,

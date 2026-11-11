@@ -66,10 +66,11 @@ def test_dynamic_report_translates_labels_preserving_evidence_and_machine_status
     result = DynamicTestResult("VULN-001", "CONFIRMED", "已读取测试文件。", evidence=[Evidence("file_read", "/tmp/fixture.txt")], test_code="print('CONFIRMED')")
     before = result.to_dict()
     text = generate_report([result], repo_name="fixture")
-    for expected in ("动态测试结果", "已复现", "文件读取", "/tmp/fixture.txt", "print('CONFIRMED')", "VULN-001"):
+    for expected in ("动态测试结果", "已复现", "已读取测试文件。", "print('CONFIRMED')", "VULN-001"):
         assert expected in text
     for english in ("# Dynamic Test Results", "## Summary", "**Status:**", "**Evidence:**", "Generated Test Code"):
         assert english not in text
+    assert "/tmp/fixture.txt" not in text
     assert result.to_dict() == before
 
 

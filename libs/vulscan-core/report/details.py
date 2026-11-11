@@ -138,6 +138,10 @@ def load_dynamic_by_route(results_path: str) -> dict:
         if not isinstance(file, str) or not isinstance(function, str):
             continue
         record = dict(record)
+        # Legacy analysis stored its design only in pipeline_output.json.
+        # Keep it explicitly static; it is not the observed execution result.
+        if isinstance(finding.get("steps_to_reproduce"), str):
+            record["steps_to_reproduce"] = finding["steps_to_reproduce"]
         if not isinstance(record.get("status"), str) or record["status"] not in VALID_STATUSES:
             record["status"] = "UNKNOWN"
         joined[f"{file}:{function}"] = record

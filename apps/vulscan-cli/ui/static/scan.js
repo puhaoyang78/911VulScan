@@ -1,7 +1,7 @@
 /* UI projections only. All scan decisions remain in the scanner. */
 (() => {
  'use strict';
- const stages={recovery:'历史恢复',queue:'等待执行',initialize:'初始化',clone:'获取仓库',parse:'代码解析','app-context':'项目识别','llm-reachability':'入口分析',enhance:'上下文增强',analyze:'漏洞分析',verify:'模型复核','build-output':'结果整理','dynamic-test':'动态测试',report:'生成报告','report-data':'报告内容',summary:'扫描摘要',scan:'主扫描',cleanup:'停止与清理',task:'任务结束'};
+ const stages={recovery:'历史恢复',queue:'等待执行',initialize:'初始化',clone:'获取仓库',parse:'代码解析','app-context':'项目识别','llm-reachability':'入口分析',enhance:'上下文增强',analyze:'漏洞分析',verify:'模型复核','build-output':'准备候选数据','dynamic-test':'动态测试',report:'生成最终报告','report-data':'编写报告内容',summary:'生成扫描摘要',scan:'主扫描',cleanup:'停止与清理',task:'任务结束'};
  const statuses={queued:'排队中',running:'运行中',retrying:'正在重试',cancelling:'取消中',cancelled:'已取消',timeout:'已超时',error:'失败',done:'完成',success:'完成',completed:'完成',partial:'部分完成',interrupted:'中断',skipped:'跳过',pending:'待处理',reported:'已记录范围',incomplete:'覆盖不完整'};
  const reviews={pending:'待复核',retained:'复核保留',excluded:'复核排除',inconclusive:'无法确定',error:'复核错误',interrupted:'复核未完成',not_requested:'未请求复核',unreviewed:'未记录复核'};
  const dynamics={pending:'待测试',running:'执行中',reproduced:'已复现',not_reproduced:'未复现',inconclusive:'无法确定',environment_error:'环境错误',error:'测试错误',skipped:'已跳过',blocked:'测试受阻',unknown:'未知',interrupted:'未完成（任务已结束）'};
@@ -15,6 +15,16 @@
  const active=s=>['queued','running','cancelling'].includes(s);
  const incompleteReview=s=>['error','inconclusive','interrupted'].includes(s);
  function stageVisible(data,key){const item=data?.stages?.[key];return !(item?.status==='skipped'&&item.details==='not_requested');}
+ function workflowNote(data){
+  const planned=new Set([...(data?.stage_order||[]),...Object.keys(data?.stages||{})]);
+  if(!planned.has('analyze'))return '';
+  const enabled=key=>planned.has(key)&&stageVisible(data,key),flow=['代码分析'];
+  if(enabled('verify'))flow.push('模型复核');
+  const dynamic=enabled('dynamic-test');if(dynamic)flow.push('动态测试');
+  if(enabled('report')||enabled('report-data'))flow.push('生成最终报告');
+  const known=(data?.stage_order||[]).includes('analyze')||data?.stages?.['dynamic-test']?.details==='not_requested';
+  return '本次流程：'+flow.join(' → ')+'。'+(dynamic?'动态测试用于验证候选问题，结束后统一生成报告。':known?'本次未启用动态测试。':'动态测试配置未记录。');
+ }
  function stageHighlights(key,summary={}){
   const fields={parse:[['total_units','解析对象'],['language','语言'],['processing_level','扫描范围']],'app-context':[['application_type','项目类型'],['context_source','上下文来源']],'llm-reachability':[['units_reviewed','检查对象'],['entry_points_promoted','补充入口'],['units_touched','更新对象']],enhance:[['units_enhanced','完成增强'],['incomplete_count','未返回完整结果'],['error_count','处理错误']],analyze:[['analyzed','完成分析'],['total_units','分析范围'],['error_count','分析错误']],verify:[['findings_input','复核范围']],'dynamic-test':[['findings_tested','测试范围'],['confirmed','已复现'],['not_reproduced','未复现'],['blocked','测试受阻'],['inconclusive','无法确定'],['errors','测试错误']]};
   const labels={web_app:'Web 应用',cli_tool:'命令行工具',library:'代码库 / SDK',agent_framework:'Agent 框架',generated:'自动分析',repo_manual:'仓库配置',threat_model:'仓库安全模型',reachable:'可达代码',all:'全部代码',file:'文件级'};
@@ -57,7 +67,7 @@
   if(!stage)return null;
   return {stage,status:/^warning:/.test(low)?'error':/^-\s*skipping/.test(low)?'skipped':'running',activity:/docker not found/.test(low)?'未找到 Docker':s};
  }
- globalThis.VulscanScan={classifyLine,stageFromLog,matchesFinding,legacyRecord,findingTitle,stageHighlights,stageVisible};
+ globalThis.VulscanScan={classifyLine,stageFromLog,matchesFinding,legacyRecord,findingTitle,stageHighlights,stageVisible,workflowNote};
  if(typeof document==='undefined')return;
  const $=id=>document.getElementById(id);
  const node=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
@@ -119,7 +129,7 @@
   if(Object.keys(data.pending||{}).length)notes.push('正在同步缺失事件…');
   if(data.persistence_error)notes.push(data.persistence_error);
   $('coverage-note').hidden=notes.length===0&&!data.coverage_details;text('coverage-summary',notes.join(' · ')||'覆盖范围');text('coverage-detail',data.coverage_details||'详见活动记录。');
-  renderStages(data.stages||{});renderFindings(data.findings||{});renderActivity(data.activity||[]);
+  text('workflow-note',workflowNote(data));renderStages(data.stages||{});renderFindings(data.findings||{});renderActivity(data.activity||[]);
   if(data.legacy)logs.forEach(r=>applyLegacyRecord(r.raw));
   if(!active(data.status)){
    terminalPresentation(data.status);

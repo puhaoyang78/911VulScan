@@ -616,6 +616,11 @@ let summaryHTML = '';
   const stopped=await page.evaluate(async()=>await(await fetch('/scan/f0000005/snapshot')).json());
   if(Object.values(stopped.findings).some(f=>f.model_review==='pending'||['pending','running'].includes(f.dynamic))||Object.values(stopped.stages).some(s=>['queued','running'].includes(s.status)))throw Error('terminal task still shows pending work');
   await goto('f0000002');
+  if(!(await page.locator('#workflow-note').innerText()).includes('模型复核 → 动态测试 → 生成最终报告'))throw Error('dynamic workflow order is unclear');
+  if(await page.locator('.stage-select[data-stage="build-output"] strong').innerText()!=='准备候选数据')throw Error('pre-test preparation looks like a final result');
+  await page.evaluate(async()=>{const s=await(await fetch('/scan/f0000002/snapshot')).json();s.revision++;s.stage_order=s.stage_order.filter(k=>k!=='dynamic-test');s.stages['dynamic-test']={status:'skipped',details:'not_requested'};VulscanScan.applySnapshot(s);});
+  if(!(await page.locator('#workflow-note').innerText()).includes('模型复核 → 生成最终报告。本次未启用动态测试')||await page.locator('.stage-select[data-stage="dynamic-test"]:visible').count())throw Error('static workflow still suggests dynamic testing');
+  await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.querySelector('#overview-count').textContent.startsWith('94 / 987'));
   if(await page.locator('.stage-select[data-stage="llm-reachability"]:visible').count())throw Error('unrequested phase appears in workflow');
   await page.locator('#tab-activity').click();
   if((await page.locator('#activity-groups').innerText()).includes('入口分析')||await page.locator('#activity-stage option[value="llm-reachability"]').count())throw Error('unrequested phase appears in activity');
@@ -675,10 +680,10 @@ let summaryHTML = '';
   });
   await page.locator('#finding-rows .finding-title').first().click();
   const reader=page.locator('#finding-detail .code-reader').first(),wrap=reader.getByRole('button',{name:/^换行：/});
-  await wrap.click();await reader.getByRole('button',{name:'展开长代码',exact:true}).click();
+  await wrap.click();
   await page.locator('#finding-detail .finding-record > summary').click();await wrap.focus();
   await page.evaluate(()=>{const s=window.auditSnapshot;s.revision++;const f=s.findings[Object.keys(s.findings)[0]];f.dynamic='environment_error';f.attempt=(f.attempt||0)+1;f.failure_phase='build';s.counts.reproduced=0;VulscanScan.applySnapshot(s);});
-  if(!await wrap.evaluate(el=>el===document.activeElement)||!(await reader.getAttribute('class')).includes('is-wrapped')||(await reader.getAttribute('class')).includes('is-collapsed')||!await page.locator('#finding-detail .finding-record').evaluate(el=>el.open))throw Error('live detail update reset reader focus or expansion');
+  if(!await wrap.evaluate(el=>el===document.activeElement)||(await reader.getAttribute('class')).includes('is-wrapped')||!await page.locator('#finding-detail .finding-record').evaluate(el=>el.open))throw Error('live detail update reset reader focus or expansion');
   await page.evaluate(()=>{const s=window.auditSnapshot;s.revision++;s.findings[Object.keys(s.findings)[0]].description='更新后的问题描述。';VulscanScan.applySnapshot(s);});
   if(!await wrap.evaluate(el=>el===document.activeElement))throw Error('updated prose removed the focused code toolbar');
   await page.locator('#finding-close').focus();
@@ -794,8 +799,12 @@ for(const [name,path]of[['summary-rich','/summary/f0000007'],['disclosure-rich',
   if(name==='report-rich'&&!(await code.innerText()).includes('源码行号'))throw Error('real source coordinates missing');
   if(name!=='report-rich'&&!(await code.innerText()).includes('片段行号'))throw Error('snippet coordinates misrepresented as source');
   if(await code.locator('.hljs-comment').count()<1)throw Error('known code language was not highlighted');
-  await code.getByRole('button',{name:'换行：关',exact:true}).click();if(!(await code.getAttribute('class')).includes('is-wrapped'))throw Error('wrap toggle');
-  await code.getByRole('button',{name:'展开长代码',exact:true}).click();if((await code.getAttribute('class')).includes('is-collapsed'))throw Error('long code cannot expand');
+  const full=await code.locator('.code-viewport').evaluate(el=>({x:el.scrollWidth<=el.clientWidth+1,y:el.scrollHeight<=el.clientHeight+1}));
+  if(!(await code.getAttribute('class')).includes('is-wrapped')||!full.x||!full.y)throw Error('code is hidden or truncated by default');
+  await code.getByRole('button',{name:'换行：开',exact:true}).click();if((await code.getAttribute('class')).includes('is-wrapped'))throw Error('wrap toggle');
+  const scroll=await code.locator('.code-viewport').evaluate(el=>({wide:el.scrollWidth>el.clientWidth,overflow:getComputedStyle(el).overflowX,bar:getComputedStyle(el).scrollbarWidth}));
+  if(!scroll.wide||scroll.overflow!=='auto'||scroll.bar==='none')throw Error('unwrapped code has no native horizontal scrollbar');
+  await code.getByRole('button',{name:'换行：关',exact:true}).click();
   if(name!=='report-rich'){
    const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#document-download').click()]);
    const expected=await page.evaluate(()=>markdown);
@@ -820,14 +829,18 @@ for(const [name,path]of[['summary-rich','/summary/f0000007'],['disclosure-rich',
     if(await page.locator('#content .document-record blockquote').first().locator('br').count()!==3)throw Error('vulnerability report metadata collapsed into one paragraph');
     if(await page.locator('#document-finding').innerText()!=='VULN-001'||await page.locator('#document-review').innerText()!=='复核保留'||await page.locator('#document-dynamic').innerText()!=='已复现'||(await page.locator('#document-counts').innerText()).includes('累计候选'))throw Error('single vulnerability report shows unrelated task totals or incorrect validation');
     const edges=await page.evaluate(()=>[document.querySelector('#content h2').getBoundingClientRect().left,document.querySelector('#content h2 + p').getBoundingClientRect().left]);if(Math.abs(edges[0]-edges[1])>1)throw Error('report headings and prose are not aligned');
-    const record=page.locator('.document-test-record');if(await record.count()!==1||await record.evaluate(el=>el.open))throw Error('full transcript is not collapsed by default');
-    await page.locator('#document-toc a').filter({hasText:'PoC 与测试记录'}).click();if(!await record.evaluate(el=>el.open))throw Error('report table of contents did not open transcript');
-    const transcriptCode=record.locator('.code-reader code').first(),rawTranscript=await transcriptCode.textContent();await record.getByRole('button',{name:'复制代码原文',exact:true}).first().click();if(await page.evaluate(()=>navigator.clipboard.readText())!==rawTranscript)throw Error('folded transcript copy changed original bytes');
-    await record.locator(':scope > summary').click();
+    const record=page.locator('.reproduction-summary');if(await record.count()!==1||!await record.isVisible())throw Error('legacy PoC explanation is not directly visible');
+    if((await page.locator('#content').innerText()).includes('PRIVATE_TRANSCRIPT'))throw Error('legacy process logs appeared in the report');
+    await page.locator('#document-toc a').filter({hasText:'PoC 与验证说明'}).click();
+    const poc=record.locator('.code-reader code').first(),rawPoC=await poc.textContent();
+    if(rawPoC!==original)throw Error('legacy PoC was lost or changed');
+    await record.getByRole('button',{name:'复制代码原文',exact:true}).first().click();if(await page.evaluate(()=>navigator.clipboard.readText())!==rawPoC)throw Error('PoC copy changed original bytes');
    }
   }else{
-   const record=page.locator('.finding-record').filter({has:page.locator('summary').filter({hasText:'PoC 与测试记录'})});
-   if(await record.locator('h3').innerText()!=='PoC 与测试记录'||await record.locator('h4').innerText()!=='实际结果'||await record.locator('.code-reader code').textContent()!=='fixture-build\nfixture-run\n')throw Error('PoC Markdown was rendered as one raw code block');
+   const record=page.locator('.finding-reproduction');
+   if(!await record.isVisible()||await record.locator('h3').innerText()!=='PoC 与验证说明'||await record.locator('h4').innerText()!=='完整 PoC'||await record.locator('.code-reader code').textContent()!==original)throw Error('PoC explanation or full source is missing');
+   for(const width of [360,768,1440]){await page.setViewportSize({width,height:1000});const full=await record.locator('.code-viewport').evaluate(el=>el.scrollWidth<=el.clientWidth+1&&el.scrollHeight<=el.clientHeight+1);if(!full)throw Error('PoC does not fit at '+width);}
+   await page.setViewportSize({width:1440,height:1000});
    await page.locator('.report-toc a[data-finding]').first().click();await page.locator('#finding-collapse').click();
    await page.evaluate(()=>{location.hash='#overview';});await page.waitForFunction(()=>location.hash==='#overview');
    await page.fill('#finding-query','no-matching-finding');
@@ -1072,8 +1085,8 @@ if(process.env.VULSCAN_REVIEW_SOURCE_DIR){
    if(/^(?:vulnerable|unverified|confirmed|agreed|error)$/i.test(await document.page.locator('.document-heading h1').innerText()))throw Error('real report used a verdict token as its title');
    const snapshot=await(await context.request.get(baseURL+'/scan/'+id+'/snapshot')).json();if(snapshot.commit&&(await document.page.locator('#document-version').innerText()).startsWith('未记录'))throw Error('real report omitted its known target version');
    const expectsTranscript=await document.page.evaluate(()=>/^#{2,3}\s+PoC\s*与测试记录\s*$/mi.test(markdown));
-   if(expectsTranscript&&await document.page.locator('.document-test-record').count()!==1)throw Error('real transcript heading was not recognized');
-   if(await document.page.locator('.document-test-record').count()&&await document.page.locator('.document-test-record').first().evaluate(el=>el.open))throw Error('real full transcript dominates the report by default');
+   if(expectsTranscript&&await document.page.locator('.reproduction-summary').count()!==1)throw Error('real legacy report did not receive the readable PoC view');
+   if(expectsTranscript&&(await document.page.locator('.reproduction-summary').innerText()).includes('构建与运行命令'))throw Error('real report still shows process logs');
    for(const width of [1440,1920,768,360]){await document.page.setViewportSize({width,height:1000});if(screenshotDir)await document.page.screenshot({path:`${screenshotDir}/current-vulnerability-report-${width}.png`,fullPage:true});if(await document.page.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth+1))throw Error('real report overflow '+width);}
   });
   await drain(document.page,'current-vulnerability-report');await document.page.close();

@@ -287,7 +287,7 @@ def export_csv(experiment_path: str, dataset_path: str, output_path: str):
             **details,
             'suggested_fix_status': 'proposed_unvalidated' if details["suggested_fix"] else '',
             'dynamic_test_status': dynamic.get('status', ''),
-            'reproduction': render_reproduction(dynamic) if dynamic else '',
+            'reproduction': render_reproduction(dynamic, details) if dynamic else '',
         }
         # Neutralize CSV / formula injection on every cell before writing.
         rows.append({k: _csv_safe(v) for k, v in row.items()})

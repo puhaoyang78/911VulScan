@@ -58,6 +58,7 @@ class DynamicTestResult:
     crash: dict = field(default_factory=dict)
     anchor: dict = field(default_factory=dict)
     terminal_reason: str = ""
+    poc_summary: str = ""     # Mechanism and PoC design, not an execution verdict
 
     def to_dict(self) -> dict:
         d = {
@@ -85,6 +86,8 @@ class DynamicTestResult:
                if self.unpriced_cache_models else {}),
             "retry_count": self.retry_count,
         }
+        if self.poc_summary:
+            d["poc_summary"] = self.poc_summary
         if self.reproduction:
             d["reproduction"] = self.reproduction
         if self.identity_key:

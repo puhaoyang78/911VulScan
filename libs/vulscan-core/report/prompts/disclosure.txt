@@ -56,7 +56,8 @@ INSTRUCTIONS:
 - Other code snippets (Suggested Fix): show only the minimal change needed, not entire files
 - The application adds model review and dynamic test status separately. Do not add a verification footer or infer successful execution from stage2_verdict.
 - `dynamic_testing` contains recorded CONFIRMED tests. `dynamic_testing_attempted` records tests that did not reproduce the issue, failed, were skipped or could not reach a conclusion; do not describe these as reproduced or safe.
-- Steps to Reproduce: use recorded steps from dynamic_testing when available. Without a confirmed dynamic result, label supplied steps "建议复现步骤（未测试）". If no steps were supplied, write "未记录复现步骤"; do not invent commands.
+- When dynamic_testing or dynamic_testing_attempted is present, omit the entire 复现步骤 section: the application inserts a human-readable PoC explanation, actual test conclusion and complete saved PoC. Do not repeat commands, build steps or logs. Without a dynamic record, label supplied steps "建议复现步骤（未测试）"; if absent, write "未记录复现步骤". Do not invent commands.
+- Without a confirmed dynamic result, never assert successful execution or reproduction.
 - Impact: list only supported impacts, no sub-bullets or fixed bullet count
 - Suggested Fix: show minimal code change, use comments to indicate what was added
 - Use the supplied description, impact, remediation and suggested_fix fields.
@@ -66,8 +67,8 @@ INSTRUCTIONS:
 - Clearly label suggested_fix as "建议修复示例（未验证）". It is a proposal,
   not an applied or tested patch. If no fix is supported by the supplied context,
   explain the remediation and missing context instead of inventing code.
-- The recorded dynamic artifacts, commands, exit status and evidence are inserted
-  by the server. Do not rewrite them or claim any generated test code was run.
+- The recorded PoC and test conclusion are inserted by the server.
+  Do not rewrite the PoC or claim any generated test code was run.
   Static reproduction steps are hypotheses, not observed behavior. A nonzero
   exit code, compilation failure or sanitizer configuration alone does not prove
   a vulnerability. Non-crash findings can be supported by file/HTTP/network evidence.

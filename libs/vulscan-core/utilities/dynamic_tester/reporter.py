@@ -84,7 +84,6 @@ def generate_report(
                 f"### {r.finding_id}",
                 "",
                 f"**状态：** {dynamic_label(r.status)}",
-                f"**详情：** {r.details}",
                 f"**耗时：** {r.elapsed_seconds:.1f} 秒",
                 f"**生成预估费用：** ${r.generation_cost_usd:.4f}"
                 + (f" — 费用统计不完整 / INCOMPLETE: {len(r.unpriced_models or [])} unpriced model(s) (an under-count)"

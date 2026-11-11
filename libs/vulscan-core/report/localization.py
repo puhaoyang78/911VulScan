@@ -29,7 +29,7 @@ _LABELS = {
     # 严重程度
     "critical": "严重", "high": "高危", "medium": "中危", "low": "低危",
     # 步骤
-    "report-data": "报告数据生成", "generate-context": "上下文生成", "build-output": "结果整理",
+    "report-data": "报告数据生成", "generate-context": "上下文生成", "build-output": "准备候选数据",
     "patch": "修复生成", "detect": "漏洞检测", "app-context": "应用上下文",
     "llm-reachability": "模型可达性分析", "parse": "代码解析", "context": "上下文分析",
     "app_context": "应用上下文", "application_context": "应用上下文", "enhance": "上下文增强",

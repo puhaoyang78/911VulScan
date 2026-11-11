@@ -164,9 +164,9 @@ int copy(const char *input) {
 	if (input[0] == '"') return -1;
 	return input[0] < 3 && input[1] != 0;
 }
-` + strings.Repeat("// 长代码块，允许局部滚动，不影响页面宽度\n", 30)
+` + "// " + strings.Repeat("长行必须完整换行显示", 40) + "\n" + strings.Repeat("// 长代码块完整显示\n", 30)
 			yes := true
-			f := report.Finding{Number: 1, ID: "src/issue_1.c:copy_1", Title: "用户输入长度未校验", Candidate: &yes, ModelReviewStatus: "retained", Verdict: "vulnerable", File: longFile, Function: "copy_1", CWEID: "120", CWEName: "Buffer Copy", Severity: "high", SeveritySource: "model", Description: "确定性 UI 示例，含中文与长路径。", Analysis: "模型分析记录；不代表已执行验证。", VulnerableCode: code, StartLine: 42, SuggestedFix: "if (length >= capacity) return ERROR;\n", Impact: "示例影响说明。", Remediation: "校验长度与目标容量。", Stage2Verification: "模型复核同意；不等于动态复现。", DynamicTestStatus: "CONFIRMED", DynamicTestDetails: "fixture: controlled reproduction", Reproduction: "### PoC 与测试记录\n\n#### 实际结果\n\ncontrolled fixture\n\n```sh\nfixture-build\nfixture-run\n```"}
+			f := report.Finding{Number: 1, ID: "src/issue_1.c:copy_1", Title: "用户输入长度未校验", Candidate: &yes, ModelReviewStatus: "retained", Verdict: "vulnerable", File: longFile, Function: "copy_1", CWEID: "120", CWEName: "Buffer Copy", Severity: "high", SeveritySource: "model", Description: "确定性 UI 示例，含中文与长路径。", Analysis: "模型分析记录；不代表已执行验证。", VulnerableCode: code, StartLine: 42, SuggestedFix: "if (length >= capacity) return ERROR;\n", Impact: "示例影响说明。", Remediation: "校验长度与目标容量。", Stage2Verification: "模型复核同意；不等于动态复现。", DynamicTestStatus: "CONFIRMED", DynamicTestDetails: "fixture: controlled reproduction", Reproduction: "### PoC 与验证说明\n\n目标未检查长度。PoC 传入超长输入并调用真实目标，动态测试已复现。\n\n#### 完整 PoC\n\n```c\n" + code + "```"}
 			data := report.ReportData{RemediationHTML: "<h5>修复优先级</h5><blockquote>需结合实际版本</blockquote><table><tr><th>组件</th><td>请求处理器</td></tr></table>", Title: "Security Analysis Report", RepoName: "安全示例-project", CommitSHA: j.Snapshot.Commit, Language: "c", Timestamp: "2026-10-25", Stats: report.Stats{TotalUnits: 94, TotalFiles: 8, Vulnerable: 1}, Findings: []report.Finding{f}, FindingsByVerdict: []report.FindingGroup{{Verdict: "vulnerable", Count: 1, OpenByDefault: true, Findings: []report.Finding{f}}}, UnitChart: report.ChartData{Labels: []string{"vulnerable", "safe"}, Data: []int{1, 93}, Colors: []string{"#ac292e", "#64748b"}}, FileChart: report.ChartData{Labels: []string{"request_handler.c"}, Data: []int{1}, Colors: []string{"#0664bd"}}}
 			j.ReportPath = filepath.Join(dir, "report.html")
 			if err := report.GenerateReskin(data, j.ReportPath); err != nil {
@@ -185,7 +185,7 @@ int copy(const char *input) {
 			if err := os.MkdirAll(filepath.Dir(disclosure), 0750); err != nil {
 				t.Fatal(err)
 			}
-			disc := "> **所属发现：** VULN-001  \n> **目标版本：** " + j.Snapshot.Commit + "  \n> **验证状态：** 模型复核保留  \n> **动态测试：** fixture 已复现\n\n" + strings.Replace(md, "# 安全分析摘要", "# 漏洞报告：用户输入长度未校验", 1) + "\n### PoC 与测试记录\n\n#### 构建和运行\n\n```sh\nfixture-build\nfixture-run\n```\n\n#### 实际结果\n\nfixture 原始测试输出。\n"
+			disc := "> **所属发现：** VULN-001  \n> **目标版本：** " + j.Snapshot.Commit + "  \n> **验证状态：** 模型复核保留  \n> **动态测试：** fixture 已复现\n\n" + strings.Replace(md, "# 安全分析摘要", "# 漏洞报告：用户输入长度未校验", 1) + "\n### PoC 与测试记录\n\n动态测试：已复现\n\n#### 构建与运行命令\n\n```sh\nPRIVATE_TRANSCRIPT_BUILD\n```\n\n#### 实际结果\n\n结果说明：\n\n```text\n合成输入已触发目标诊断。\n```\n\n标准输出：\n\n```text\nPRIVATE_TRANSCRIPT_STDOUT\n```\n\n#### 测试与构建文件\n\n文件名：\n\n```text\nproof.c\n```\n\n执行时的文件内容：\n\n```c\n" + code + "```\n\n文件名：\n\n```text\nDockerfile\n```\n\n执行时的文件内容：\n\n```text\nPRIVATE_TRANSCRIPT_DOCKERFILE\n```\n"
 			if err := os.WriteFile(disclosure, []byte(disc), 0640); err != nil {
 				t.Fatal(err)
 			}

@@ -21,14 +21,6 @@
   if(quote&&[...quote.querySelectorAll('strong')].some(n=>/^(漏洞编号|所属发现|复核状态|验证状态)[：:]/.test(n.textContent))){
    const record=document.createElement('details'),summary=document.createElement('summary');record.className='document-record';summary.textContent='复核说明与版本记录';quote.replaceWith(record);record.append(summary,quote);
   }
-  // Full reproduction transcripts stay available without overwhelming the
-  // description, conditions, actual result and remediation in the main text.
-  for(const heading of [...$('content').querySelectorAll(':scope > h2,:scope > h3')]){
-   if(!/^(?:PoC\s*与测试记录|完整测试记录|完整复现记录)$/i.test(heading.textContent.trim()))continue;
-   const record=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('div');record.className='document-test-record';body.className='document-record-body';
-   const level=Number(heading.tagName[1]);let next=heading.nextElementSibling;heading.replaceWith(record);summary.append(heading);record.append(summary,body);
-   while(next&&!(/^H[1-6]$/.test(next.tagName)&&Number(next.tagName[1])<=level)){const current=next;next=next.nextElementSibling;body.append(current);}
-  }
   VulscanReader.toc($('content'),$('document-toc'));
  }
  $('document-copy').addEventListener('click',async()=>{set('document-feedback','');try{await navigator.clipboard.writeText(markdown);VulscanUI.notify('原始 Markdown 已复制。',{button:$('document-copy')});}catch(_){VulscanUI.notify('复制失败，可下载 Markdown 或打开原文后复制。',{tone:'error',button:$('document-copy')});}});

@@ -78,45 +78,45 @@ import pytest  # noqa: E402
 
 
 @pytest.mark.parametrize("null_field", [
-    "docker_compose", "requirements", "requirements_filename", "__all__"])
+    "docker_compose", "requirements", "requirements_filename", "poc_summary", "__all__"])
 def test_generate_accepts_null_optionals(null_field):
     """A complete generation with null optionals is returned, coerced."""
     payload = dict(_BASE)
     if null_field == "__all__":
         payload.update({"docker_compose": None, "requirements": None,
-                        "requirements_filename": None})
+                        "requirements_filename": None, "poc_summary": None})
     else:
         payload[null_field] = None
     out = _run_generate(payload)
     assert out is not None, f"complete generation discarded: {null_field}=null"
     if null_field == "__all__":
-        for k in ("docker_compose", "requirements", "requirements_filename"):
+        for k in ("docker_compose", "requirements", "requirements_filename", "poc_summary"):
             assert out[k] == "", f"{k} must coerce to the absent form ''"
     else:
         assert out[null_field] == ""
 
 
 @pytest.mark.parametrize("null_field", [
-    "docker_compose", "requirements", "requirements_filename", "__all__"])
+    "docker_compose", "requirements", "requirements_filename", "poc_summary", "__all__"])
 def test_regenerate_accepts_null_optionals(null_field):
     """The regenerate site accepts and coerces the same shapes."""
     payload = dict(_BASE)
     if null_field == "__all__":
         payload.update({"docker_compose": None, "requirements": None,
-                        "requirements_filename": None})
+                        "requirements_filename": None, "poc_summary": None})
     else:
         payload[null_field] = None
     out = _run_regenerate(payload)
     assert out is not None
     if null_field == "__all__":
-        for k in ("docker_compose", "requirements", "requirements_filename"):
+        for k in ("docker_compose", "requirements", "requirements_filename", "poc_summary"):
             assert out[k] == ""
     else:
         assert out[null_field] == ""
 
 
 @pytest.mark.parametrize("bad_value", [123, ["x"], {"services": {}}, True])
-@pytest.mark.parametrize("field", ["docker_compose", "requirements", "requirements_filename"])
+@pytest.mark.parametrize("field", ["docker_compose", "requirements", "requirements_filename", "poc_summary"])
 def test_non_null_non_str_optionals_still_rejected(field, bad_value):
     """The belt is not loosened: a dict/list/number optional is malformed."""
     payload = dict(_BASE)

@@ -1393,20 +1393,30 @@ func (s *Server) reportViewData(ctx context.Context, job *Job, original *os.File
 	}
 	root := filepath.Join(s.outDir, job.ID)
 	var data report.ReportData
+	hasSavedData, needsProjection := false, true
 	if f, _, err := openRegularInRoot(root, filepath.Join(root, "report-data.json")); err == nil {
 		defer f.Close()
 		if err := json.NewDecoder(f).Decode(&data); err != nil {
 			return nil, err
 		}
-	} else {
-		results, dataset := findResultsFile(root), findDatasetFile(root)
-		if results == "" || dataset == "" || s.pythonPath == "" {
-			return nil, nil
+		hasSavedData, needsProjection = true, false
+		for _, finding := range data.Findings {
+			if strings.Contains(finding.Reproduction, "PoC 与测试记录") {
+				needsProjection = true
+				break
+			}
 		}
+	}
+	if needsProjection {
+		results, dataset := findResultsFile(root), findDatasetFile(root)
 		job.mu.Lock()
 		active := scanActive(job.Status)
 		job.mu.Unlock()
-		if active {
+		if results == "" || dataset == "" || s.pythonPath == "" || active {
+			if hasSavedData {
+				job.reportView = &data
+				return &data, nil
+			}
 			return nil, nil
 		}
 		for _, path := range []string{results, dataset} {
@@ -1437,8 +1447,13 @@ func (s *Server) reportViewData(ctx context.Context, job *Job, original *os.File
 		if err != nil {
 			return nil, err
 		}
+		savedTimestamp := data.Timestamp
+		data = report.ReportData{}
 		if err := json.Unmarshal(b, &data); err != nil {
 			return nil, err
+		}
+		if hasSavedData {
+			data.Timestamp = savedTimestamp
 		}
 		if _, err := original.Seek(0, io.SeekStart); err != nil {
 			return nil, err
