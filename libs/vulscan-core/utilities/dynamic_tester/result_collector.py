@@ -35,7 +35,7 @@ _FATAL_LINE = re.compile(
 def _generic_crash(execution: DockerExecutionResult) -> dict:
     """Python/Node/Go 也可能被信号打死，不能一律当成“测试出错”。"""
     code = execution.exit_code
-    signal = _SIGNAL_BY_EXIT.get(code if code >= 0 else -code, "")
+    signal = _SIGNAL_BY_EXIT.get(code if code >= 0 else 128 - code, "")
     text = f"{execution.stderr or ''}\n{execution.stdout or ''}"
     if signal:
         key = signal.lower().replace("sig", "")
@@ -43,7 +43,7 @@ def _generic_crash(execution: DockerExecutionResult) -> dict:
             key = "abort"
         return {"detected": True, "signal": signal, "exit_code": code,
                 "diagnostic_class": "signal:" + key}
-    if _FATAL_LINE.search(text):
+    if code != 0 and _FATAL_LINE.search(text):
         return {"detected": True, "signal": "", "exit_code": code,
                 "diagnostic_class": "runtime:fatal"}
     return {}

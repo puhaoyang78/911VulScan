@@ -34,6 +34,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -121,23 +123,23 @@ def test_merged_result_carries_the_identity_key(tmp_path):
     ])
     assert merged["findings"][0]["dynamic_testing"]["identity_key"] == "key-aaa"
 
-def test_success_path_result_carries_identity_key():
+@pytest.mark.parametrize("status", ["CONFIRMED", "NOT_REPRODUCED", "BLOCKED", "INCONCLUSIVE", "ERROR"])
+def test_success_path_result_carries_identity_key(status):
     """Review blocker regression: the SUCCESS path (the only path a real
     verdict takes) must thread the identity key — else every fresh
     dynamic_test_results.json serializes keyless and the report merge
     abstains on all of them (the merge self-disables). Drives the REAL
     collector, not a hand-constructed result dict."""
     from utilities.dynamic_tester.result_collector import collect_result
-    import inspect
-    src = inspect.getsource(collect_result)
-    # the success-path construction must pass identity_key=identity_key
-    assert src.count("identity_key=identity_key") == 7, (
-        f"expected 7 identity_key=identity_key sites in collect_result "
-        f"(6 error paths, including staging/configuration failure, + the success path), found "
-        f"{src.count('identity_key=identity_key')} — the success path "
-        f"may have dropped the key again")
-    # and the success-path return sits AFTER the 'Valid JSON output' parse
-    vj = src.index("# Valid JSON output")
-    ok_count = src[vj:].count("identity_key=identity_key")
-    assert ok_count >= 1, "the success path (after 'Valid JSON output') lost identity_key"
+    from utilities.dynamic_tester.docker_executor import DockerExecutionResult
+
+    execution = DockerExecutionResult()
+    execution.exit_code = 0
+    execution.stdout = json.dumps({"status": status, "details": "controlled result",
+                                   "evidence": [{"type": "command_output", "content": "controlled proof"}]})
+    result = collect_result({"id": "VULN-001", "identity_key": "stable-finding"},
+                            {"test_script": "controlled test", "dockerfile": "FROM fixture"}, execution)
+    assert result.status == status
+    assert result.identity_key == "stable-finding"
+    assert result.to_dict()["identity_key"] == "stable-finding"
 

@@ -673,7 +673,8 @@ def scan_repository(
                     print(f"  WARNING: App context generation failed: {e}",
                           file=sys.stderr)
                     print("  Continuing without app context.", file=sys.stderr)
-                    ctx.status = "skipped"
+                    ctx.status = "partial"
+                    ctx.errors.append(str(e))
                     ctx.summary = {"skipped": True, "reason": str(e)}
                     # Record the crash like the enhance/verify/dynamic-test
                     # handlers do — otherwise the degraded scan (default threat
@@ -741,7 +742,8 @@ def scan_repository(
                 # body wrap catches everything else (corrupt call_graph.json in
                 # the re-filter, failed writes) and degrades the same way.
                 print(f"  WARNING: failed to load dataset: {exc}", file=sys.stderr)
-                ctx.status = "skipped"
+                ctx.status = "partial"
+                ctx.errors.append(str(exc))
                 ctx.summary = {"skipped": True, "reason": str(exc)}
                 # Record the crash so the degraded reachability pass (no
                 # LLM-promoted entry points -> potential missed vulns) is
@@ -1232,7 +1234,8 @@ def scan_repository(
                     f"  WARNING: LLM reachability stage failed: {exc}",
                     file=sys.stderr,
                 )
-                ctx.status = "skipped"
+                ctx.status = "partial"
+                ctx.errors.append(str(exc))
                 ctx.summary = {"skipped": True, "reason": str(exc),
                                "dataset_persisted": dataset_persisted}
                 # Record the crash so the degraded reachability pass is
@@ -1336,7 +1339,8 @@ def scan_repository(
             except Exception as e:
                 print(f"  WARNING: Enhancement failed: {e}", file=sys.stderr)
                 print("  Continuing with the un-enhanced dataset.", file=sys.stderr)
-                ctx.status = "skipped"
+                ctx.status = "partial"
+                ctx.errors.append(str(e))
                 ctx.summary = {"skipped": True, "reason": str(e)}
                 _record_skip(result, "enhance", "failed")
 
@@ -1495,7 +1499,8 @@ def scan_repository(
             except Exception as e:
                 print(f"  WARNING: Verification failed: {e}", file=sys.stderr)
                 print("  Continuing with unverified Stage 1 results.", file=sys.stderr)
-                ctx.status = "skipped"
+                ctx.status = "partial"
+                ctx.errors.append(str(e))
                 ctx.summary = {"skipped": True, "reason": str(e)}
                 _record_skip(result, "verify", "failed")
 
@@ -1535,10 +1540,10 @@ def scan_repository(
     # pipeline_output.json (not scan.report.json) and the LLM faithfully
     # renders whatever array it is given — a skip recorded after the
     # build ships a "No steps were skipped." falsehood in the deliverable
-    # while the machine artifacts disagree about the same fact. Only the
-    # RUN branch is deferred to Step 7 below; its attempted-run `failed`
-    # class (the one class unknowable here) REBUILDS the output after the
-    # attempt.
+    # while the machine artifacts disagree about the same fact. Runtime
+    # environment skips and failed attempts are reconciled after Step 7.
+    if not generate_report:
+        _record_skip(result, "report", "not_requested")
     _dt_will_run = False
     if not dynamic_test:
         _record_skip(result, "dynamic-test", "not_requested")
@@ -1558,8 +1563,7 @@ def scan_repository(
 
     pipeline_output_path = os.path.join(output_dir, "pipeline_output.json")
 
-    # #799: one builder closure, TWO call sites — the Step-6 build and the
-    # Step-7 failed-attempt rebuild (the only late skip class).
+    # Reuse the builder after a late dynamic-test skip or failure.
     def _build_pipeline_output_file():
         return build_pipeline_output(
             results_path=active_results_path,
@@ -1608,12 +1612,7 @@ def scan_repository(
     with step_context("build-output", output_dir, inputs={
         "results_path": active_results_path,
     }) as ctx:
-        # #799: the closure carries the true skipped set — the dynamic-test
-        # decision was made BEFORE this build (see the #799 hoist above), so
-        # every knowable skip class is in the file the summary reads; the
-        # attempted-run `failed` class (Step 7) rebuilds via the same
-        # closure; the REPORT step's own skip remains post-build (#799's
-        # Not-claimed boundary, the issue names it).
+        # Disabled stages and known environment skips are already recorded.
         _build_pipeline_output_file()
 
         ctx.outputs = {"pipeline_output_path": pipeline_output_path}
@@ -1681,25 +1680,18 @@ def scan_repository(
                 ctx.summary = {"error_count": 1, "fatal_error_count": 1,
                                "reason": str(e)}
                 _record_skip(result, "dynamic-test", "failed")
-                # #799: the failed attempt is the ONE skip class the Step-6
-                # build could not know — REBUILD the output through the same
-                # closure so this late skip reaches the file the human
-                # summary reads (the same "No steps were skipped" falsehood
-                # would ship otherwise). The rebuild is BEST-EFFORT (r1-F3):
-                # a raise here (disk full, a permission flip) must not turn
-                # an optional step's failure into a scan abort — the Step-6
-                # file stays, degrading only the failed class to the
-                # pre-#799 state, never worse than base.
-                try:
-                    _build_pipeline_output_file()
-                except Exception as rebuild_exc:
-                    print(f"  WARNING: could not rebuild pipeline_output.json "
-                          f"after the dynamic-test failure: {rebuild_exc}",
-                          file=sys.stderr)
 
         collected_step_reports.append(
             _load_step_report(output_dir, "dynamic-test"),
         )
+        if "dynamic-test" in result.skipped_step_reasons:
+            # The summary reads this file. Include runtime skips as well as
+            # failures before generating it; preserve earlier work if writing fails.
+            try:
+                _build_pipeline_output_file()
+            except Exception as rebuild_exc:
+                print(f"  WARNING: could not rebuild pipeline_output.json "
+                      f"after dynamic testing: {rebuild_exc}", file=sys.stderr)
     else:
         # the reason was recorded pre-build; only the operator-facing line
         # prints here (the position of the line in the step sequence is
@@ -1768,7 +1760,6 @@ def scan_repository(
         collected_step_reports.append(_load_step_report(output_dir, "report"))
     else:
         print(_step_label("Skipping report generation (--no-report)."), file=sys.stderr)
-        _record_skip(result, "report", "not_requested")
     print(file=sys.stderr)
 
     # ---------------------------------------------------------------

@@ -70,7 +70,7 @@ if [ "$DEPLOY" = 1 ]; then
 else
     GO_TOOLS_DIR="${VULSCAN_GO_HOME:-$HOME/.local/go}"
 fi
-PATH="$ROOT/.tools/git/bin:$ROOT/.tools/go/bin:$HOME/.local/go/bin:$HOME/.local/bin:$ROOT/.tools/node/bin:$PATH"
+PATH="$ROOT/.tools/git/bin:$GO_TOOLS_DIR/bin:$ROOT/.tools/go/bin:$HOME/.local/go/bin:$HOME/.local/bin:$ROOT/.tools/node/bin:$PATH"
 export PATH
 privileged() {
     if [ "$(id -u)" = 0 ]; then "$@"; else sudo -- "$@"; fi
@@ -315,6 +315,9 @@ if [ "$BOOTSTRAP" = 1 ]; then
             fail "Existing .tools/$tool is incompatible; move it aside manually before retrying (not replaced automatically)."
         fi
     done
+    if [ "$NEED_GO" = 1 ] && { [ -e "$GO_TOOLS_DIR" ] || [ -L "$GO_TOOLS_DIR" ]; }; then
+        fail "Existing Go installation $GO_TOOLS_DIR is incompatible; move it aside manually before retrying (not replaced automatically)."
+    fi
 fi
 [ "$DRY" = 0 ] || exit 0
 if [ "$BOOTSTRAP" = 1 ]; then
@@ -538,8 +541,9 @@ PY
             fetch "https://mirrors.aliyun.com/golang/$file" "$TMP/$file"
             (cd "$TMP"; printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status) || fail 'Go checksum mismatch; archive not extracted.'
             tar -xzf "$TMP/$file" -C "$TMP"
+            [ ! -e "$GO_TOOLS_DIR" ] && [ ! -L "$GO_TOOLS_DIR" ] || fail "Existing Go installation $GO_TOOLS_DIR is incompatible; move it aside manually before retrying (not replaced automatically)."
             mkdir -p "$(dirname "$GO_TOOLS_DIR")"
-            mv "$TMP/go" "$GO_TOOLS_DIR"
+            mv -T "$TMP/go" "$GO_TOOLS_DIR"
         fi
         if [ "$NEED_NODE" = 1 ]; then
             [ ! -e "$ROOT/.tools/node" ] || fail 'Existing .tools/node is incompatible; move it aside manually before retrying (not replaced automatically).'
@@ -611,7 +615,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 : "${GOPROXY:=https://goproxy.cn}"
 : "${GOSUMDB:=sum.golang.google.cn}"
 export PIP_INDEX_URL NPM_CONFIG_REGISTRY NPM_CONFIG_REPLACE_REGISTRY_HOST GOPROXY GOSUMDB
-export PATH="$ROOT/.tools/git/bin:$ROOT/.tools/go/bin:$ROOT/.tools/node/bin:$PATH"
+export PATH="$ROOT/.tools/git/bin:${VULSCAN_GO_HOME:-$HOME/.local/go}/bin:$ROOT/.tools/go/bin:$HOME/.local/bin:$ROOT/.tools/node/bin:$PATH"
 export VULSCAN_PYTHON="$ROOT/.venv/bin/python"
 export VULSCAN_PORTABLE_ROOT="$ROOT"
 exec "$ROOT/bin/vulscan-cli" "$@"

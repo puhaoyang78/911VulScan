@@ -245,7 +245,9 @@ def run_dynamic_tests(
     Returns:
         List of DynamicTestResult objects
     """
-    from utilities.docker_build import BuildPolicy, parse_docker_proxy
+    from utilities.docker_build import (
+        BuildPolicy, DockerBuildEnvironmentError, parse_docker_proxy,
+    )
     docker_proxy = parse_docker_proxy(docker_proxy)
     # 预算在阶段入口解析一次：非法环境变量在这里失败，而不是每条发现各失败一次。
     policy = BuildPolicy.from_environment()
@@ -373,8 +375,11 @@ def run_dynamic_tests(
         # 一次并给出可操作的说明，而不是让每条发现各自耗尽构建预算。
         from utilities.docker_build.preflight import verify_build_environment
         from utilities.dynamic_tester.docker_executor import _run_command
-        environment = verify_build_environment(docker_proxy, _run_command,
-                                               language=repo_info["language"])
+        try:
+            environment = verify_build_environment(docker_proxy, _run_command,
+                                                   language=repo_info["language"])
+        except DockerBuildEnvironmentError as exc:
+            raise DynamicTestUnavailable(f"Docker 环境检查失败：{exc}") from exc
         if registry is None:
             from utilities.llm import probe_registry_or_raise
             cf = load_config_file()
@@ -390,8 +395,7 @@ def run_dynamic_tests(
         # 已缓存镜像确实进入生成提示词；此前只有消费者，没有赋值入口。
         repo_info["base_images"] = available_images(_run_command)
 
-        # 依赖镜像：仓库依赖只装一次，每条发现的测试镜像直接复用。构建失败不致命，
-        # 生成器会退回"在 Dockerfile 里自己装"。
+        # 仓库依赖只安装一次，每条发现复用同一镜像；环境失败在模型调用前报告。
         from utilities.docker_build.dependencies import (
             ensure_dependency_image,
             plan_for_repository,

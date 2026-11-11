@@ -22,6 +22,7 @@ These tests monkeypatch the heavy LLM/Docker stages so we exercise the
 orchestration control-flow without real API/Docker calls.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -153,6 +154,11 @@ def test_enhance_failure_does_not_abort_scan(monkeypatch, tmp_path):
     assert isinstance(result, ScanResult)
     # The completed analyze work survived.
     assert result.metrics.total == 3
+    stage = json.loads((out / "enhance.report.json").read_text())
+    assert stage["status"] == "partial"
+    assert stage["errors"] == ["enhance blew up"]
+    assert result.scan_status == "partial"
+    assert "enhance blew up" in result.scan_errors
 
 
 def test_verify_failure_does_not_abort_scan(monkeypatch, tmp_path):
@@ -178,6 +184,11 @@ def test_verify_failure_does_not_abort_scan(monkeypatch, tmp_path):
     )
     assert isinstance(result, ScanResult)
     assert result.metrics.total == 3
+    stage = json.loads((out / "verify.report.json").read_text())
+    assert stage["status"] == "partial"
+    assert stage["errors"] == ["verify blew up"]
+    assert result.scan_status == "partial"
+    assert "verify blew up" in result.scan_errors
 
 
 def test_dynamic_test_failure_does_not_abort_scan(monkeypatch, tmp_path):
@@ -352,6 +363,8 @@ def test_app_context_crash_is_recorded_as_failed(monkeypatch, tmp_path):
     summary = json.loads((out / "scan.report.json").read_text())["summary"]
     assert "app-context" in summary["steps_skipped"]
     assert summary["steps_skipped_reasons"].get("app-context") == "failed"
+    assert result.scan_status == "partial"
+    assert result.scan_errors == ["app-context blew up"]
 
 
 def test_llm_reachability_crash_is_recorded_as_failed(monkeypatch, tmp_path):
@@ -384,6 +397,8 @@ def test_llm_reachability_crash_is_recorded_as_failed(monkeypatch, tmp_path):
     summary = json.loads((out / "scan.report.json").read_text())["summary"]
     assert "llm-reachability" in summary["steps_skipped"]
     assert summary["steps_skipped_reasons"].get("llm-reachability") == "failed"
+    assert result.scan_status == "partial"
+    assert result.scan_errors == ["dataset unreadable"]
 
 
 def test_llm_reachability_non_oserror_crash_is_recorded(monkeypatch, tmp_path):

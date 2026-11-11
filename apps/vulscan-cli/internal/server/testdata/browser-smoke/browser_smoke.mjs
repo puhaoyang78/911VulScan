@@ -659,7 +659,10 @@ let summaryHTML = '';
   }
   if(!(await page.locator('#finding-detail').textContent()).includes('AUTH_COOKIE='))throw Error('original payload was discarded');
   await page.keyboard.press('Escape');await page.setViewportSize({width:1440,height:1000});
-  await page.selectOption('#finding-sort','title');const titles=await page.locator('#finding-rows .finding-title').allTextContents();if(JSON.stringify(titles)!==JSON.stringify([...titles].sort((a,b)=>a.localeCompare(b,'zh-CN'))))throw Error('title sort does not match displayed titles');await page.selectOption('#finding-sort','first');
+  await page.selectOption('#finding-sort','title');const titles=await page.locator('#finding-rows .finding-title').allTextContents();if(JSON.stringify(titles)!==JSON.stringify([...titles].sort((a,b)=>a.localeCompare(b,'zh-CN'))))throw Error('title sort does not match displayed titles');
+  await page.evaluate(async()=>{const s=await(await fetch('/scan/f0000002/snapshot')).json();s.revision++;s.findings[Object.keys(s.findings)[0]].title='最后更新的候选';VulscanScan.applySnapshot(s);});
+  const updatedTitles=await page.locator('#finding-rows .finding-title').allTextContents();if(JSON.stringify(updatedTitles)!==JSON.stringify([...updatedTitles].sort((a,b)=>a.localeCompare(b,'zh-CN'))))throw Error('live finding update lost the selected sort');
+  await page.selectOption('#finding-sort','first');
   await page.locator('#tab-activity').click();await page.fill('#activity-finding','VULN-005');if(await page.locator('.activity-row:visible').count()!==2)throw Error('finding activity filter lost records');if(!(await page.locator('.activity-row:visible').last().innerText()).includes('构建'))throw Error('build failure phase is missing');await page.locator('#clear-activity').click();await page.locator('#tab-findings').click();
   const focus=await page.locator('#finding-rows .finding-title').first();await focus.focus();
   await page.evaluate(async()=>{const s=await(await fetch('/scan/f0000002/snapshot')).json();s.revision+=1;s.findings[Object.keys(s.findings)[0]].dynamic='not_reproduced';VulscanScan.applySnapshot(s);});

@@ -18,11 +18,13 @@ separately at the #333 site (the restored spend's original console line
 already printed it) — two channels, two figures, both correct.
 """
 
-import re
+import json
 import sys
 
 import pytest
 from pathlib import Path
+
+pytestmark = pytest.mark.usefixtures("mock_dynamic_build_environment")
 
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -44,16 +46,43 @@ def _clean_tracker():
     reset_global_tracker()
 
 
-def test_every_write_site_passes_usage():
-    """Source pin: all FOUR write_summary calls carry usage= (the exact
-    gap the issue names)."""
-    src = (PROJECT_ROOT / "utilities" / "dynamic_tester" / "__init__.py").read_text()
-    sites = re.findall(r"checkpoint\.write_summary\(", src)
-    assert len(sites) == 4, f"the write-site count changed: {len(sites)}"
-    with_usage = re.findall(r"write_summary\([^)]*?usage=_summary_usage\(\)",
-                            src, re.S)
-    assert len(with_usage) == 4, \
-        f"not every site carries usage: {len(with_usage)}/4"
+@pytest.mark.parametrize("status", ["generation_error", "NOT_REPRODUCED", "ERROR"])
+def test_every_write_site_passes_usage(tmp_path, monkeypatch, status):
+    """Actual initial, per-finding and terminal writes retain stage-local usage."""
+    from core.checkpoint import StepCheckpoint
+    from tests.test_issue333_dyn_test_cost_delta import _run
+    import utilities.dynamic_tester as dt
+    from utilities.dynamic_tester.docker_executor import DockerExecutionResult
+
+    writes = []
+    real_write = StepCheckpoint.write_summary
+
+    def capture(self, *args, **kwargs):
+        writes.append(kwargs)
+        return real_write(self, *args, **kwargs)
+
+    def generate(*args, **kwargs):
+        dt.get_global_tracker().record_call("fixture", 10, 5, pricing={"input": 1, "output": 2})
+        if status == "generation_error":
+            return None
+        return {"test_script": "controlled test", "dockerfile": "FROM fixture"}
+
+    execution = DockerExecutionResult()
+    execution.exit_code = 0
+    execution.stdout = json.dumps({"status": status, "details": "controlled result", "evidence": []})
+    monkeypatch.setattr(StepCheckpoint, "write_summary", capture)
+    monkeypatch.setattr(dt, "run_single_container", lambda *a, **k: execution)
+    monkeypatch.setattr(dt, "regenerate_test", lambda *a, **k: None)
+    _run(tmp_path, generate)
+
+    assert len(writes) >= 3
+    assert all(isinstance(write.get("usage"), dict) for write in writes)
+    assert writes[0]["phase"] == "in_progress"
+    assert writes[0]["usage"]["input_tokens"] == 0
+    assert any(write["phase"] == "in_progress" and write["usage"]["input_tokens"] == 10
+               for write in writes)
+    assert writes[-1]["phase"] == "done"
+    assert writes[-1]["usage"]["input_tokens"] == 10
 
 
 def test_the_delta_semantics_exclude_prior_phases():

@@ -13,6 +13,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("mock_dynamic_build_environment")
+
 _CORE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_CORE_ROOT))
 

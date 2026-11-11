@@ -20,8 +20,7 @@ skipped." — the exact three-artifact divergence.
 The fix: the dynamic-test DECISION is hoisted BEFORE Step 6's build (every
 knowable skip class — not_requested / no_candidates / docker_unavailable —
 recorded at its source), and the attempted-run ``failed`` class REBUILDS the
-output after the attempt. The report step's own skip stays post-build
-(#799's own Not-claimed boundary).
+output after the attempt. Disabled reports are recorded before the build too.
 
 Shapes:
 
@@ -147,8 +146,7 @@ def test_the_two_artifacts_agree_about_skipped_steps(monkeypatch, tmp_path):
     full scan — pipeline_output.json.pipeline_stats.skipped_steps AND
     scan.report.json.summary.steps_skipped — so the human summary (which
     reads the former) cannot state a falsehood the latter contradicts.
-    (The REPORT step's own skip is #799's named Not-claimed boundary — the
-    same argument may apply to it; this test does not pin it.)"""
+    Disabled stages and runtime skips must reach both artifacts."""
     _offline_drive(monkeypatch)
     _recording_build(monkeypatch, [])
 
@@ -164,10 +162,7 @@ def test_the_two_artifacts_agree_about_skipped_steps(monkeypatch, tmp_path):
         f"pipeline_output carries only the pre-build skips: {po!r}")
     assert "dynamic-test" in sr, (
         f"scan.report carries it but pipeline_output does not: {po!r} vs {sr!r}")
-    # and the two agree on every step the BUILD could know
-    assert set(po) == set(sr) - {"report"}, (
-        f"beyond the report step's own late skip (the Not-claimed "
-        f"boundary), the artifacts disagree: {po!r} vs {sr!r}")
+    assert set(po) == set(sr), f"the artifacts disagree: {po!r} vs {sr!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +290,33 @@ def test_a_successful_dynamic_test_run_skips_nothing(monkeypatch, tmp_path):
     po = _pipeline_output(tmp_path, "out")
     assert "dynamic-test" not in po["pipeline_stats"]["skipped_steps"], (
         f"the built file stamps a step that ran: {po!r}")
+
+
+def test_environment_skip_reaches_pipeline_before_summary(monkeypatch, tmp_path):
+    from core.schemas import DynamicTestStepResult
+    import core.dynamic_tester as dynamic_tester
+    import core.reporter as reporter
+
+    _offline_drive(monkeypatch, vulnerable=1)
+    _recording_build(monkeypatch, [])
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(dynamic_tester, "run_tests", lambda **kwargs: DynamicTestStepResult(
+        results_json_path=str(tmp_path / "out/dynamic_test_results.json"),
+        skipped_reason="toolchain_unavailable", findings_tested=0))
+    summaries = []
+
+    def summary(pipeline_path, output_path, *args, **kwargs):
+        summaries.append(json.loads(Path(pipeline_path).read_text()))
+        Path(output_path).write_text("环境不可用，未执行动态测试。")
+
+    monkeypatch.setattr(reporter, "generate_summary_report", summary)
+    monkeypatch.setattr(reporter, "generate_disclosure_docs", lambda *a, **k: None)
+    result = _scan(tmp_path, "out", dynamic_test=True, generate_report=True)
+
+    assert result.skipped_step_reasons["dynamic-test"] == "environment_unavailable"
+    assert len(summaries) == 1
+    assert summaries[0]["pipeline_stats"]["skipped_step_reasons"]["dynamic-test"] == \
+        "environment_unavailable"
 
 
 # ---------------------------------------------------------------------------

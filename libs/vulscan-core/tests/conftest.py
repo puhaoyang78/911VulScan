@@ -1,6 +1,7 @@
 # Modified 2026-10-23 for the VulScan-only product namespace.
 """Shared fixtures for VulScan tests."""
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -42,3 +43,14 @@ def sample_js_repo():
 def tmp_output_dir(tmp_path):
     """Temporary output directory for parser results."""
     return str(tmp_path / "output")
+
+
+@pytest.fixture
+def mock_dynamic_build_environment(monkeypatch):
+    """Keep mocked generation/execution tests independent of the host Docker daemon."""
+    monkeypatch.setattr("utilities.docker_build.preflight.verify_build_environment",
+                        lambda *a, **k: {"server_version": "fixture", "proxy_description": "fixture"})
+    monkeypatch.setattr("utilities.docker_build.available_images", lambda *a: [])
+    monkeypatch.setattr("utilities.docker_build.dependencies.plan_for_repository", lambda *a: None)
+    monkeypatch.setattr("utilities.docker_build.ensure_toolchain", lambda toolchain, *a, **k: toolchain.image)
+    monkeypatch.setattr("utilities.docker_resources.build_admission", lambda **k: nullcontext())

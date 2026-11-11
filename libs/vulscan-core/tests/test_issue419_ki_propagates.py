@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("mock_dynamic_build_environment")
+
 _CORE = Path(__file__).resolve().parents[1]
 if str(_CORE) not in sys.path:
     sys.path.insert(0, str(_CORE))

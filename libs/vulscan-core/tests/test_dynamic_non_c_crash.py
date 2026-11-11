@@ -1,6 +1,8 @@
 """Python/Node/Go 的崩溃也要记成“已捕获崩溃”，不能一律算测试出错。"""
 import json
 
+import pytest
+
 from utilities.dynamic_tester.docker_executor import DockerExecutionResult
 from utilities.dynamic_tester.result_collector import collect_result
 
@@ -65,3 +67,20 @@ def test_clean_exit_still_reports_not_reproduced():
     output = json.dumps({"status": "NOT_REPRODUCED", "details": "ok", "evidence": []})
     result = _collect(_execution(0, "", output))
     assert result.status == "NOT_REPRODUCED"
+
+
+@pytest.mark.parametrize("channel", ["stdout", "stderr"])
+def test_clean_exit_with_fatal_text_is_not_a_crash(channel):
+    execution = _execution(0, "", stdout="")
+    setattr(execution, channel, "fatal error: compiler diagnostic\n")
+    result = _collect(execution)
+    assert result.status == "ERROR"
+    assert result.terminal_reason == "no_result_output"
+    assert not result.crash.get("detected")
+
+
+@pytest.mark.parametrize("code,signal", [(-11, "SIGSEGV"), (-6, "SIGABRT")])
+def test_native_negative_signal_exit_is_a_crash(code, signal):
+    result = _collect(_execution(code, "", stdout=""))
+    assert result.status == "INCONCLUSIVE"
+    assert result.crash["signal"] == signal

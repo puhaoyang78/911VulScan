@@ -153,6 +153,52 @@ def test_preflight_defers_proxy_connection_until_domestic_failure(docker_present
     assert report['proxy'] == 'http://127.0.0.1:9'
 
 
+@pytest.mark.parametrize("phase,language,filename,reason", [
+    ("preflight", "python", "app.py", "environment_unavailable"),
+    ("dependency", "python", "app.py", "dependency_image_failed"),
+    ("toolchain", "c", "app.c", "toolchain_unavailable"),
+])
+def test_preparation_failure_preserves_environment_diagnostic(
+        tmp_path, monkeypatch, phase, language, filename, reason):
+    import json
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from core.dynamic_tester import run_tests
+    from utilities import docker_build, docker_resources, dynamic_tester
+    from utilities.docker_build import dependencies
+
+    pipeline = tmp_path / "pipeline_output.json"
+    pipeline.write_text(json.dumps({
+        "repository": {"language": language},
+        "findings": [{"id": "VULN-001", "stage2_verdict": "confirmed",
+                      "location": {"file": filename}}],
+    }))
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(preflight_module, "verify_build_environment", lambda *a, **k: {})
+    monkeypatch.setattr(docker_build, "available_images", lambda *a: [])
+    monkeypatch.setattr(docker_resources, "build_admission", lambda **k: nullcontext())
+    monkeypatch.setattr(dependencies, "plan_for_repository",
+                        lambda *a: object() if phase == "dependency" else None)
+
+    def fail(*args, **kwargs):
+        raise DockerBuildEnvironmentError("dependency download timed out")
+
+    if phase == "preflight":
+        monkeypatch.setattr(preflight_module, "verify_build_environment", fail)
+    monkeypatch.setattr(dependencies, "ensure_dependency_image", fail)
+    monkeypatch.setattr(docker_build, "ensure_toolchain", fail)
+    monkeypatch.setattr(dynamic_tester, "generate_test",
+                        lambda *a, **k: pytest.fail("environment failure must precede model calls"))
+    result = run_tests(str(pipeline), str(tmp_path / "out"),
+                       registry=SimpleNamespace(get=lambda phase: object()))
+    assert result.skipped_reason == reason
+    assert result.findings_tested == 0
+    saved = json.loads((tmp_path / "out/dynamic_test_results.json").read_text())
+    assert saved["skipped_reason"] == reason
+    assert "dependency download timed out" in saved["details"]
+
+
 # ------------------------------------------------------------------ failure taxonomy
 
 def test_execution_result_derives_flags_from_the_failure_kind():

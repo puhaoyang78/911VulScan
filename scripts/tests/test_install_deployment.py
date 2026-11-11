@@ -716,7 +716,8 @@ exit 0
         self.assertIn('--no-remove --no-install-recommends', actions)
         self.assertIn('service start docker', actions)
         self.assertNotIn('usermod', actions)
-        self.assertEqual(sorted(p.name for p in (self.root / '.tools').iterdir()), ['go', 'node', 'python'])
+        self.assertEqual(sorted(p.name for p in (self.root / '.tools').iterdir()), ['node', 'python'])
+        self.assertTrue((self.root / 'home/.local/go/bin/go').is_file())
 
     def test_malicious_docker_metadata(self):
         self.os('20.04')
@@ -795,6 +796,25 @@ exit 0
         self.env['GO_VERSION'] = '1.25.0'
         self.assertIn('move it aside', self.run_script('--install-deps', '--yes', success=False))
         self.assertEqual(self.actions(), '')
+
+    def test_existing_home_go_is_preserved_before_download(self):
+        target = self.root / 'home/.local/go'
+        target.mkdir(parents=True)
+        marker = target / 'keep.txt'
+        marker.write_text('existing installation')
+        self.env['GO_VERSION'] = '1.25.0'
+        self.assertIn('move it aside', self.run_script('--install-deps', '--yes', success=False))
+        self.assertEqual(marker.read_text(), 'existing installation')
+        self.assertEqual(self.actions(), '')
+
+    def test_custom_go_home_is_used_for_install_and_validation(self):
+        self.os('20.04')
+        target = self.root / 'custom toolchain/go'
+        self.env.update(GO_VERSION='1.25.0', VULSCAN_GO_HOME=str(target))
+        self.full_download_fixtures()
+        self.run_script('--install-deps', '--deps-only', '--yes', '--start-docker', '--allow-unsupported-docker')
+        self.assertTrue((target / 'bin/go').is_file())
+        self.assertFalse((target / 'go').exists())
 
     def plugin_fixtures(self, compose='5.5.1', buildx_missing=True):
         """User's Engine26.1.3 + working Compose5 + absent Buildx, no server access."""

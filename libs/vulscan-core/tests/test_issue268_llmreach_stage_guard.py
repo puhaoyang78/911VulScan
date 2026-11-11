@@ -134,7 +134,8 @@ def test_stage_body_failure_degrades_not_aborts(tmp_path, monkeypatch):
     result, out = _scan(tmp_path, monkeypatch, llm_reach_body=_body)
     assert result is not None, "the scan must COMPLETE (degrade, not abort)"
     report = json.loads((out / "llm-reachability.report.json").read_text())
-    assert report["status"] == "skipped"
+    assert report["status"] == "partial"
+    assert report["errors"]
     assert "llm-reachability" in result.skipped_steps
 
 
@@ -270,7 +271,8 @@ def test_refilter_corrupt_call_graph_degrades_not_aborts(tmp_path, monkeypatch):
     assert result is not None, "the scan must COMPLETE (degrade, not abort)"
     assert "llm-reachability" in result.skipped_steps
     report = json.loads((tmp_path / "out" / "llm-reachability.report.json").read_text())
-    assert report["status"] == "skipped"
+    assert report["status"] == "partial"
+    assert report["errors"]
 
 
 def test_units_count_restored_on_stage_failure(tmp_path, monkeypatch):

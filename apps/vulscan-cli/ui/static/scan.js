@@ -172,6 +172,7 @@
  function renderFindings(findings){
   const ordered=Object.values(findings).sort((a,b)=>a.first_seq-b.first_seq);
   ordered.forEach(f=>{let row=rowMap.get(f.finding_id);if(!row){row=node('tr');for(let i=0;i<5;i++)row.append(node('td'));row.dataset.findingId=f.finding_id;row.dataset.ordinal=String(rowMap.size+1);rowMap.set(f.finding_id,row);$('finding-rows').append(row);}fillRow(row,f);});
+  sortFindingRows();
   filterFindings();
   const recent=$('recent-findings');
   if(!ordered.length){recent.className='recent-findings empty-state';recent.textContent=snapshot.discovery_known?'尚未发现候选问题。':'尚未产生可列出的发现。';return;}
@@ -185,10 +186,13 @@
  function filterFindings(){if(!snapshot)return;const q=$('finding-query').value.trim().toLocaleLowerCase(),review=$('review-filter').value,dynamic=$('dynamic-filter').value;let n=0;rowMap.forEach((row,id)=>{row.hidden=!matchesFinding(snapshot.findings[id],q,review,dynamic);if(!row.hidden)n++;});text('finding-count','显示 '+n+' / '+rowMap.size+' 个候选');$('findings-empty').hidden=n>0;text('findings-empty',rowMap.size?'没有匹配的发现，请调整或清除筛选。':snapshot.discovery_known?'尚未发现候选问题。':'尚未产生发现记录；旧任务请查看报告。');}
  ['finding-query','review-filter','dynamic-filter'].forEach(id=>$(id).addEventListener('input',filterFindings));
  $('clear-findings').addEventListener('click',()=>{['finding-query','review-filter','dynamic-filter'].forEach(id=>$(id).value='');filterFindings();});
- $('finding-sort').addEventListener('change',()=>{
+ function sortFindingRows(){
   const key=$('finding-sort').value,rank={critical:0,high:1,medium:2,low:3};
-  Object.values(snapshot?.findings||{}).sort((a,b)=>key==='severity'?(rank[a.severity]??4)-(rank[b.severity]??4)||a.first_seq-b.first_seq:key==='first'?a.first_seq-b.first_seq:key==='title'?findingTitle(a).localeCompare(findingTitle(b),'zh-CN'):String(a[key]||'').localeCompare(String(b[key]||''),'zh-CN')).forEach(f=>$('finding-rows').append(rowMap.get(f.finding_id)));
- });
+  const body=$('finding-rows'),focused=document.activeElement;
+  Object.values(snapshot?.findings||{}).sort((a,b)=>key==='severity'?(rank[a.severity]??4)-(rank[b.severity]??4)||a.first_seq-b.first_seq:key==='first'?a.first_seq-b.first_seq:key==='title'?findingTitle(a).localeCompare(findingTitle(b),'zh-CN'):String(a[key]||'').localeCompare(String(b[key]||''),'zh-CN')).forEach((f,index)=>{const row=rowMap.get(f.finding_id);if(body.children[index]!==row)body.insertBefore(row,body.children[index]||null);});
+  if(focused&&body.contains(focused)&&document.activeElement!==focused)focused.focus({preventScroll:true});
+ }
+ $('finding-sort').addEventListener('change',sortFindingRows);
  function renderFindingDetail(id){
   const f=snapshot.findings[id];if(!f)return;
   const signature=JSON.stringify(f);if(signature===detailValue)return;detailValue=signature;
