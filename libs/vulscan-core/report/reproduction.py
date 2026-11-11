@@ -5,7 +5,6 @@ import re
 from pathlib import PurePosixPath
 
 from core.language_registry import fence_for_path
-from report.localization import dynamic_label
 
 
 def fenced(value, language: str = "text") -> str:
@@ -72,10 +71,10 @@ def render_reproduction(record: dict, finding: dict | None = None) -> str:
         "INCONCLUSIVE": "本次动态测试无法确定是否复现。",
         "ERROR": "动态测试未能完成，不能据此确认复现。",
         "SKIPPED": "本次未执行动态测试。",
-        "UNKNOWN": "未记录有效的动态测试结论。",
+        "UNKNOWN": "动态测试结论未知。",
     }
     lines = ["### PoC 与验证说明", "", explanation.strip(), "",
-             f"**验证结论：{dynamic_label(status)}。** {outcomes[status]}{result_summary(record)}", ""]
+             outcomes[status] + result_summary(record), ""]
     if status == "CONFIRMED" and not _records(reproduction.get("commands")):
         lines += ["旧记录缺少执行记录，无法还原当时的验证过程。", ""]
     if reproduction.get("capture_error"):
@@ -90,13 +89,11 @@ def render_reproduction(record: dict, finding: dict | None = None) -> str:
              and PurePosixPath(item["filename"]).name.lower() not in setup_names
              and isinstance(item.get("content"), str) and item["content"]]
     if files:
-        lines += ["#### 完整 PoC", "", "以下为本次测试保存的 PoC 与输入文件。", ""]
         for item in files:
-            lines += [f"**文件：{_paragraph(item['filename'])}**", "",
+            lines += [f"`{_paragraph(item['filename'])}`", "",
                       fenced(item["content"], fence_for_path(item["filename"]) or "text"), ""]
     elif isinstance(record.get("test_code"), str) and record["test_code"]:
-        lines += ["#### 完整 PoC（生成稿）", "",
-                  "未保存执行时的文件，以下生成稿不能作为实际运行版本的证明。", "",
+        lines += ["PoC 生成稿，未保存执行版本。", "",
                   fenced(record["test_code"]), ""]
     else:
         lines += ["未保存 PoC 源码。", ""]

@@ -18,7 +18,7 @@ func readableFinding() Finding {
 		VulnerableCode: "copy(dst, input);", SuggestedFix: "if (length >= capacity) return ERROR;",
 		StepsToReproduce:   "使用超出目标容量的合成输入。",
 		Stage2Verification: "静态复核已完成；不等于动态复现。",
-		Reproduction:       "### PoC 与验证说明\n\nPoC 使用超长输入，测试捕获目标内存错误。\n\n#### 完整 PoC\n\n```c\nsynthetic_fixture();\n```",
+		Reproduction:       "### PoC 与验证说明\n\nPoC 使用超长输入，测试捕获目标内存错误。\n\n```c\nsynthetic_fixture();\n```",
 	}
 }
 

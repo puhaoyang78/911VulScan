@@ -196,6 +196,34 @@ def test_legacy_design_in_pipeline_reaches_live_report_and_csv(tmp_path, capsys)
         assert "不能据此确认复现" in report
 
 
+@pytest.mark.parametrize("status", ["CONFIRMED", "NOT_REPRODUCED"])
+def test_fresh_poc_has_explanatory_prose_before_code_when_model_omits_summary(tmp_path, capsys, status):
+    from utilities.dynamic_tester.docker_executor import DockerExecutionResult
+    from utilities.dynamic_tester.result_collector import collect_result
+
+    result, results, dataset = _fixture(tmp_path)
+    finding = json.loads((tmp_path / "pipeline_output.json").read_text())["findings"][0]
+    code = "// synthetic saved PoC\nint main(void) { return 0; }\n"
+    execution = DockerExecutionResult()
+    execution.exit_code = 0
+    execution.stdout = json.dumps({"status": status, "details": "受控测试已检查目标的索引访问。",
+        "evidence": [{"type": "command_output", "content": "synthetic observation"}]})
+    execution.reproduction = {"artifacts": [{"filename": "proof.c", "content": code}],
+                              "commands": [{"stage": "run", "exit_code": 0}]}
+    dynamic = collect_result(finding, {"test_script": code}, execution).to_dict()
+    assert dynamic["poc_summary"] == result["description"]
+    _write(tmp_path / "dynamic_test_results.json", {"results": [dynamic]})
+
+    assert cli.cmd_report_data(SimpleNamespace(results=str(results), dataset=str(dataset), no_llm=True)) == 0
+    report = json.loads(capsys.readouterr().out)["data"]["findings"][0]
+    prose = report["reproduction"]
+    assert prose.index(result["description"]) < prose.index(code)
+    assert prose.index("受控测试已检查目标的索引访问") < prose.index(code)
+    assert report["dynamic_test_status"] == status
+    assert "####" not in prose
+    assert "旧记录未保存 PoC 构造说明" not in prose
+
+
 @pytest.mark.parametrize("renderer", ["cli", "legacy"])
 def test_remediation_uses_thinking_budget_and_preserves_findings(
         tmp_path, monkeypatch, capsys, renderer):

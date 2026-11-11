@@ -182,7 +182,7 @@ DOCKER-COMPOSE (only if the test needs multiple services):
 OUTPUT FORMAT:
 Return a JSON object with these keys:
 - "dockerfile": string — Complete Dockerfile content
-- "poc_summary": string — 用简体中文写一段简洁说明：漏洞的具体原因、PoC 构造了什么输入、如何调用真实目标、预期通过什么现象判断是否复现。此时尚未运行测试，不得声称已经成功验证，不要列命令或日志。
+- "poc_summary": string — 必须填写非空的简体中文正文，参照静态分析 description 的写法，用 2–4 句话说明漏洞函数缺少什么约束、这个 PoC 具体构造了什么输入、如何调用真实目标，以及观察什么现象来判断是否复现。只描述本次生成的测试，不照抄与它不符的静态复现步骤。不要写标题、项目符号、命令或日志；此时尚未运行测试，不得声称已成功复现。
 - "test_script": string — Complete test source content (Python/JS/TS/Go/C/C++ depending on language)
 - "test_filename": string — Filename for the test script (e.g., "test_exploit.py")
 - "requirements": string — Dependencies file content (requirements.txt / package.json); empty for Go or dependency-free Python

@@ -86,6 +86,13 @@ def collect_result(
     # so the report merge can verify the join — the positional VULN-NNN
     # is not a durable key across artifacts.
     identity_key = finding.get("identity_key", "")
+    # Keep explanatory prose with the saved PoC even when the generation omits
+    # its design paragraph. The finding description is existing static analysis,
+    # never a claim that execution succeeded.
+    poc_summary = generation.get("poc_summary") if generation else ""
+    if not isinstance(poc_summary, str) or not poc_summary.strip():
+        description = finding.get("description")
+        poc_summary = description.strip() if isinstance(description, str) else ""
 
     # Generation failed
     if generation is None:
@@ -94,6 +101,7 @@ def collect_result(
             identity_key=identity_key,
             status="ERROR",
             details="测试生成失败：模型未返回有效测试代码",
+            poc_summary=poc_summary,
             generation_cost_usd=generation_cost,
         )
 
@@ -106,7 +114,7 @@ def collect_result(
             details="未执行 Docker 测试",
             failure_phase="environment",
             terminal_reason="execution_not_attempted",
-            poc_summary=generation.get("poc_summary", ""),
+            poc_summary=poc_summary,
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -123,7 +131,7 @@ def collect_result(
             details=bounded_diagnostic(execution.execution_error, 2000),
             failure_phase="environment",
             terminal_reason="execution_error",
-            poc_summary=generation.get("poc_summary", ""),
+            poc_summary=poc_summary,
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -140,7 +148,7 @@ def collect_result(
             identity_key=identity_key,
             status="ERROR",
             details=f"{label}：{bounded_diagnostic(execution.build_error, 2000)}",
-            poc_summary=generation.get("poc_summary", ""),
+            poc_summary=poc_summary,
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -161,7 +169,7 @@ def collect_result(
             evidence=[TestEvidence(type="command_output", content=bounded_diagnostic(
                 "\n".join(part for part in (execution.stdout, execution.stderr) if part), 5000))]
                 if execution.stdout or execution.stderr else [],
-            poc_summary=generation.get("poc_summary", ""),
+            poc_summary=poc_summary,
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -191,7 +199,7 @@ def collect_result(
             diagnostic_class=generic["diagnostic_class"],
             evidence=[TestEvidence(type="command_output",
                                    content=bounded_diagnostic(execution.stderr, 5000))],
-            poc_summary=generation.get("poc_summary", ""),
+            poc_summary=poc_summary,
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -211,7 +219,7 @@ def collect_result(
             failure_phase="run",
             terminal_reason="no_result_output",
             evidence=[TestEvidence(type="command_output", content=bounded_diagnostic(execution.stdout, 5000))],
-            poc_summary=generation.get("poc_summary", ""),
+            poc_summary=poc_summary,
             test_code=generation.get("test_script", ""),
             dockerfile=generation.get("dockerfile", ""),
             docker_compose=generation.get("docker_compose", ""),
@@ -283,7 +291,7 @@ def collect_result(
         status=status,
         details=details,
         evidence=evidence,
-        poc_summary=generation.get("poc_summary", ""),
+        poc_summary=poc_summary,
         test_code=generation.get("test_script", ""),
         dockerfile=generation.get("dockerfile", ""),
         docker_compose=generation.get("docker_compose", ""),

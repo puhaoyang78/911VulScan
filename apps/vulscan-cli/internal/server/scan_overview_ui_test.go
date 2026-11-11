@@ -21,11 +21,15 @@ func TestScanOverviewProgressAndCancellation(t *testing.T) {
 	if err = tmpl.Execute(&page, scanPageData{ID: "fixture", Nonce: "nonce", CSRF: "tok"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"cancel-dialog", "cancel-confirm", "cancel-dismiss", "overview-panel", "stage-progress", "workflow-note", "finding-rows", "activity-groups", "terminal-panel", "log-copy", "log-latest"} {
+	for _, id := range []string{"cancel-dialog", "cancel-confirm", "cancel-dismiss", "overview-panel", "stage-progress", "finding-rows", "activity-groups", "terminal-panel", "log-copy", "log-latest"} {
 		if !strings.Contains(page.String(), `id="`+id+`"`) {
 			t.Errorf("missing production control %s", id)
 		}
 	}
+	if strings.Contains(page.String(), "workflow-note") || strings.Contains(page.String(), "stage-context-label") {
+		t.Fatal("duplicate stage explanation is still visible")
+	}
+
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node unavailable")
@@ -41,11 +45,6 @@ assert(!ui.stageVisible(historical,'llm-reachability'));
 assert(ui.stageVisible(historical,'dynamic-test'));
 assert(ui.stageVisible(historical,'enhance'));
 assert(ui.stageVisible(historical,'parse'));
-assert.equal(ui.workflowNote({stage_order:['parse','analyze','verify','build-output','dynamic-test','report']}),'本次流程：代码分析 → 模型复核 → 动态测试 → 生成最终报告。动态测试用于验证候选问题，结束后统一生成报告。');
-assert.equal(ui.workflowNote({stage_order:['parse','analyze','verify','build-output','report'],stages:{'dynamic-test':{status:'skipped',details:'not_requested'}}}),'本次流程：代码分析 → 模型复核 → 生成最终报告。本次未启用动态测试。');
-assert.equal(ui.workflowNote({stage_order:['analyze','report']}),'本次流程：代码分析 → 生成最终报告。本次未启用动态测试。');
-assert.equal(ui.workflowNote({legacy:true}), '');
-assert.equal(ui.workflowNote({stages:{analyze:{status:'success'},report:{status:'success'}}}), '本次流程：代码分析 → 生成最终报告。动态测试配置未记录。');
 assert.equal(ui.classifyLine('11:22:33 [Enhance] 94/987 src/typecheck.c::tc_error neutral 7.5s (elapsed 3m11s, ETA ~30m23s, $0.0064)'),'progress');
 assert.equal(ui.classifyLine('source/error_handler.c::failed_call'),'other');
 assert.equal(ui.classifyLine('WARNING: provider failed'),'warning');

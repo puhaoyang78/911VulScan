@@ -259,7 +259,7 @@ func TestChineseDashboardUsesSafeDefaultsAndNoSecretValues(t *testing.T) {
 			t.Errorf("scan budget lacks scope explanation %q", want)
 		}
 	}
-	for _, want := range []string{"扫描语言（可多选）", "支持同一仓库多语言扫描", "合并分析并生成一份报告", `aria-describedby="language-hint"`} {
+	for _, want := range []string{"扫描语言（可多选）", "支持同一仓库多语言扫描", "合并生成一份报告", `aria-describedby="language-hint"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("language selection lacks explanation %q", want)
 		}

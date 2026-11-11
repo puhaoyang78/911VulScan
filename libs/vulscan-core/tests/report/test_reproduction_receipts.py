@@ -201,7 +201,8 @@ def test_readable_summary_keeps_verdict_and_complete_poc_without_logs(status, ou
                                 {"filename": "_vulscan_c_runner.py", "content": "INTERNAL_RUNNER"},
                                 {"filename": "Dockerfile", "content": "BUILD_SETUP"}]}}
     output = render_reproduction(record)
-    assert output.index(GENERATION["poc_summary"]) < output.index("完整 PoC")
+    assert output.index(GENERATION["poc_summary"]) < output.index(code)
+    assert "####" not in output and "以下为本次测试保存" not in output
     assert outcome in output and "受控输入触发了预期的目标诊断" in output
     assert code in output
     assert all(private not in output for private in ("PRIVATE_LOG", "INTERNAL_RUNNER", "BUILD_SETUP"))
@@ -263,7 +264,8 @@ def test_disclosure_inserts_saved_poc_without_sending_it_to_llm():
     assert finding["dynamic_testing_attempted"]["evidence"] == block["evidence"]
 
 
-def test_checkpoint_resume_preserves_receipt_without_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("saved_summary", ["已保存的 PoC 构造说明。", "", "   "])
+def test_checkpoint_resume_preserves_receipt_without_execution(tmp_path, monkeypatch, saved_summary):
     import utilities.dynamic_tester as dynamic
     from utilities.llm_client import TokenTracker
     output = tmp_path / "output"
@@ -272,13 +274,14 @@ def test_checkpoint_resume_preserves_receipt_without_execution(tmp_path, monkeyp
     receipt = {"commands": [{"stage": "run", "argv": ["docker", "run", "fixture"],
                               "exit_code": 0, "stdout": "saved-observation"}]}
     record = DynamicTestResult("F", "CONFIRMED", "fixture", identity_key="stable", reproduction=receipt,
-                               poc_summary="已保存的 PoC 构造说明。",
+                               poc_summary=saved_summary,
                                evidence=[Evidence("http_response", "saved-response")]).to_dict()
     record["id"] = "F"  # StepCheckpoint.save stamps the checkpoint lookup key.
     (checkpoint / "F.json").write_text(json.dumps(record))
     pipeline = tmp_path / "pipeline.json"
     pipeline.write_text(json.dumps({"repository": {"name": "fixture"}, "findings": [{
-        "id": "F", "identity_key": "stable", "stage2_verdict": "agreed"}]}))
+        "id": "F", "identity_key": "stable", "stage2_verdict": "agreed",
+        "description": "目标未检查索引边界。"}]}))
     def forbidden(*args, **kwargs):
         raise AssertionError("resume must not call generation or Docker")
     monkeypatch.setattr(dynamic, "generate_test", forbidden)
@@ -286,7 +289,7 @@ def test_checkpoint_resume_preserves_receipt_without_execution(tmp_path, monkeyp
     monkeypatch.setattr(dynamic, "get_global_tracker", lambda: TokenTracker())
     restored = dynamic.run_dynamic_tests(str(pipeline), str(output),
         registry=SimpleNamespace(get=lambda phase: object()))
-    assert restored[0].poc_summary == record["poc_summary"]
+    assert restored[0].poc_summary == (saved_summary if saved_summary.strip() else "目标未检查索引边界。")
     assert restored[0].reproduction == receipt
     stored = json.loads((output / "dynamic_test_results.json").read_text())["results"][0]
     assert stored["reproduction"] == receipt

@@ -25,9 +25,14 @@
  function readableReproduction(root){
   const setup=/^(?:dockerfile|(?:docker-)?compose\.ya?ml|requirements\.txt|package(?:-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|go\.(?:mod|sum)|_vulscan_c_(?:runner\.py|spec\.json))$/i;
   for(const heading of [...root.querySelectorAll('h2,h3')]){
-   if(!/^PoC\s*与测试记录$/.test(heading.textContent.trim()))continue;
+   const title=heading.textContent.trim();
+   if(!/^PoC\s*与(?:测试记录|验证说明)$/.test(title))continue;
    const level=Number(heading.tagName[1]),parts=[];let next=heading.nextElementSibling;
    while(next&&!(/^H[1-6]$/.test(next.tagName)&&Number(next.tagName[1])<=level)){parts.push(next);next=next.nextElementSibling;}
+   if(title.endsWith('验证说明')){
+    parts.filter(n=>n.tagName==='H4'&&/^完整 PoC/.test(n.textContent.trim())||n.tagName==='P'&&n.textContent.trim()==='以下为本次测试保存的 PoC 与输入文件。').forEach(n=>n.remove());
+    continue;
+   }
    const section=make('section',undefined,'reproduction-summary');section.append(make(heading.tagName,'PoC 与验证说明'));
    const status=parts.find(n=>n.tagName==='P'&&/^动态测试[：:]/.test(n.textContent.trim()));
    const description=root.closest('.report-finding')?.querySelector('.finding-section .markdown-prose');
@@ -47,7 +52,7 @@
     if(text==='文件名：'&&parts[i+1]?.tagName==='PRE')filename=parts[i+1].textContent.trim();
     const staged=text==='执行时的文件内容：',draft=/^原始生成的测试源码/.test(text);
     if(!(staged||draft)||parts[i+1]?.tagName!=='PRE'||staged&&(!filename||setup.test(filename.split('/').pop())))continue;
-    if(!found){section.append(make('h4','完整 PoC'));found=true;}
+    found=true;
     section.append(make('p',draft?'PoC 生成稿（未保存执行版本）':'文件：'+filename));
     const pre=parts[i+1].cloneNode(true);if(staged)pre.dataset.file=filename;section.append(pre);
    }

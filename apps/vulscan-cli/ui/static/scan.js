@@ -15,16 +15,6 @@
  const active=s=>['queued','running','cancelling'].includes(s);
  const incompleteReview=s=>['error','inconclusive','interrupted'].includes(s);
  function stageVisible(data,key){const item=data?.stages?.[key];return !(item?.status==='skipped'&&item.details==='not_requested');}
- function workflowNote(data){
-  const planned=new Set([...(data?.stage_order||[]),...Object.keys(data?.stages||{})]);
-  if(!planned.has('analyze'))return '';
-  const enabled=key=>planned.has(key)&&stageVisible(data,key),flow=['代码分析'];
-  if(enabled('verify'))flow.push('模型复核');
-  const dynamic=enabled('dynamic-test');if(dynamic)flow.push('动态测试');
-  if(enabled('report')||enabled('report-data'))flow.push('生成最终报告');
-  const known=(data?.stage_order||[]).includes('analyze')||data?.stages?.['dynamic-test']?.details==='not_requested';
-  return '本次流程：'+flow.join(' → ')+'。'+(dynamic?'动态测试用于验证候选问题，结束后统一生成报告。':known?'本次未启用动态测试。':'动态测试配置未记录。');
- }
  function stageHighlights(key,summary={}){
   const fields={parse:[['total_units','解析对象'],['language','语言'],['processing_level','扫描范围']],'app-context':[['application_type','项目类型'],['context_source','上下文来源']],'llm-reachability':[['units_reviewed','检查对象'],['entry_points_promoted','补充入口'],['units_touched','更新对象']],enhance:[['units_enhanced','完成增强'],['incomplete_count','未返回完整结果'],['error_count','处理错误']],analyze:[['analyzed','完成分析'],['total_units','分析范围'],['error_count','分析错误']],verify:[['findings_input','复核范围']],'dynamic-test':[['findings_tested','测试范围'],['confirmed','已复现'],['not_reproduced','未复现'],['blocked','测试受阻'],['inconclusive','无法确定'],['errors','测试错误']]};
   const labels={web_app:'Web 应用',cli_tool:'命令行工具',library:'代码库 / SDK',agent_framework:'Agent 框架',generated:'自动分析',repo_manual:'仓库配置',threat_model:'仓库安全模型',reachable:'可达代码',all:'全部代码',file:'文件级'};
@@ -67,7 +57,7 @@
   if(!stage)return null;
   return {stage,status:/^warning:/.test(low)?'error':/^-\s*skipping/.test(low)?'skipped':'running',activity:/docker not found/.test(low)?'未找到 Docker':s};
  }
- globalThis.VulscanScan={classifyLine,stageFromLog,matchesFinding,legacyRecord,findingTitle,stageHighlights,stageVisible,workflowNote};
+ globalThis.VulscanScan={classifyLine,stageFromLog,matchesFinding,legacyRecord,findingTitle,stageHighlights,stageVisible};
  if(typeof document==='undefined')return;
  const $=id=>document.getElementById(id);
  const node=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
@@ -129,7 +119,7 @@
   if(Object.keys(data.pending||{}).length)notes.push('正在同步缺失事件…');
   if(data.persistence_error)notes.push(data.persistence_error);
   $('coverage-note').hidden=notes.length===0&&!data.coverage_details;text('coverage-summary',notes.join(' · ')||'覆盖范围');text('coverage-detail',data.coverage_details||'详见活动记录。');
-  text('workflow-note',workflowNote(data));renderStages(data.stages||{});renderFindings(data.findings||{});renderActivity(data.activity||[]);
+  renderStages(data.stages||{});renderFindings(data.findings||{});renderActivity(data.activity||[]);
   if(data.legacy)logs.forEach(r=>applyLegacyRecord(r.raw));
   if(!active(data.status)){
    terminalPresentation(data.status);
@@ -153,7 +143,7 @@
  function renderStageDetail(){
   if(!snapshot)return;const key=selectedStage,stage=snapshot.stages?.[key];
   $('show-activity').disabled=!stage||!(snapshot.activity||[]).some(e=>e.stage===key);
-  text('stage-context-label',followStage?(active(snapshot.status)?'当前阶段':'最后阶段'):'阶段结果');text('overview-stage',stages[key]||key||'等待阶段信息');
+  text('overview-stage',stages[key]||key||'等待阶段信息');
   text('stage-status',stage?statuses[stage.status]||'处理中':key?(active(snapshot.status)?'待开始':'未记录'):'尚未产生');$('stage-status').dataset.tone=tone(stage?.status);
   text('overview-count',stage?.processed==null?'—':fmt(stage.processed)+(stage.total==null?'':' / '+fmt(stage.total))+(stage.unit?' '+stage.unit:''));
   text('overview-elapsed',duration(stageElapsed(stage)));text('overview-eta',!active(snapshot.status)?'任务已结束':duration(stage?.eta_seconds));text('eta-label',(stages[key]||'当前阶段')+'预计剩余');$('overview-eta').parentElement.hidden=!!stage&&stage.status!=='running';

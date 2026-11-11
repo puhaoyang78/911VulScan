@@ -589,6 +589,9 @@ def run_dynamic_tests(
 
         cp_data = checkpointed.get(finding_id)
         if cp_data and cp_data.get("status") != "ERROR":
+            poc_summary = cp_data.get("poc_summary")
+            if not isinstance(poc_summary, str) or not poc_summary.strip():
+                poc_summary = finding.get("description", "")
             result = DynamicTestResult(
                 finding_id=finding_id,
                 # #314: thread the identity through resume so a checkpointed
@@ -611,7 +614,7 @@ def run_dynamic_tests(
                     cp_data.get("unpriced_cache_models") or []),
                 retry_count=cp_data.get("retry_count", 0),
                 test_code=cp_data.get("test_code", ""),
-                poc_summary=cp_data.get("poc_summary", ""),
+                poc_summary=poc_summary,
                 dockerfile=cp_data.get("dockerfile", ""),
                 docker_compose=cp_data.get("docker_compose", ""),
                 reproduction=(cp_data.get("reproduction")

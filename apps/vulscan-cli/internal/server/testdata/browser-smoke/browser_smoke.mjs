@@ -616,10 +616,11 @@ let summaryHTML = '';
   const stopped=await page.evaluate(async()=>await(await fetch('/scan/f0000005/snapshot')).json());
   if(Object.values(stopped.findings).some(f=>f.model_review==='pending'||['pending','running'].includes(f.dynamic))||Object.values(stopped.stages).some(s=>['queued','running'].includes(s.status)))throw Error('terminal task still shows pending work');
   await goto('f0000002');
-  if(!(await page.locator('#workflow-note').innerText()).includes('模型复核 → 动态测试 → 生成最终报告'))throw Error('dynamic workflow order is unclear');
+  if(await page.locator('#workflow-note,#stage-context-label').count())throw Error('redundant workflow explanation is still present');
+  const planned=await page.locator('.stage-select').evaluateAll(nodes=>nodes.map(n=>n.dataset.stage));if(planned.indexOf('dynamic-test')>=planned.indexOf('report'))throw Error('dynamic workflow order is unclear');
   if(await page.locator('.stage-select[data-stage="build-output"] strong').innerText()!=='准备候选数据')throw Error('pre-test preparation looks like a final result');
   await page.evaluate(async()=>{const s=await(await fetch('/scan/f0000002/snapshot')).json();s.revision++;s.stage_order=s.stage_order.filter(k=>k!=='dynamic-test');s.stages['dynamic-test']={status:'skipped',details:'not_requested'};VulscanScan.applySnapshot(s);});
-  if(!(await page.locator('#workflow-note').innerText()).includes('模型复核 → 生成最终报告。本次未启用动态测试')||await page.locator('.stage-select[data-stage="dynamic-test"]:visible').count())throw Error('static workflow still suggests dynamic testing');
+  if(await page.locator('.stage-select[data-stage="dynamic-test"]:visible').count())throw Error('static workflow still suggests dynamic testing');
   await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.querySelector('#overview-count').textContent.startsWith('94 / 987'));
   if(await page.locator('.stage-select[data-stage="llm-reachability"]:visible').count())throw Error('unrequested phase appears in workflow');
   await page.locator('#tab-activity').click();
@@ -838,7 +839,11 @@ for(const [name,path]of[['summary-rich','/summary/f0000007'],['disclosure-rich',
    }
   }else{
    const record=page.locator('.finding-reproduction');
-   if(!await record.isVisible()||await record.locator('h3').innerText()!=='PoC 与验证说明'||await record.locator('h4').innerText()!=='完整 PoC'||await record.locator('.code-reader code').textContent()!==original)throw Error('PoC explanation or full source is missing');
+   if(!await record.isVisible()||await record.locator('h3').innerText()!=='PoC 与验证说明'||await record.locator('h4').count()||await record.locator('.code-reader code').textContent()!==original)throw Error('PoC explanation or full source is missing');
+   const explanation=await record.locator(':scope > p').first().innerText();
+   if(!explanation.includes('目标未检查长度')||!explanation.includes('PoC 传入超长输入'))throw Error('PoC explanatory prose was lost');
+   if(!await record.evaluate(el=>el.querySelector('p').compareDocumentPosition(el.querySelector('.code-reader'))&Node.DOCUMENT_POSITION_FOLLOWING))throw Error('PoC explanation does not precede source');
+   if(await record.locator('..').locator(':scope > h3').count())throw Error('PoC has a duplicate verification heading');
    for(const width of [360,768,1440]){await page.setViewportSize({width,height:1000});const full=await record.locator('.code-viewport').evaluate(el=>el.scrollWidth<=el.clientWidth+1&&el.scrollHeight<=el.clientHeight+1);if(!full)throw Error('PoC does not fit at '+width);}
    await page.setViewportSize({width:1440,height:1000});
    await page.locator('.report-toc a[data-finding]').first().click();await page.locator('#finding-collapse').click();

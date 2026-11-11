@@ -57,7 +57,6 @@
 .report-stats small {display:block;font-size:12px;color:var(--muted);margin-top:6px}
 .report-finding-body .finding-section>h3 {font-size:16px;color:var(--ink);margin-bottom:12px}
 .report-finding-body .finding-section h4 {font-size:14px;margin:18px 0 10px;font-weight:550}
-.verification-outcome {display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;font-size:14px}
 .report-finding-body .finding-record {margin:12px 0;padding:12px 16px;border:1px solid var(--line);background:var(--paper-soft)}
 .report-finding-body .finding-record>code {display:block;margin-top:12px;overflow-wrap:anywhere}
 

@@ -13,7 +13,7 @@
 <a class="skip-link" href="#main">跳到主要内容</a>
 <header class="app-header"><a href="/" class="brand">终端漏洞挖掘与利用平台</a><div class="header-actions"><nav data-account-nav aria-label="账号"></nav><button class="btn theme-toggle" type="button" data-theme-toggle aria-label="深色主题" aria-pressed="false" title="切换为深色主题"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="theme-moon" d="M20.8 13A9 9 0 0 1 11 3.2 9 9 0 1 0 20.8 13Z"/><g class="theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></svg><span data-theme-label>主题</span></button></div></header>
 <main class="main" id="main">
-  <div class="intro"><div><h1>终端漏洞挖掘与利用平台</h1><p>扫描代码仓库，追踪发现与验证。</p></div></div>
+  <div class="intro"><div><h1>终端漏洞挖掘与利用平台</h1></div></div>
   <section class="stats" aria-label="扫描任务概览"><div class="stat"><strong id="stat-total">{{len .Jobs}}</strong><span>全部任务</span></div><div class="stat stat-running"><strong id="stat-running">{{.RunningCount}}</strong><span>进行中 / 排队中</span></div><div class="stat stat-done"><strong id="stat-done">{{.DoneCount}}</strong><span>已完成</span></div><div class="stat"><strong id="stat-attention">{{.AttentionCount}}</strong><span>需处理</span></div></section>
   <div class="grid">
     <section class="card"><h2>新建扫描</h2>
@@ -28,7 +28,7 @@
           <label id="language-label">扫描语言（可多选）</label><div class="language-grid" role="group" aria-labelledby="language-label" aria-describedby="language-hint">
             <label><input type="checkbox" name="languages" value="c"{{if index .SelectedLanguages "c"}} checked{{end}}> C / C++</label><label><input type="checkbox" name="languages" value="python"{{if index .SelectedLanguages "python"}} checked{{end}}> Python</label><label><input type="checkbox" name="languages" value="javascript"{{if index .SelectedLanguages "javascript"}} checked{{end}}> JavaScript</label><label><input type="checkbox" name="languages" value="go"{{if index .SelectedLanguages "go"}} checked{{end}}> Go</label>
 
-  </div><p class="hint" id="language-hint">支持同一仓库多语言扫描：多选后分别解析所选语言，合并分析并生成一份报告。不勾选时，自动扫描达到规模阈值的已检测语言。</p>
+  </div><p class="hint" id="language-hint">支持同一仓库多语言扫描，合并生成一份报告；不选时按项目规模自动选择。</p>
         </fieldset>
         <fieldset><legend><span class="section-no">02</span>模型配置</legend>
           <div class="two-col"><div><label for="provider">模型来源</label><select name="provider" id="provider"><option value="deepseek"{{if eq .ScanOptions.Provider "deepseek"}} selected{{end}}>DeepSeek（默认）</option><option value="configured"{{if eq .ScanOptions.Provider "configured"}} selected{{end}}>使用个人模型配置</option></select></div><div id="deepseek-model"><label for="model">分析模型</label><select name="model" id="model" aria-describedby="model-hint"><option value="deepseek-flash"{{if eq .ScanOptions.Model "deepseek-flash"}} selected{{end}}>deepseek-flash（默认）</option><option value="deepseek-v4-pro"{{if eq .ScanOptions.Model "deepseek-v4-pro"}} selected{{end}}>deepseek-v4-pro</option></select></div></div>
